@@ -40,6 +40,7 @@ const EXPECTED_VERSIONS = [
   '016_device_serial',
   '017_device_efs_certs',
   '018_agent_version',
+  '019_location_observed_at',
 ];
 
 async function appliedVersions() {
@@ -69,6 +70,17 @@ describe('SQLite migration idempotency (S140)', () => {
     expect(await tableNames()).toEqual(
       expect.arrayContaining(['hw_test_artifacts', 'pbl_kv_store'])
     );
+  });
+
+  test('the observation time column exists on location_reports (S272)', async () => {
+    // `observed_at` is written by POST /api/agent/location and read by the ordering clause.
+    // A migration that lands in only one dialect's directory fails here, on SQLite, instead of
+    // at runtime in a self-hosted deployment.
+    await runMigrations(sqlitePool, { dialect: 'sqlite' });
+    const columns = (await sqlitePool.query('PRAGMA table_info(location_reports)')).rows.map(
+      (c) => c.name
+    );
+    expect(columns).toEqual(expect.arrayContaining(['observed_at', 'reported_at']));
   });
 
   test('re-running an already-migrated database is a no-op', async () => {

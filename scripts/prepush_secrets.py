@@ -224,7 +224,21 @@ def main():
     if args.all or not args.base:
         rev_range = ["--all"] if args.all else ["HEAD"]
     else:
-        rev_range = [f"{args.base}..{args.head}"]
+        # A range whose lower bound does not resolve is an EMPTY range, and an empty range reports
+        # "no findings" — a silent pass. That is how a guard becomes decoration (S317 ran the hook on
+        # a clone with no origin/master and it printed OK). CI has always fallen back to the full
+        # history here (lint.yml: "No usable base commit — scanning the full history."); the CLI must
+        # not be weaker than the workflow that calls it.
+        resolved = git("rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}").strip()
+        if resolved:
+            rev_range = [f"{args.base}..{args.head}"]
+        else:
+            print(
+                f"[WARN] base {args.base!r} does not resolve — scanning the full history instead of "
+                f"an empty range (an empty range would report a false pass)",
+                file=sys.stderr,
+            )
+            rev_range = ["--all"]
 
     repo_root = git("rev-parse", "--show-toplevel").strip() or "."
     fails, advisory, token_files = scan_range(

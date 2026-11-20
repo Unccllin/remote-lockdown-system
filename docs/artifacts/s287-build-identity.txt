@@ -1,0 +1,65 @@
+=== S287: a build identity, so two binaries stop both being '1.0.0' — 2026-11-18T08:13:10Z ===
+
+--- [1] the gap, measured twice ---
+S283: MOLE ran an agent built 2026-11-17 10:41 (sha256 bb32c3d2…) while the tree carried S271-era
+      fixes it did not have. The dashboard said agent_version 1.0.0 — indistinguishable.
+S286: after deploying a fresh build, the only way to know what was installed was
+      Get-FileHash against the device; the agent still reported 1.0.0.
+
+--- [2] why not just put it in AGENT_VERSION ---
+    function compareVersions(a, b) {
+      const partsA = a.split('.').map(Number);
+      const partsB = b.split('.').map(Number);
+      const len = Math.max(partsA.length, partsB.length);
+      for (let i = 0; i < len; i++) {
+        const va = partsA[i] || 0;
+        const vb = partsB[i] || 0;
+        if (va < vb) return -1;
+        if (va > vb) return 1;
+      }
+      return 0;
+    }
+    -> Number() on a suffix yields NaN, so every comparison would silently read as equal.
+
+--- [3] what was added ---
+agent/_buildinfo.py   tracked, committed defaults BUILD_DATE/BUILD_COMMIT = "unknown"
+agent/agent.py        AGENT_BUILD = "<date>.<commit>", version_string() (one formatter for
+                      --version, the startup log and the crash log), build=%s on both startup lines
+agent/build.ps1       stamps _buildinfo.py before PyInstaller: UTC date + SHA-256 over agent/*.py
+                      (a build host without git can still compute it); -BuildCommit overrides
+
+--- [4] tests (agent/tests/test_version_identity.py) ---
+  22:def test_build_id_has_a_shape_a_person_can_read():
+  29:def test_version_string_carries_both_identities():
+  36:def test_the_committed_default_stays_a_placeholder():
+  54:def test_version_stays_numeric_for_the_update_comparison():
+
+--- [5] runs ---
+....                                                                     [100%]
+4 passed in 0.05s
+..................                                                       [100%]
+954 passed in 56.14s
+66 files already formatted
+[OK] ruff check + format clean
+
+--- [6] source tree reports itself honestly ---
+  lockdown-agent 1.0.0 (frozen=False, build=unknown.unknown)
+
+--- [7] on MOLE, from a stamped build ---
+  stamped:  BUILD_COMMIT = "4bfeda526b77"   BUILD_DATE = "20261118"
+  dist:     lockdown-agent.exe 16.1 MB  sha256 d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3
+  deploy:   stop service -> kill stray pid -> copy -> hash equality checked -> start
+  installed sha256 d9e45902… matches the built artifact
+  $ lockdown-agent.exe --version
+  lockdown-agent 1.0.0 (frozen=True, build=20261118.4bfeda526b77)
+  agent.log:
+  Agent starting - hostname=MOLE server=http://192.168.1.43:8787 poll=30s build=20261118.4bfeda526b77
+
+--- [8] what this does and does not change ---
+  Does:    answer 'which build is that device running' from --version, the log, or the crash log —
+           the three places a person actually looks.
+  Does not: add a column or a dashboard field. The server still stores agent_version (numeric,
+           unchanged) because the update path compares it arithmetically; surfacing the build id in
+           the UI would be a cross-surface change (server + Worker + dashboard + migration).
+  Guard:   a test fails if a STAMPED _buildinfo.py is committed, so a release cannot claim an
+           identity it did not build.

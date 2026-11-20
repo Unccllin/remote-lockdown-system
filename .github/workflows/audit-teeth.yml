@@ -1,0 +1,82 @@
+name: Mutation audit
+
+# scripts/audit_test_teeth.py reintroduces one semantic defect at a time and asks whether the suite
+# notices. It is the only thing that answers "does this test have teeth?", and until S323 nothing ran
+# it: the twelve rows whose anchors were orphaned by S280's split went unnoticed for a hundred
+# sessions, and the summary even counted unrun rows as kills (fixed in S322).
+#
+# Weekly rather than per-push on purpose: 55 mutations, each running a full component suite, is
+# tens of minutes of runner time for a signal that changes only when someone edits the code an anchor
+# points at. The per-push gates stay in ci.yml; this is the sweep that catches anchor drift.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-audit
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Run the mutation audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # The audit runs three runners: vitest for serverless rows (39), pytest for agent rows (13),
+      # jest for server rows (3). All three need their dependencies installed or the audit reports
+      # INVALID rather than a verdict — which is exactly the failure mode it exists to prevent.
+      - name: Install serverless dependencies
+        working-directory: serverless
+        run: npm ci
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install agent dependencies
+        working-directory: agent
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # The audit parses each runner's human-readable output, so two environment differences cost five
+      # runs to find (S323): a piped capture truncated vitest's output entirely, and ANSI escapes made
+      # its tally unparseable. Both are fixed inside the audit (`_run_captured` writes to a file,
+      # `_strip_ansi` parses it). A "Diagnostic — run the command verbatim" step lived here while that
+      # was being established and was retired once it had produced the evidence.
+      - name: Run the audit
+        run: python3 scripts/audit_test_teeth.py
+
+      # The audit restores every mutated file in a `finally` block, so a dirty tree means a mutation
+      # escaped. That would be the worst possible outcome of a safety mechanism, so it is asserted.
+      - name: A mutation must never be left applied
+        run: |
+          # Only TRACKED modifications matter here: the mutations edit tracked source files and the
+          # audit restores them in a `finally`. `git status --porcelain` would also flag untracked
+          # files that suites create (scratch DBs, artifacts) and fail this step for the wrong reason.
+          if ! git diff --quiet; then
+            echo "::error::a mutated file was left applied — the audit's restore failed"
+            git diff --stat
+            git diff
+            exit 1
+          fi
+          echo "no tracked file differs — every mutation was restored"

@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Activity, RefreshCw, Server, HardDrive, Database, ListChecks,
   AlertTriangle, ShieldCheck, Clock, Cpu, Wifi, WifiOff, Cloud, Monitor,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import { getDetailedHealth } from '../api/health';
 import { useServerlessMode } from '../hooks/useServerlessMode';
@@ -138,7 +137,7 @@ export default function HealthPage() {
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-2">
-              The serverless backend doesn't expose server uptime, database
+              The serverless backend doesn&apos;t expose server uptime, database
               latency, or memory metrics. Device and command queue status are
               shown below.
             </p>

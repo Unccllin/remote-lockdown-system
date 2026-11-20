@@ -95,6 +95,12 @@ NC='\033[0m'
 # --- Structure check (non-destructive) --------------------------------------
 
 check_structure() {
+    # S320: same rule for the directory half — no expectations, no verdict.
+    if [[ ${#EXPECTED_DIRS[@]} -eq 0 ]]; then
+        echo -e "${RED}No dist directories are declared to check — refusing to report success.${NC}" >&2
+        exit 3
+    fi
+
     local dir
     for dir in "${EXPECTED_DIRS[@]}"; do
         if [[ -d "$dir" ]]; then
@@ -114,6 +120,14 @@ check_structure() {
 
 verify() {
     local f
+
+    # S320: an empty expectation list means this gate verified nothing, and the loops below would
+    # then fall through to "All artifacts present and non-empty." A gate whose scope is empty has
+    # not passed; it has not run.
+    if [[ ${#EXPECTED_FILES[@]} -eq 0 ]]; then
+        echo -e "${RED}No artifacts are declared to verify — refusing to report success.${NC}" >&2
+        exit 3
+    fi
 
     # First, check the dist directories exist.
     check_structure

@@ -166,9 +166,22 @@ async function readCommandViaApi(
   return body.find((c) => c.id === commandId);
 }
 
+/**
+ * Device id for a hostname, read through the API.
+ *
+ * ADR-003 moved devices to per-entity keys, so reading the `devices` list here would pin a
+ * storage layout instead of the behaviour under test — the same reason `readCommandViaApi`
+ * exists (ADR-002).
+ */
 async function deviceIdByHostname(env: unknown, hostname: string): Promise<string | undefined> {
-  const devices = JSON.parse((await (env as any).LOCKDOWN_KV.get('devices')) as string) as any[];
-  return devices.find((d) => d.hostname === hostname)?.id;
+  const resp = await worker.fetch(
+    makeRequest('GET', '/api/devices', undefined, {
+      Authorization: 'Bearer test-admin-token',
+    }),
+    env,
+  );
+  const devices = (await parseResponse(resp)) as any[];
+  return devices.find((d: any) => d.hostname === hostname)?.id;
 }
 
 // Helper to parse JSON response
@@ -220,7 +233,7 @@ describe('route contracts (a mentioned path must be dispatched)', () => {
         routed.add(match[1].replace(/\/$/, ''));
       }
       for (const match of line.matchAll(/path\.startsWith\('([^']+)'\)/g)) {
-        routed.add(match[1].replace(/\/$/, '') + '*');
+        routed.add(`${match[1].replace(/\/$/, '')}*`);
       }
     }
     return { mentioned, routed };
@@ -285,6 +298,33 @@ describe('Serverless Worker', () => {
       expect(resp.status).toBe(201);
       expect(data).toHaveProperty('api_key');
       expect(data).toHaveProperty('device.hostname', 'TEST-DEV-001');
+    });
+
+    it('omits google_api_key when GOOGLE_API_KEY is unset', async () => {
+      const req = makeRequest(
+        'POST',
+        '/api/enroll',
+        { hostname: 'TEST-DEV-NOKEY', owner_name: 'Test' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp = await worker.fetch(req, env);
+      const data = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect('google_api_key' in data).toBe(false);
+    });
+
+    it('includes google_api_key when GOOGLE_API_KEY is set', async () => {
+      const envWithKey = { ...env, GOOGLE_API_KEY: 'test-google-key' };
+      const req = makeRequest(
+        'POST',
+        '/api/enroll',
+        { hostname: 'TEST-DEV-KEY', owner_name: 'Test' },
+        { Authorization: 'Bearer test-admin-token' },
+      );
+      const resp = await worker.fetch(req, envWithKey);
+      const data = await parseResponse(resp);
+      expect(resp.status).toBe(201);
+      expect(data.google_api_key).toBe('test-google-key');
     });
 
     it('rejects without admin auth', async () => {
@@ -486,6 +526,39 @@ describe('Serverless Worker', () => {
       const listResp = await worker.fetch(listReq, env);
       const listData: any = await parseResponse(listResp);
       expect(listData.some((d: any) => d.hostname === 'LIST-CHECK-001')).toBe(true);
+    });
+
+    it('omits google_api_key when GOOGLE_API_KEY is unset (claim)', async () => {
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, env);
+      const tokenData: any = await parseResponse(tokenResp);
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+        hostname: 'CLAIM-NOKEY-001',
+      });
+      const claimResp = await worker.fetch(claimReq, env);
+      const claimData: any = await parseResponse(claimResp);
+      expect(claimResp.status).toBe(201);
+      expect('google_api_key' in claimData).toBe(false);
+    });
+
+    it('includes google_api_key when GOOGLE_API_KEY is set (claim)', async () => {
+      const envWithKey = { ...env, GOOGLE_API_KEY: 'test-google-key' };
+      const tokenReq = makeRequest('POST', '/api/enroll/token', {}, {
+        Authorization: 'Bearer test-admin-token',
+      });
+      const tokenResp = await worker.fetch(tokenReq, envWithKey);
+      const tokenData: any = await parseResponse(tokenResp);
+      const claimReq = makeRequest('POST', '/api/enroll/claim', {
+        token: tokenData.token,
+        hostname: 'CLAIM-KEY-001',
+      });
+      const claimResp = await worker.fetch(claimReq, envWithKey);
+      const claimData: any = await parseResponse(claimResp);
+      expect(claimResp.status).toBe(201);
+      expect(claimData.google_api_key).toBe('test-google-key');
     });
   });
 
@@ -970,6 +1043,63 @@ describe('Serverless Worker', () => {
 
       const stored = await readCommandViaApi(env, device.id, cmdId);
       expect(stored?.command_uuid).toBe('cmd-uuid-abc-123');
+    });
+
+    // ADR-010 runtime settings
+    it('includes settings on the no-pending-command branch when GOOGLE_API_KEY set', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-001');
+      const body = JSON.stringify({ hostname: 'RT-001' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBe('test-google-key');
+      expect(data.settings.revision).toBeTruthy();
+    });
+
+    it('includes settings on the pending-command branch when GOOGLE_API_KEY set', async () => {
+      const { apiKey, device } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-002');
+      const flagBody = JSON.stringify({});
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/track`, flagBody, { Authorization: `Bearer ${env.ADMIN_TOKEN}` }), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const body = JSON.stringify({ hostname: 'RT-002' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBe('test-google-key');
+      expect(data.settings.revision).toBeTruthy();
+    });
+
+    it('omits settings when GOOGLE_API_KEY is unset', async () => {
+      const { apiKey } = await enrollDevice(worker, env, 'RT-003');
+      const body = JSON.stringify({ hostname: 'RT-003' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), env);
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings).toBeUndefined();
+    });
+
+    it('revision stable across identical requests and changes with value', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'test-google-key' }, 'RT-004');
+      const body = JSON.stringify({ hostname: 'RT-004' });
+      const r1 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const d1: any = await parseResponse(r1);
+      const r2 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: 'test-google-key' });
+      const d2: any = await parseResponse(r2);
+      expect(d2.settings.revision).toBe(d1.settings.revision);
+      const { apiKey: apiKey2 } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: 'other-key' }, 'RT-005');
+      const body2 = JSON.stringify({ hostname: 'RT-005' });
+      const r3 = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body2, signRequest(body2, apiKey2)), { ...env, GOOGLE_API_KEY: 'other-key' });
+      const d3: any = await parseResponse(r3);
+      expect(d3.settings.revision).not.toBe(d1.settings.revision);
+    });
+
+    it('empty-string env -> google_api_key null with revision', async () => {
+      const { apiKey } = await enrollDevice(worker, { ...env, GOOGLE_API_KEY: '' }, 'RT-006');
+      const body = JSON.stringify({ hostname: 'RT-006' });
+      const resp = await worker.fetch(makeRequest('POST', '/api/agent/checkin', body, signRequest(body, apiKey)), { ...env, GOOGLE_API_KEY: '' });
+      const data: any = await parseResponse(resp);
+      expect(resp.status).toBe(200);
+      expect(data.settings.google_api_key).toBeNull();
+      expect(data.settings.revision).toBeTruthy();
     });
   });
 
@@ -1805,6 +1935,27 @@ describe('Serverless Worker', () => {
       expect(list.status).toBe(200);
     });
 
+    it('the generated setup script is plain ASCII', async () => {
+      // PowerShell 5.1 decodes a BOM-less script as ANSI, so a UTF-8 em dash inside a
+      // string literal becomes 'â€"' — and that last byte terminates the string early.
+      // The whole script then fails to parse, which is what the dashboard's one-liner
+      // handed to the operator in S302: `iex (irm .../api/enroll/setup.ps1)` died with
+      // "The string is missing the terminator" before installing anything. The same
+      // failure was recorded once before for the Windows build script (B-083); this
+      // pins the generated script so it cannot come back through a copy-paste.
+      await seedAdmin(env, 'sa1', 'password123');
+      const { device } = await enrollDevice(worker, env, 'ASCII-001');
+      const resp = await worker.fetch(
+        makeRequest('GET', `/api/enroll/setup.ps1`, undefined, {}),
+        env,
+      );
+      expect(resp.status).toBe(200);
+      const script = await resp.text();
+      const offenders = [...script].filter((c) => c.charCodeAt(0) > 127);
+      expect(offenders, `non-ASCII characters in the generated PowerShell: ${[...new Set(offenders)].join(' ')}`).toEqual([]);
+      expect(device.hostname).toBeTruthy();
+    });
+
     it('serves the CLI installer the generated scripts run', async () => {
       const bytes = new Uint8Array([0x4d, 0x5a, 0x01, 0x02, 0x03]);
       await env.LOCKDOWN_KV.put('binary:agent-installer', bytes);
@@ -1846,6 +1997,67 @@ describe('Serverless Worker', () => {
         expect(resp.status, path).toBe(200);
         expect(resp.headers.get('x-content-sha256'), path).toMatch(/^[0-9a-f]{64}$/);
       }
+    });
+
+    it('keeps a republished download from being cached for an hour', async () => {
+      // The URL has no version, so the only thing standing between a user and the
+      // previous release is the cache lifetime. An hour is long enough to hand someone
+      // last week's installer after a publish (S298).
+      await env.LOCKDOWN_KV.put('binary:agent', new Uint8Array([1, 2, 3]));
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/agent'), env);
+      const cacheControl = resp.headers.get('Cache-Control') ?? '';
+      const maxAge = Number(/max-age=(\d+)/.exec(cacheControl)?.[1] ?? '0');
+
+      expect(cacheControl).toContain('public');
+      expect(maxAge).toBeGreaterThan(0);
+      expect(maxAge).toBeLessThanOrEqual(300);
+    });
+
+    it('serves an artifact from R2 when KV cannot hold it', async () => {
+      // S291: a KV value caps at 27 MiB and the NSIS installer passed that at 33 MB of
+      // payload, so the installer has to be published somewhere else. R2 is that place; the
+      // route and the key name do not change, so nothing downstream has to know which store
+      // answered.
+      const bytes = new Uint8Array([0x4d, 0x5a, 0x99, 0x10, 0x20]);
+      const envWithR2 = {
+        ...env,
+        BINARIES: {
+          get: async (key: string) =>
+            key === 'binary:installer'
+              ? { arrayBuffer: async () => bytes.buffer.slice(0) }
+              : null,
+        },
+      };
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), envWithR2);
+
+      expect(resp.status).toBe(200);
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(bytes);
+      // The digest must describe the bytes actually served, whichever store produced them.
+      expect(resp.headers.get('x-content-sha256')).toMatch(/^[0-9a-f]{64}$/);
+      expect(resp.headers.get('Content-Disposition')).toContain('lockdown-setup.exe');
+    });
+
+    it('prefers KV over R2 for the same key', async () => {
+      // KV first keeps a deployment without R2 behaving exactly as before, and keeps an
+      // artifact that fits where the existing publish tooling puts it.
+      const fromKv = new Uint8Array([0xaa, 0xbb]);
+      const fromR2 = new Uint8Array([0xcc, 0xdd]);
+      await env.LOCKDOWN_KV.put('binary:installer', fromKv);
+      const envWithR2 = {
+        ...env,
+        BINARIES: { get: async () => ({ arrayBuffer: async () => fromR2.buffer.slice(0) }) },
+      };
+
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), envWithR2);
+      expect(new Uint8Array(await resp.arrayBuffer())).toEqual(fromKv);
+    });
+
+    it('still answers 404 with no R2 binding and an empty KV', async () => {
+      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), env);
+      expect(resp.status).toBe(404);
+      expect(await resp.json()).toHaveProperty('error');
     });
 
     it('the generated installer verifies both downloads before running them', async () => {
@@ -1922,8 +2134,11 @@ describe('Serverless Worker', () => {
       });
       await worker.fetch(makeRequest('POST', '/api/agent/command-ack', ackBody, signRequest(ackBody, apiKey)), env2);
 
-      // The KV record must NOT contain the plaintext password.
-      const stored = JSON.parse(await (env2.LOCKDOWN_KV as any).get('bios_passwords'));
+      // The KV record must NOT contain the plaintext password. ADR-006 moved credentials to one
+      // key per device, so the assertion reads that key — the property under test is unchanged.
+      const stored = JSON.parse(
+        await (env2.LOCKDOWN_KV as any).get(`bios_passwords:${device.id}`),
+      );
       const row = stored.find((r: any) => r.device_id === device.id);
       expect(row.password).toBeUndefined();
       expect(row.password_enc).toBeDefined();
@@ -4979,10 +5194,16 @@ describe('D-210: PBL route integration', () => {
         env,
       );
       expect(resp.status).toBe(200);
-      const devices = JSON.parse((await env.LOCKDOWN_KV.get('devices')) as string);
-      const device = devices.find((d: any) => d.hostname === hostname);
+      const deviceId = await deviceIdByHostname(env, hostname);
+      const deviceResp = await worker.fetch(
+        makeRequest('GET', `/api/devices/${deviceId}`, undefined, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const device = (await parseResponse(deviceResp)) as any;
       return {
-        command: await readCommandViaApi(env, device?.id, commandId),
+        command: await readCommandViaApi(env, deviceId, commandId),
         device,
       };
     }
@@ -5179,5 +5400,822 @@ describe('D-210: PBL route integration', () => {
       const command = await flagAndCheckin('PBA-003', { enable_pba: 'true' });
       expect(command.enable_pba).toBe(false);
     });
+  });
+});
+
+/**
+ * `lock_state` — what actually happened to a lock, not what was asked for.
+ *
+ * `status: stolen` is set the moment a lockdown is queued, so on its own it says nothing about
+ * the device. A machine that is offline when it is flagged keeps that status while nothing on it
+ * changes — measured on MOLE (S271). The operator-facing question is "did it lock?", and the
+ * answer has three distinguishable shapes: applied (the ACK), applying (reachable, queued),
+ * armed (queued, device quiet, will lock on reconnect or after the 24 h deadman).
+ */
+describe('lock_state on the device payload', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function seed(
+    hostname: string,
+    commands: Array<Record<string, unknown>>,
+    lastCheckin: string,
+  ): Promise<any> {
+    const { device } = await enrollDevice(worker, env, hostname);
+    // `last_checkin` lives on the per-device check-in metadata key (KV-RACE-001) — the same
+    // field `mergeCheckinMetadata` reads when the list endpoint shapes the row. Patching it
+    // there keeps this test on the read path instead of on the storage layout (ADR-003).
+    await env.LOCKDOWN_KV.put(
+      `device_checkin:${device.id}`,
+      JSON.stringify({ last_checkin: lastCheckin }),
+    );
+    if (commands.length) {
+      await env.LOCKDOWN_KV.put(
+        'commands',
+        JSON.stringify(commands.map((c) => ({ device_id: device.id, command_uuid: null, ...c }))),
+      );
+    }
+    const resp = await worker.fetch(
+      makeRequest('GET', '/api/devices', undefined, { Authorization: 'Bearer test-admin-token' }),
+      env,
+    );
+    const devices = (await parseResponse(resp)) as any[];
+    return devices.find((d) => d.id === device.id);
+  }
+
+  const now = new Date().toISOString();
+  const stale = new Date(Date.now() - 30 * 60_000).toISOString();
+  const lockdown = (status: string, at = '2026-11-17T10:00:00Z') => ({
+    id: `cmd-${status}`,
+    command_type: 'lockdown',
+    status,
+    created_at: at,
+  });
+
+  it('reports applied when the lockdown ACKed', async () => {
+    expect((await seed('LOCKST-001', [lockdown('executed')], now)).lock_state).toBe('applied');
+  });
+
+  it('reports applying when the lock is queued and the device is still checking in', async () => {
+    expect((await seed('LOCKST-002', [lockdown('pending')], now)).lock_state).toBe('applying');
+  });
+
+  it('reports armed when the lock is queued but the device has gone quiet', async () => {
+    // The case an operator must not mistake for "locked": flagged while offline.
+    expect((await seed('LOCKST-003', [lockdown('pending')], stale)).lock_state).toBe('armed');
+  });
+
+  it('reports failed when the lockdown reported failure', async () => {
+    expect((await seed('LOCKST-004', [lockdown('failed')], now)).lock_state).toBe('failed');
+  });
+
+  it('reports none when no lockdown is in play', async () => {
+    expect((await seed('LOCKST-005', [], now)).lock_state).toBe('none');
+  });
+
+  it('reports none after an unlock follows the lockdown', async () => {
+    const d = await seed(
+      'LOCKST-006',
+      [lockdown('executed'), { ...lockdown('executed', '2026-11-17T11:00:00Z'), id: 'cmd-u', command_type: 'unlock' }],
+      now,
+    );
+    expect(d.lock_state).toBe('none');
+  });
+});
+
+/**
+ * `observed_at` — when the fix was taken, not when it arrived.
+ *
+ * A device offline in a bag cannot reach the server but can still scan the WiFi around it
+ * (`netsh wlan show networks mode=bssid` is local; only resolving BSSIDs needs the internet).
+ * S271 made the agent keep that raw scan and resolve it on reconnect. Without `observed_at` the
+ * row it writes then lands at receipt time, so a backfilled trail reads as if the device were in
+ * that building when it reconnected.
+ */
+describe('observed_at on location reports', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function report(
+    hostname: string,
+    apiKey: string,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    const raw = JSON.stringify({ hostname, ...body });
+    const resp = await worker.fetch(
+      makeRequest('POST', '/api/agent/location', raw, signRequest(raw, apiKey)),
+      env,
+    );
+    expect(resp.status).toBe(200);
+  }
+
+  async function listLocations(deviceId: string, query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/locations${query}`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('stores the scan time the agent backfilled', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-001');
+    const scannedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await report('OBS-001', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'A' },
+      observed_at: scannedAt,
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBe(scannedAt);
+    // Receipt time is still recorded, and still distinct from the observation.
+    expect(rows[0].reported_at).toBeDefined();
+  });
+
+  it('orders the trail by when each fix was taken, not by arrival', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-002');
+    const earlier = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    // Backfilled FIRST but taken EARLIER — the case that used to appear last in the history.
+    await report('OBS-002', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'OLD' },
+      observed_at: earlier,
+    });
+    await report('OBS-002', apiKey, {
+      location: { latitude: 3, longitude: 4, source: 'ip', city: 'NEW' },
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows.map((r) => r.city)).toEqual(['NEW', 'OLD']);
+  });
+
+  it('the latest pin agrees with row 1 of the history', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-003');
+    const earlier = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    await report('OBS-003', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'wifi', city: 'OLD' },
+      observed_at: earlier,
+    });
+    await report('OBS-003', apiKey, {
+      location: { latitude: 3, longitude: 4, source: 'ip', city: 'NEW' },
+    });
+
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${device.id}/location/latest`, undefined, {
+        Authorization: 'Bearer test-admin-token',
+      }),
+      env,
+    );
+    const latest = (await parseResponse(resp)) as any;
+    expect(latest.city).toBe('NEW');
+  });
+
+  it('drops a claim from the future rather than pinning the device there', async () => {
+    // A device clock is not trusted (MOLE's w32time had stopped, S271).
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-004');
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await report('OBS-004', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'ip', city: 'A' },
+      observed_at: tomorrow,
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBeNull();
+  });
+
+  it('drops an unparseable claim instead of failing the report', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'OBS-005');
+    await report('OBS-005', apiKey, {
+      location: { latitude: 1, longitude: 2, source: 'ip', city: 'A' },
+      observed_at: 'yesterday-ish',
+    });
+
+    const rows = await listLocations(device.id);
+    expect(rows[0].observed_at).toBeNull();
+  });
+});
+
+/**
+ * ADR-003: devices are per-entity KV records.
+ *
+ * The defect this removes: every device mutation loaded the whole `devices` list, edited it and
+ * wrote it back, so two writers that overlapped each other's snapshot silently lost one of the
+ * changes — across isolates, where `serializeMutation()` cannot help. On `devices` the lost
+ * field can be `api_key_hash` (the device stops authenticating) or `status` (the dashboard says
+ * `active` for a machine that is locked).
+ *
+ * These tests assert the storage contract the ADR chose — the key layout, the migration, the
+ * API-key pointer — because that contract IS the fix. Behaviour under it is covered by the 458
+ * tests that ran before it.
+ */
+describe('ADR-003: per-entity device records', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const hashOf = (key: string): string =>
+    crypto.createHash('sha256').update(key).digest('hex');
+
+  function legacyDevice(id: string, hostname: string, apiKeyHash: string) {
+    return {
+      id,
+      hostname,
+      owner_name: 'Legacy',
+      status: 'active',
+      mac_address: null,
+      hardware_uuid: null,
+      serial_number: null,
+      last_checkin: null,
+      enrolled_at: '2026-11-01T00:00:00.000Z',
+      api_key_hash: apiKeyHash,
+    };
+  }
+
+  async function listFromApi(): Promise<any[]> {
+    const resp = await worker.fetch(makeRequest('GET', '/api/devices', undefined, ADMIN), env);
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('migrates the legacy whole-list key on first read', async () => {
+    await env.LOCKDOWN_KV.put(
+      'devices',
+      JSON.stringify([
+        legacyDevice('legacy-1', 'LEG-1', 'hash-one'),
+        legacyDevice('legacy-2', 'LEG-2', 'hash-two'),
+      ]),
+    );
+
+    const devices = await listFromApi();
+    expect(devices.map((d) => d.id).sort()).toEqual(['legacy-1', 'legacy-2']);
+
+    // Per-entity records, an index, and the API-key pointer for each device.
+    expect(await env.LOCKDOWN_KV.get('device:legacy-1')).toBeTruthy();
+    expect(await env.LOCKDOWN_KV.get('device:legacy-2')).toBeTruthy();
+    expect(JSON.parse((await env.LOCKDOWN_KV.get('device_index')) as string)).toEqual([
+      'legacy-1',
+      'legacy-2',
+    ]);
+    expect(await env.LOCKDOWN_KV.get('agent_key:hash-one')).toBe('legacy-1');
+    // …and the legacy key is gone, so the whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('devices')).toBeNull();
+  });
+
+  it('is idempotent — a second read migrates nothing and changes nothing', async () => {
+    await env.LOCKDOWN_KV.put(
+      'devices',
+      JSON.stringify([legacyDevice('legacy-1', 'LEG-1', 'hash-one')]),
+    );
+    await listFromApi();
+    const indexAfterFirst = await env.LOCKDOWN_KV.get('device_index');
+    const recordAfterFirst = await env.LOCKDOWN_KV.get('device:legacy-1');
+
+    const devices = await listFromApi();
+    expect(devices).toHaveLength(1);
+    expect(await env.LOCKDOWN_KV.get('device_index')).toBe(indexAfterFirst);
+    expect(await env.LOCKDOWN_KV.get('device:legacy-1')).toBe(recordAfterFirst);
+  });
+
+  it('a mutation of one device cannot overwrite another', async () => {
+    // The cross-isolate case, made deterministic: write B's record the way a second isolate
+    // would (straight to its key, after this isolate has already read the fleet), then mutate A
+    // through the API. A whole-list write would rebuild B from the stale snapshot it read.
+    const { device: a } = await enrollDevice(worker, env, 'RACE-A');
+    const { device: b } = await enrollDevice(worker, env, 'RACE-B');
+    await env.LOCKDOWN_KV.put(
+      `device:${b.id}`,
+      JSON.stringify({ ...b, status: 'tracking', owner_name: 'Changed elsewhere' }),
+    );
+
+    const flag = await worker.fetch(
+      makeRequest('POST', `/api/devices/${a.id}/flag-stolen`, { hostname_confirm: 'RACE-A' }, ADMIN),
+      env,
+    );
+    expect(flag.status).toBe(200);
+
+    const bAfter = JSON.parse((await env.LOCKDOWN_KV.get(`device:${b.id}`)) as string);
+    expect(bAfter.status).toBe('tracking');
+    expect(bAfter.owner_name).toBe('Changed elsewhere');
+  });
+
+  it('records an API-key pointer so auth is one read', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'PTR-001');
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(apiKey)}`)).toBe(device.id);
+  });
+
+  it('a re-keyed device fails closed with the old key and works with the new one', async () => {
+    const { device, apiKey: oldKey } = await enrollDevice(worker, env, 'REKEY-001');
+
+    const rotate = await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/rotate-key`, {}, ADMIN),
+      env,
+    );
+    expect(rotate.status).toBe(200);
+    const newKey = ((await parseResponse(rotate)) as any).api_key as string;
+    expect(newKey).toBeTruthy();
+
+    // The stale pointer is gone, so the old key cannot authenticate at all.
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(oldKey)}`)).toBeNull();
+    const oldBody = JSON.stringify({ hostname: 'REKEY-001' });
+    const oldResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', oldBody, signRequest(oldBody, oldKey)),
+      env,
+    );
+    expect(oldResp.status).toBe(401);
+
+    // The new one can.
+    const newBody = JSON.stringify({ hostname: 'REKEY-001' });
+    const newResp = await worker.fetch(
+      makeRequest('POST', '/api/agent/checkin', newBody, signRequest(newBody, newKey)),
+      env,
+    );
+    expect(newResp.status).toBe(200);
+  });
+
+  it('a released device loses its record, its index entry and its key pointer', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'RELEASE-001');
+
+    const resp = await worker.fetch(
+      makeRequest(
+        'DELETE',
+        `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'RELEASE-001' },
+        ADMIN,
+      ),
+      env,
+    );
+    expect(resp.status).toBe(200);
+
+    expect(await env.LOCKDOWN_KV.get(`device:${device.id}`)).toBeNull();
+    expect(await env.LOCKDOWN_KV.get(`agent_key:${hashOf(apiKey)}`)).toBeNull();
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('device_index')) as string) as string[];
+    expect(index).not.toContain(device.id);
+    expect((await listFromApi()).some((d) => d.id === device.id)).toBe(false);
+  });
+});
+
+/**
+ * ADR-004: location reports are per-entity records, indexed per device.
+ *
+ * The defect this removes: reports lived in one list capped at 1000 rows for the WHOLE fleet, so
+ * at 60 tracked devices each kept 16 reports — about eight minutes of trail — and every report
+ * rewrote up to 1000 rows. Two devices reporting at once also lost one of the two, and a lost
+ * report is the evidence a tracking trail exists to produce.
+ */
+describe('ADR-004: per-entity location reports', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; LOCATION_HISTORY_LIMIT?: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  async function report(hostname: string, apiKey: string, body: Record<string, unknown>): Promise<void> {
+    const raw = JSON.stringify({ hostname, location: body });
+    const resp = await worker.fetch(
+      makeRequest('POST', '/api/agent/location', raw, signRequest(raw, apiKey)),
+      env,
+    );
+    expect(resp.status).toBe(200);
+  }
+
+  async function history(deviceId: string, query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/locations${query}`, undefined, ADMIN),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  // Through the KV interface (`list`), not the mock's private storage.
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+  const locationKeys = () => keysWithPrefix('location:');
+  const indexKeys = () => keysWithPrefix('location_index:');
+
+  it('migrates the legacy whole-list key into per-report records and per-device indexes', async () => {
+    await env.LOCKDOWN_KV.put(
+      'locations',
+      JSON.stringify([
+        { device_id: 'legacy-a', latitude: 1, longitude: 2, source: 'ip', city: 'A1',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:00:00.000Z' },
+        { device_id: 'legacy-b', latitude: 3, longitude: 4, source: 'ip', city: 'B1',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:01:00.000Z' },
+        { device_id: 'legacy-a', latitude: 5, longitude: 6, source: 'ip', city: 'A2',
+          accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+          created_at: '2026-11-01T10:02:00.000Z' },
+      ]),
+    );
+
+    const aRows = await history('legacy-a');
+    const bRows = await history('legacy-b');
+
+    expect(aRows.map((r) => r.city)).toEqual(['A2', 'A1']); // newest first on the wire
+    expect(bRows.map((r) => r.city)).toEqual(['B1']);
+    // Records are per report, indexes are per device.
+    expect(await locationKeys()).toHaveLength(3);
+    expect((await indexKeys()).sort()).toEqual(['location_index:legacy-a', 'location_index:legacy-b']);
+    // The legacy key is gone, so the whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('locations')).toBeNull();
+  });
+
+  it('a second migration of the same rows does not duplicate them', async () => {
+    // Deterministic ids are what make this safe: two isolates migrating concurrently would
+    // otherwise write two copies of every report.
+    const legacy = JSON.stringify([
+      { device_id: 'dup-a', latitude: 1, longitude: 2, source: 'ip', city: 'Only',
+        accuracy_meters: null, region: null, country: null, ip_address: null, wifi_count: null,
+        created_at: '2026-11-01T10:00:00.000Z' },
+    ]);
+    await env.LOCKDOWN_KV.put('locations', legacy);
+    await history('dup-a');
+    const afterFirst = (await env.LOCKDOWN_KV.get('location_index:dup-a')) as string;
+
+    // Simulate the other isolate: the legacy key reappears with the same content.
+    await env.LOCKDOWN_KV.put('locations', legacy);
+    await history('dup-a');
+
+    expect((await env.LOCKDOWN_KV.get('location_index:dup-a')) as string).toBe(afterFirst);
+    expect(await locationKeys()).toHaveLength(1);
+  });
+
+  it('two devices reporting at the same time keep both trails', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'LOC-A');
+    const { device: b, apiKey: keyB } = await enrollDevice(worker, env, 'LOC-B');
+
+    await report('LOC-A', keyA, { latitude: 1, longitude: 1, source: 'ip', city: 'A-1' });
+    await report('LOC-B', keyB, { latitude: 2, longitude: 2, source: 'ip', city: 'B-1' });
+    await report('LOC-A', keyA, { latitude: 3, longitude: 3, source: 'ip', city: 'A-2' });
+
+    const aRows = await history(a.id);
+    const bRows = await history(b.id);
+    expect(aRows.map((r) => r.city)).toEqual(['A-2', 'A-1']);
+    expect(bRows.map((r) => r.city)).toEqual(['B-1']);
+    expect((await indexKeys()).sort()).toEqual([`location_index:${a.id}`, `location_index:${b.id}`].sort());
+  });
+
+  it('the cap prunes the records as well as the index', async () => {
+    // A cap nobody crosses is a cap nobody has seen work — this is the only path that deletes.
+    env.LOCATION_HISTORY_LIMIT = '3';
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-CAP');
+
+    for (let i = 1; i <= 5; i += 1) {
+      await report('LOC-CAP', apiKey, { latitude: i, longitude: i, source: 'ip', city: `C-${i}` });
+    }
+
+    const rows = await history(device.id, '?limit=10');
+    expect(rows.map((r) => r.city)).toEqual(['C-5', 'C-4', 'C-3']);
+    const index = JSON.parse((await env.LOCKDOWN_KV.get(`location_index:${device.id}`)) as string);
+    expect(index).toHaveLength(3);
+    // The two evicted reports are deleted, not merely unindexed.
+    expect(await locationKeys()).toHaveLength(3);
+  });
+
+  it('a released device leaves no location records or index behind', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-REL');
+    await report('LOC-REL', apiKey, { latitude: 1, longitude: 2, source: 'ip', city: 'R-1' });
+    expect((await locationKeys()).length).toBeGreaterThan(0);
+
+    const resp = await worker.fetch(
+      makeRequest(
+        'DELETE',
+        `/api/devices/${device.id}/release`,
+        { hostname_confirm: 'LOC-REL' },
+        ADMIN,
+      ),
+      env,
+    );
+    expect(resp.status).toBe(200);
+    expect(await locationKeys()).toHaveLength(0);
+    expect(await env.LOCKDOWN_KV.get(`location_index:${device.id}`)).toBeNull();
+  });
+
+  it('reports carry a stable id, so a row does not change identity between reads', async () => {
+    const { device, apiKey } = await enrollDevice(worker, env, 'LOC-ID');
+    await report('LOC-ID', apiKey, { latitude: 1, longitude: 2, source: 'ip', city: 'I-1' });
+
+    const first = await history(device.id);
+    await report('LOC-ID', apiKey, { latitude: 3, longitude: 4, source: 'ip', city: 'I-2' });
+    const second = await history(device.id);
+
+    const earlierRow = second.find((r) => r.city === 'I-1');
+    expect(earlierRow.id).toBe(first[0].id);
+    expect(earlierRow.id).toMatch(/^[0-9a-f]+$/);
+  });
+});
+
+/**
+ * ADR-005: audit entries are per-entity records behind one capped index.
+ *
+ * The defect this removes: every mutation read up to 500 entries, scanned the WHOLE FLEET for one
+ * hostname (since ADR-003 that is an index get plus one get per device), and rewrote the window.
+ * Two concurrent appends lost one — and a lost audit line is a compliance record.
+ */
+describe('ADR-005: per-entity audit entries', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; AUDIT_HISTORY_LIMIT?: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+  const auditKeys = () => keysWithPrefix('audit:');
+
+  async function audit(query = ''): Promise<any[]> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/audit${query}`, undefined, ADMIN),
+      env,
+    );
+    return (await parseResponse(resp)) as any[];
+  }
+
+  it('migrates the legacy whole-list key into records plus an index carrying the device ids', async () => {
+    await env.LOCKDOWN_KV.put(
+      'audit_log',
+      JSON.stringify([
+        { id: 'old-1', device_id: 'dev-a', action: 'admin_flag_stolen', detail: '',
+          created_at: '2026-11-01T10:00:00.000Z', hostname: 'A', admin_username: 'admin' },
+        { id: 'old-2', device_id: 'dev-b', action: 'admin_track', detail: '',
+          created_at: '2026-11-01T10:01:00.000Z', hostname: 'B', admin_username: 'admin' },
+      ]),
+    );
+
+    const entries = await audit();
+    expect(entries.map((e) => e.action)).toEqual(['admin_track', 'admin_flag_stolen']); // newest first
+    expect(await auditKeys()).toHaveLength(2);
+
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    expect(index).toHaveLength(2);
+    // The device id travels in the index — that is what makes a scoped read cheap.
+    expect(index.map((e: any) => e.device_id).sort()).toEqual(['dev-a', 'dev-b']);
+    expect(await env.LOCKDOWN_KV.get('audit_log')).toBeNull();
+  });
+
+  it('re-migrating the same rows does not duplicate them', async () => {
+    const legacy = JSON.stringify([
+      { id: 'old-1', device_id: 'dev-a', action: 'admin_flag_stolen', detail: '',
+        created_at: '2026-11-01T10:00:00.000Z', hostname: 'A', admin_username: 'admin' },
+    ]);
+    await env.LOCKDOWN_KV.put('audit_log', legacy);
+    await audit();
+    const afterFirst = (await env.LOCKDOWN_KV.get('audit_index')) as string;
+
+    await env.LOCKDOWN_KV.put('audit_log', legacy); // the other isolate's copy
+    await audit();
+
+    expect((await env.LOCKDOWN_KV.get('audit_index')) as string).toBe(afterFirst);
+    expect(await auditKeys()).toHaveLength(1);
+  });
+
+  it('two devices mutating at once both keep their audit lines', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'AUD-A');
+    const { device: b } = await enrollDevice(worker, env, 'AUD-B');
+
+    const flag = async (d: any, hostname: string) =>
+      worker.fetch(
+        makeRequest('POST', `/api/devices/${d.id}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+        env,
+      );
+    expect((await flag(a, 'AUD-A')).status).toBe(200);
+    expect((await flag(b, 'AUD-B')).status).toBe(200);
+
+    const entries = await audit();
+    const actions = entries.filter((e) => e.action === 'admin_flag_stolen');
+    expect(actions).toHaveLength(2);
+    // The hostname proves the entry read exactly its own device, not the fleet.
+    expect(actions.map((e) => e.hostname).sort()).toEqual(['AUD-A', 'AUD-B']);
+  });
+
+  it('a device-filtered read returns only that device\'s entries', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'FILT-A');
+    const { device: b } = await enrollDevice(worker, env, 'FILT-B');
+    // rotate-key is idempotent (a repeat is another entry), unlike flag-stolen, which 409s once
+    // the device is already stolen and so would write nothing the second time.
+    const rotate = (d: any) =>
+      worker.fetch(makeRequest('POST', `/api/devices/${d.id}/rotate-key`, {}, ADMIN), env);
+    await rotate(a);
+    await rotate(b);
+    await rotate(a);
+
+    const forA = await audit(`?device_id=${a.id}`);
+    expect(forA).toHaveLength(2);
+    expect(forA.every((e) => e.device_id === a.id)).toBe(true);
+    expect(forA.every((e) => e.timestamp === e.created_at)).toBe(true); // dashboard mapping kept
+  });
+
+  it('the cap prunes index entries and their records', async () => {
+    env.AUDIT_HISTORY_LIMIT = '2';
+    const { device } = await enrollDevice(worker, env, 'AUD-CAP');
+    // Enrolment itself writes audit lines, so drive enough to cross a cap of 2.
+    for (let i = 0; i < 3; i += 1) {
+      await worker.fetch(makeRequest('POST', `/api/devices/${device.id}/rotate-key`, {}, ADMIN), env);
+    }
+
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    expect(index).toHaveLength(2);
+    expect(await auditKeys()).toHaveLength(2);
+  });
+
+  it('release amends only its own entries and leaves the rest untouched', async () => {
+    const { device: a } = await enrollDevice(worker, env, 'REL-A');
+    const { device: b } = await enrollDevice(worker, env, 'REL-B');
+    // Enrolment writes no audit line, so give A one to be amended by the release.
+    await worker.fetch(makeRequest('POST', `/api/devices/${a.id}/rotate-key`, {}, ADMIN), env);
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${b.id}/flag-stolen`, { hostname_confirm: 'REL-B' }, ADMIN),
+      env,
+    );
+    // Snapshot B's entry bytes: a whole-trail rewrite would rewrite them too.
+    const indexBefore = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string);
+    const bId = indexBefore.find((e: any) => e.device_id === b.id).id;
+    const bBefore = await env.LOCKDOWN_KV.get(`audit:${bId}`);
+
+    const release = await worker.fetch(
+      makeRequest('DELETE', `/api/devices/${a.id}/release`, { hostname_confirm: 'REL-A' }, ADMIN),
+      env,
+    );
+    expect(release.status).toBe(200);
+
+    expect(await env.LOCKDOWN_KV.get(`audit:${bId}`)).toBe(bBefore); // untouched
+    const aEntries = await audit(`?device_id=${a.id}`);
+    expect(aEntries.some((e) => e.detail.includes('released_at='))).toBe(true);
+  });
+});
+
+/**
+ * ADR-006: encryption keys and BIOS credentials are per-DEVICE collections.
+ *
+ * Both stores held every device's secrets in one value, and every access was already scoped to one
+ * device — so one device's escrow rewrote every other device's key. A lost encryption key is an
+ * unrecoverable device, which is why this store gets no index and no cap: the population is the
+ * device set and the rows per device are single digits.
+ */
+describe('ADR-006: per-device secret stores', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() };
+  });
+
+  const keysWithPrefix = async (prefix: string): Promise<string[]> =>
+    (await env.LOCKDOWN_KV.list({ prefix })).keys.map((k) => k.name);
+
+  /** The id of the command just queued for a device — an ACK must name a real one. */
+  async function queuedCommandId(deviceId: string): Promise<string> {
+    const resp = await worker.fetch(
+      makeRequest('GET', `/api/devices/${deviceId}/commands`, undefined, ADMIN),
+      env,
+    );
+    const commands = (await parseResponse(resp)) as any[];
+    return commands[0].id;
+  }
+
+  async function flag(hostname: string, deviceId: string): Promise<string> {
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${deviceId}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+      env,
+    );
+    return queuedCommandId(deviceId);
+  }
+
+  async function ack(
+    hostname: string,
+    apiKey: string,
+    commandId: string,
+    extra: Record<string, unknown>,
+  ): Promise<Response> {
+    const body = JSON.stringify({ hostname, command_id: commandId, result_status: 'executed', ...extra });
+    return worker.fetch(
+      makeRequest('POST', '/api/agent/command-ack', body, signRequest(body, apiKey)),
+      env,
+    );
+  }
+
+  it('migrates both legacy lists into per-device keys', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-MIG-A');
+    const { device: b } = await enrollDevice(worker, env, 'SEC-MIG-B');
+    await env.LOCKDOWN_KV.put(
+      'encryption_keys',
+      JSON.stringify([
+        { device_id: a.id, command_id: 'c1', key_material: 'KEY-A', created_at: '2026-11-01T10:00:00.000Z', released_at: null },
+        { device_id: b.id, command_id: 'c2', key_material: 'KEY-B', created_at: '2026-11-01T10:01:00.000Z', released_at: null },
+      ]),
+    );
+    await env.LOCKDOWN_KV.put(
+      'bios_passwords',
+      JSON.stringify([
+        { device_id: a.id, password_type: 'setup', password: 'PW-A', created_at: '2026-11-01T10:00:00.000Z' },
+      ]),
+    );
+
+    // A read of either store triggers its own migration.
+    const pba = await worker.fetch(
+      makeRequest('GET', `/api/devices/${a.id}/pba-credentials`, undefined, ADMIN),
+      env,
+    );
+    expect(pba.status).toBe(200);
+    expect(((await parseResponse(pba)) as any).setup_password).toBe('PW-A');
+
+    // The key store needs its own reader to migrate: the deadman report reads that device's keys.
+    const deadBody = JSON.stringify({ hostname: 'SEC-MIG-A', key_material: 'DEADMAN-KEY' });
+    await worker.fetch(
+      makeRequest('POST', '/api/agent/deadman-report', deadBody, signRequest(deadBody, keyA)),
+      env,
+    );
+
+    // `list()` returns insertion order; sort both sides so the assertion is about the key set.
+    expect((await keysWithPrefix('encryption_keys:')).sort()).toEqual([
+      `encryption_keys:${a.id}`,
+      `encryption_keys:${b.id}`,
+    ].sort());
+    expect(await keysWithPrefix('bios_passwords:')).toEqual([`bios_passwords:${a.id}`]);
+    // Legacy keys are gone, so a whole-list write cannot come back.
+    expect(await env.LOCKDOWN_KV.get('encryption_keys')).toBeNull();
+    expect(await env.LOCKDOWN_KV.get('bios_passwords')).toBeNull();
+  });
+
+  it('escrowing on one device leaves another device\'s key byte-identical', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-A');
+    const { device: b, apiKey: keyB } = await enrollDevice(worker, env, 'SEC-B');
+    await ack('SEC-A', keyA, await flag('SEC-A', a.id), { key_material: 'KEY-A' });
+    await ack('SEC-B', keyB, await flag('SEC-B', b.id), { key_material: 'KEY-B' });
+
+    const bBefore = await env.LOCKDOWN_KV.get(`encryption_keys:${b.id}`);
+    expect(bBefore).toBeTruthy();
+
+    // Re-escrow on A through a different write site than the ACK: the deadman report.
+    const deadBody = JSON.stringify({ hostname: 'SEC-A', key_material: 'KEY-A2' });
+    await worker.fetch(
+      makeRequest('POST', '/api/agent/deadman-report', deadBody, signRequest(deadBody, keyA)),
+      env,
+    );
+
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${b.id}`)).toBe(bBefore);
+    const aKeys = JSON.parse((await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)) as string);
+    expect(aKeys.some((k: any) => k.key_material === 'KEY-A2')).toBe(true);
+  });
+
+  it('recover releases the NEWEST unreleased key, not the first match (S269)', async () => {
+    const { device } = await enrollDevice(worker, env, 'SEC-NEW');
+    await flag('SEC-NEW', device.id);
+    // Two unreleased keys, one per lockdown — the state after a second lockdown, which is where
+    // the SDK bug lived: the first match is the OLDEST key and cannot decrypt current files.
+    await env.LOCKDOWN_KV.put(
+      `encryption_keys:${device.id}`,
+      JSON.stringify([
+        { device_id: device.id, command_id: 'c-old', key_material: 'OLD-KEY', created_at: '2026-11-01T10:00:00.000Z', released_at: null },
+        { device_id: device.id, command_id: 'c-new', key_material: 'NEW-KEY', created_at: '2026-11-02T10:00:00.000Z', released_at: null },
+      ]),
+    );
+
+    const recover = await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/recover`, { hostname_confirm: 'SEC-NEW' }, ADMIN),
+      env,
+    );
+    expect(recover.status).toBe(200);
+    expect(((await parseResponse(recover)) as any).key_material).toBe('NEW-KEY');
+    // Only the released one is marked; the older key stays as it was.
+    const keys = JSON.parse((await env.LOCKDOWN_KV.get(`encryption_keys:${device.id}`)) as string);
+    expect(keys.find((k: any) => k.key_material === 'NEW-KEY').released_at).toBeTruthy();
+    expect(keys.find((k: any) => k.key_material === 'OLD-KEY').released_at).toBeNull();
+  });
+
+  it('release deletes both per-device keys', async () => {
+    const { device: a, apiKey: keyA } = await enrollDevice(worker, env, 'SEC-REL');
+    await ack('SEC-REL', keyA, await flag('SEC-REL', a.id), {
+      key_material: 'K',
+      bios_password: 'PW',
+    });
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${a.id}/recover`, { hostname_confirm: 'SEC-REL' }, ADMIN),
+      env,
+    );
+    // recover leaves the device `recovering`; the agent's unlock ACK is what makes it active, and
+    // release refuses `recovering`. ACK the unlock command it just queued.
+    const unlockId = await queuedCommandId(a.id);
+    await ack('SEC-REL', keyA, unlockId, {});
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)).toBeTruthy();
+    expect(await env.LOCKDOWN_KV.get(`bios_passwords:${a.id}`)).toBeTruthy();
+
+    const release = await worker.fetch(
+      makeRequest('DELETE', `/api/devices/${a.id}/release`, { hostname_confirm: 'SEC-REL' }, ADMIN),
+      env,
+    );
+    expect(release.status).toBe(200);
+    expect(await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)).toBeNull();
+    expect(await env.LOCKDOWN_KV.get(`bios_passwords:${a.id}`)).toBeNull();
   });
 });

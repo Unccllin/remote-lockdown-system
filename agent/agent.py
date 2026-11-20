@@ -229,7 +229,45 @@ except ImportError:
 # Version
 # ---------------------------------------------------------------------------
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.0.4"
+
+# Build identity. AGENT_VERSION stays numeric semver because the update path compares it
+# numerically (`compareVersions` splits on '.', server/src/routes/agent.js:1037), so build
+# metadata must not ride on it. The build id is stamped by agent/build.ps1 into a generated
+# `_buildinfo.py` immediately before PyInstaller runs; a source checkout has no such module
+# and honestly reports itself as a dev build.
+#
+# Why this exists: two different binaries both called themselves `1.0.0`, and telling the stale
+# one from the current one cost a session and a hand-run sha256 against the device (S286). A
+# version that cannot distinguish two builds is not an identity.
+#
+# The rule that follows from it, learned again the hard way (S310): a FUNCTIONAL change bumps this
+# number in the same commit. ADR-010's runtime key rotation landed in 23e70f8 without a bump, so
+# every device still reported 1.0.3 and the dashboard could not say which ones had the code — the
+# exact ambiguity this block exists to prevent. Rotation is 1.0.4.
+#
+# The two pragmas below are for the checker, not for the runtime: `_buildinfo` is a tracked
+# sibling module (agent/_buildinfo.py) that ships with the source and is bundled by PyInstaller
+# through this very static import, but a checker analysing agent.py as a standalone script looks
+# only at its configured search paths and cannot see it. The import stays static on purpose — a
+# dynamic one would need a hiddenimports entry in agent.spec to be packaged at all.
+try:
+    from _buildinfo import BUILD_COMMIT as _BUILD_COMMIT  # pyright: ignore[reportMissingImports]
+    from _buildinfo import BUILD_DATE as _BUILD_DATE  # pyright: ignore[reportMissingImports]
+except ImportError:  # a build tree that lost the module: degrade, never fail to start
+    _BUILD_COMMIT, _BUILD_DATE = "unknown", "unknown"
+
+# `<UTC build date>.<source-tree hash>` — stable for a given tree, different across trees.
+AGENT_BUILD = f"{_BUILD_DATE}.{_BUILD_COMMIT}"
+
+
+def version_string() -> str:
+    """What `--version` prints and what the startup log carries.
+
+    One formatter, so the two places a person looks for a build identity cannot drift.
+    """
+    return f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()}, build={AGENT_BUILD})"
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -299,6 +337,7 @@ LAST_CHECKIN_OK_FILE = _STATE_DIR / ".last_checkin_ok"
 # nobody needs it disabled" expressible; the file is written BEFORE the account is touched
 # so a crash, a failed ACK or a reboot still leaves the operator a name to re-enable.
 LOGON_HOLDS_FILE = _STATE_DIR / ".logon_holds"
+RUNTIME_SETTINGS_FILE = _STATE_DIR / ".runtime_settings"
 
 
 def _find_config_file(cli_config_path=None):
@@ -1233,6 +1272,59 @@ def get_ip_geolocation() -> dict | None:
     return None
 
 
+def _runtime_override():
+    """Read the runtime override from .runtime_settings, or None if absent/corrupt/removed."""
+    try:
+        if not RUNTIME_SETTINGS_FILE.exists():
+            return None
+        data = json.loads(RUNTIME_SETTINGS_FILE.read_text())
+        if not isinstance(data, dict):
+            return None
+        if "google_api_key" not in data:
+            return None
+        return data.get("google_api_key")
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _effective_google_key(cfg: dict):
+    """Single source of truth for the effective Google geolocation key."""
+    env = os.environ.get("GOOGLE_API_KEY")
+    if env:
+        return env
+    override = _runtime_override()
+    if override:
+        return override
+    return cfg.get("google_api_key")
+
+
+def _reconcile_runtime_settings(data):
+    """Reconcile a check-in `settings` object into .runtime_settings (best-effort)."""
+    try:
+        settings = data.get("settings") if isinstance(data, dict) else None
+        if not isinstance(settings, dict):
+            return
+        revision = settings.get("revision")
+        if not isinstance(revision, str) or not revision:
+            return
+        try:
+            if RUNTIME_SETTINGS_FILE.exists():
+                stored = json.loads(RUNTIME_SETTINGS_FILE.read_text())
+                if isinstance(stored, dict) and stored.get("revision") == revision:
+                    return
+        except (OSError, ValueError, TypeError):
+            pass
+        payload = {
+            "google_api_key": settings.get("google_api_key"),
+            "revision": revision,
+        }
+        tmp = RUNTIME_SETTINGS_FILE.with_name(".runtime_settings.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, RUNTIME_SETTINGS_FILE)
+    except Exception as e:
+        log.warning("Could not persist runtime settings: %s", e)
+
+
 def get_geolocation(cfg: dict) -> dict | None:
     """Get device geolocation. Tries WiFi triangulation first, falls back to IP.
 
@@ -1240,45 +1332,62 @@ def get_geolocation(cfg: dict) -> dict | None:
     otherwise falls back to IP-based geolocation.
     """
     # Try WiFi-based geolocation if Google API key is configured
-    google_key = os.environ.get("GOOGLE_API_KEY") or cfg.get("google_api_key")
+    google_key = _effective_google_key(cfg)
     if google_key:
         wifi = scan_wifi_networks()
         if wifi:
-            try:
-                wifi_points = []
-                for net in wifi[:20]:  # Max 20 access points
-                    point = {"macAddress": net["bssid"]}
-                    if "signal" in net:
-                        # Google expects signal strength in dBm (negative).
-                        # netsh gives percentage, convert approximately.
-                        pct = net["signal"]
-                        if pct > 0:
-                            point["signalStrength"] = -(100 - pct)
-                    if "frequency" in net:
-                        point["channel"] = int(float(net["frequency"]) * 1000)
-                    wifi_points.append(point)
-
-                resp = requests.post(
-                    f"https://www.googleapis.com/geolocation/v1/geolocate?key={google_key}",
-                    json={"wifiAccessPoints": wifi_points},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                loc = data.get("location", {})
-                acc = data.get("accuracy", 0)
-                return {
-                    "latitude": loc.get("lat"),
-                    "longitude": loc.get("lng"),
-                    "accuracy_meters": acc,
-                    "source": "wifi",
-                    "wifi_count": len(wifi_points),
-                }
-            except (requests.RequestException, ValueError, TypeError, KeyError) as e:
-                log.warning("WiFi geolocation failed: %s", e)
+            location = _resolve_wifi_scan(google_key, _wifi_points(wifi))
+            if location:
+                return location
 
     # Fallback to IP-based geolocation
     return get_ip_geolocation()
+
+
+def _wifi_points(scan: list[dict]) -> list[dict]:
+    """Turn a netsh scan into the access-point list the geolocation API wants."""
+    points = []
+    for net in scan[:20]:  # Max 20 access points
+        point = {"macAddress": net.get("bssid")}
+        if net.get("signal"):
+            # Google expects signal strength in dBm (negative).
+            # netsh gives percentage, convert approximately.
+            pct = net["signal"]
+            if pct > 0:
+                point["signalStrength"] = -(100 - pct)
+        if net.get("frequency"):
+            point["channel"] = int(float(net["frequency"]) * 1000)
+        points.append(point)
+    return points
+
+
+def _resolve_wifi_scan(google_key: str, wifi_points: list[dict]) -> dict | None:
+    """Resolve access points to coordinates. None when the lookup cannot be made.
+
+    Split out of get_geolocation so a scan taken WHILE OFFLINE can be resolved later, when
+    connectivity returns — that is what turns "it was somewhere" into a usable trail (S271).
+    """
+    if not google_key or not wifi_points:
+        return None
+    try:
+        resp = requests.post(
+            f"https://www.googleapis.com/geolocation/v1/geolocate?key={google_key}",
+            json={"wifiAccessPoints": wifi_points},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        loc = data.get("location", {})
+        return {
+            "latitude": loc.get("lat"),
+            "longitude": loc.get("lng"),
+            "accuracy_meters": data.get("accuracy", 0),
+            "source": "wifi",
+            "wifi_count": len(wifi_points),
+        }
+    except (requests.RequestException, ValueError, TypeError, KeyError) as e:
+        log.warning("WiFi geolocation failed: %s", e)
+        return None
 
 
 def report_location(cfg: dict) -> dict | None:
@@ -1289,6 +1398,10 @@ def report_location(cfg: dict) -> dict | None:
     """
     location = get_geolocation(cfg)
     if not location:
+        # No fix. If we can SEE access points, keep them: the coordinates can be resolved as
+        # soon as connectivity returns, which is the difference between "we lost it" and "it
+        # was near these networks at 14:20, here is where they are" (S271).
+        _queue_wifi_scan_for_later()
         log.warning("Could not determine geolocation")
         return None
 
@@ -1621,6 +1734,11 @@ import sqlite3  # noqa: E402 -- imported after sys.path setup for offline queue 
 
 # Offline queue database (in _STATE_DIR)
 OFFLINE_QUEUE_DB = _STATE_DIR / ".offline_queue.db"
+# A scan taken while offline is queued under this sentinel endpoint instead of being thrown
+# away when the geolocation lookup cannot run: the access points are evidence of WHERE the
+# device was, and resolving them on reconnect is what gives the operator a trail (S271).
+WIFI_SCAN_QUEUE_ENDPOINT = "local://wifi-scan"
+WIFI_SCAN_QUEUE_MAX = 50
 
 
 def _get_queue_db() -> sqlite3.Connection:
@@ -1682,6 +1800,109 @@ def queue_offline(endpoint: str, payload: dict) -> None:
         _close_quietly(conn)
 
 
+def _queue_wifi_scan_for_later() -> None:
+    """Queue a raw access-point scan for resolution once connectivity returns."""
+    scan = scan_wifi_networks()
+    if not scan:
+        return
+    from datetime import UTC, datetime
+
+    queue_offline(
+        WIFI_SCAN_QUEUE_ENDPOINT,
+        {
+            "bssids": scan[:20],
+            "scanned_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    _trim_wifi_scan_queue()
+
+
+def _trim_wifi_scan_queue(max_rows: int = WIFI_SCAN_QUEUE_MAX) -> None:
+    """Keep only the newest `max_rows` queued scans.
+
+    A weekend offline would otherwise queue a scan per location cycle and fill the disk with
+    evidence nobody will read.
+    """
+    conn = None
+    try:
+        conn = _get_queue_db()
+        conn.execute(
+            "DELETE FROM offline_queue WHERE endpoint = ? AND id NOT IN ("
+            "  SELECT id FROM offline_queue WHERE endpoint = ? ORDER BY created_at DESC LIMIT ?"
+            ")",
+            (WIFI_SCAN_QUEUE_ENDPOINT, WIFI_SCAN_QUEUE_ENDPOINT, max_rows),
+        )
+        conn.commit()
+    except (sqlite3.Error, OSError) as e:
+        log.warning("Could not trim queued WiFi scans: %s", e)
+    finally:
+        _close_quietly(conn)
+
+
+def resolve_pending_wifi_scans(cfg: dict) -> int:
+    """Resolve scans queued while offline and post them as location reports.
+
+    Returns how many were resolved. A scan that still cannot be resolved is left in the queue
+    (with its attempt count) rather than dropped: the device may be offline again, and the
+    evidence is only useful if it survives until it can be read.
+    """
+    google_key = _effective_google_key(cfg)
+    if not google_key:
+        return 0
+
+    conn = None
+    resolved = 0
+    try:
+        conn = _get_queue_db()
+        rows = conn.execute(
+            "SELECT id, payload, attempts FROM offline_queue WHERE endpoint = ? "
+            "ORDER BY created_at ASC LIMIT 10",
+            (WIFI_SCAN_QUEUE_ENDPOINT,),
+        ).fetchall()
+        for row_id, payload_json, attempts in rows:
+            try:
+                queued = json.loads(payload_json)
+                location = _resolve_wifi_scan(google_key, _wifi_points(queued.get("bssids", [])))
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                location = None
+                queued = {}
+
+            if not location:
+                conn.execute(
+                    "UPDATE offline_queue SET attempts = attempts + 1 WHERE id = ?", (row_id,)
+                )
+                if attempts >= 10:
+                    log.warning("Dropping a queued WiFi scan after %d attempts", attempts)
+                    conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
+                continue
+
+            payload = {
+                "hostname": cfg["hostname"],
+                "location": location,
+                # The time the scan was taken, not the time it could be reported: without this
+                # a backfilled trail reads as if the device were there when it reconnected.
+                "observed_at": queued.get("scanned_at"),
+            }
+            try:
+                resp = _post_with_fallback(
+                    "/api/agent/location", cfg, payload, timeout=15, verify=cfg["verify_tls"]
+                )
+                resp.raise_for_status()
+                conn.execute("DELETE FROM offline_queue WHERE id = ?", (row_id,))
+                resolved += 1
+                log.info("Resolved a queued WiFi scan taken at %s", queued.get("scanned_at") or "?")
+            except requests.RequestException as e:
+                log.debug("Could not post a resolved scan yet: %s", e)
+                break  # server is down again — leave the rest for the next cycle
+
+        conn.commit()
+    except (sqlite3.Error, OSError) as e:
+        log.warning("Could not resolve queued WiFi scans: %s", e)
+    finally:
+        _close_quietly(conn)
+    return resolved
+
+
 def _queue_size() -> int:
     """Return the number of items in the offline queue."""
     conn = None
@@ -1715,6 +1936,9 @@ def drain_offline_queue(cfg: dict) -> None:
 
         sent = 0
         for row_id, endpoint, payload_json, attempts in rows:
+            if endpoint == WIFI_SCAN_QUEUE_ENDPOINT:
+                # Handled by resolve_pending_wifi_scans(): it is not an HTTP endpoint.
+                continue
             try:
                 payload = json.loads(payload_json)
                 resp = _post_with_fallback(
@@ -2448,6 +2672,17 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                     "— BIOS password retained for operator action"
                 )
                 boot_lock_failures += 1
+            elif hp_result.get("pending_reboot"):
+                # Accepted, not yet settled: HP commits many settings at the next boot, so a
+                # read-back in this session still shows the old value. This is neither a
+                # failure to retry nor a success to claim (S271 measured MOLE: five writes
+                # accepted, firmware holding the lockdown values, agent reporting "rolled back").
+                boot_lock_status = "pending_reboot"
+                log.warning(
+                    "UEFI lockdown accepted %d critical setting(s); verification waits for the "
+                    "next boot (boot-state file kept so the change can still be reversed)",
+                    hp_result.get("critical_pending", 0),
+                )
             elif hp_result.get("partial"):
                 log.warning("UEFI lockdown applied with some best-effort failures")
                 boot_lock_failures += 1
@@ -2515,11 +2750,26 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
                 if hp_result
                 else None,
                 "pba_active": power_on_password is not None,
+                # A dead end carries its cause WITH the record, not only in the log (S271).
+                "reason": hp_result.get("reason") if hp_result else None,
+                "next_action": hp_result.get("next_action") if hp_result else None,
             },
             "critical_applied_total": bcd_crit + hp_crit,
             "best_effort_applied_total": bcd_be_ok + hp_be_ok,
             "best_effort_failed_total": bcd_be_fail + hp_be_fail,
         }
+        # Hoisted so a consumer does not have to know which layer produced the cause: the
+        # dashboard shows "boot lock partial" and can name the reason beneath it.
+        boot_lock_detail["reason"] = (
+            boot_lock_detail["hp_uefi"].get("reason")
+            or boot_lock_detail["bcd"].get("reason")
+            or None
+        )
+        boot_lock_detail["next_action"] = (
+            boot_lock_detail["hp_uefi"].get("next_action")
+            or boot_lock_detail["bcd"].get("next_action")
+            or None
+        )
 
     # T9: BitLocker TPM+PIN PBA (Tier 2 — Phase 3).
     # Only attempted when enable_pba=True. If BitLocker is not enabled,
@@ -2551,7 +2801,10 @@ def handle_lockdown(cfg: dict, command: dict) -> None:
     # read null. A rolled-back boot lock means the device is encrypted but not
     # boot-locked — exactly the case that must not read as effective (S269).
     if cfg.get("boot_lock_enabled", True) and _boot_lock_modules_available:
-        boot_lock_status = "partial" if boot_lock_failures else "success"
+        # `pending_reboot` is a settled answer from the HP layer, not something to overwrite
+        # with the aggregate: the writes were accepted and the next boot decides.
+        if boot_lock_status != "pending_reboot":
+            boot_lock_status = "partial" if boot_lock_failures else "success"
         if boot_lock_failures:
             log.error("Boot lockdown incomplete: %s layer(s) did not apply", boot_lock_failures)
     lockdown_effective = _lockdown_effective(
@@ -2701,8 +2954,16 @@ def handle_unlock(cfg: dict, command: dict) -> None:
 
         if bios_password:
             try:
-                hp_uefi_lockdown.remove_boot_lockdown(bios_password, power_on_password)
-                log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                restored = hp_uefi_lockdown.remove_boot_lockdown(bios_password, power_on_password)
+                if restored:
+                    log.info("UEFI boot lockdown removed — BIOS restored to pre-lockdown state")
+                else:
+                    # Never say "restored" when nothing was verified: on MOLE every restore write
+                    # was refused and the boot settings kept the lockdown values (S271).
+                    log.error(
+                        "UEFI boot lockdown removal did NOT restore the BIOS — the boot settings "
+                        "may still hold the lockdown values; restore them in BIOS Setup"
+                    )
                 if power_on_password:
                     log.info("T7: Power-On Password cleared — PBA removed")
                 del bios_password
@@ -4307,7 +4568,7 @@ def main() -> None:
     if args.version:
         # Use sys.stdout if available (console=True build), otherwise
         # write to stderr or a file so --version always works.
-        version_msg = f"lockdown-agent {AGENT_VERSION} (frozen={_is_frozen()})"
+        version_msg = version_string()
         try:
             print(version_msg)
         except (AttributeError, OSError):
@@ -4349,10 +4610,11 @@ def main() -> None:
             # In dry-run mode, be lenient — log but don't exit
             log.warning("DRY RUN: Config validation warning: %s", e)
         log.info(
-            "Agent starting (DRY RUN) — hostname=%s server=%s poll=%ss",
+            "Agent starting (DRY RUN) — hostname=%s server=%s poll=%ss build=%s",
             cfg["hostname"],
             cfg["server_url"],
             cfg["poll_interval"],
+            AGENT_BUILD,
         )
         # Migrate any plaintext state files to encrypted format (one-time)
         migrate_deadman_to_encrypted()
@@ -4382,10 +4644,11 @@ def main() -> None:
         log.info("Running in silent mode — stdout logging suppressed (file logging continues)")
 
     log.info(
-        "Agent starting — hostname=%s server=%s poll=%ss",
+        "Agent starting — hostname=%s server=%s poll=%ss build=%s",
         cfg["hostname"],
         cfg["server_url"],
         cfg["poll_interval"],
+        AGENT_BUILD,
     )
     if cfg.get("serverless_url"):
         log.info("Serverless fallback configured: %s", cfg["serverless_url"])
@@ -4455,10 +4718,19 @@ def main() -> None:
             except OSError as e:
                 log.debug("Could not update last-check-in marker: %s", e)
 
+            # ADR-010: reconcile runtime geolocation-key override (best-effort).
+            try:
+                _reconcile_runtime_settings(data)
+            except Exception as e:
+                log.warning("Could not persist runtime settings: %s", e)
+
             # Upload deadman key (if any) now that we have connectivity
             report_deadman_key(cfg)
 
             # Phase 5: Drain offline queue (location reports, etc.)
+            # Resolve any scans taken while offline BEFORE draining: they become location
+            # reports, which is the whole point of having kept them.
+            resolve_pending_wifi_scans(cfg)
             drain_offline_queue(cfg)
 
             # Update dead man's timer with current server-reported status;
@@ -4536,6 +4808,7 @@ if __name__ == "__main__":
                 f.write(f"\n{'=' * 60}\n")
                 f.write(f"CRASH at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Version: {AGENT_VERSION}\n")
+                f.write(f"Build: {AGENT_BUILD}\n")
                 f.write(f"Python: {sys.version}\n")
                 f.write(f"Platform: {platform.platform()}\n")
                 f.write(f"Frozen: {_is_frozen()}\n")

@@ -493,6 +493,8 @@ def build_config(
     device_id: str,
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
+    uefi_password: str = "",
+    google_api_key: str = "",
 ) -> dict:
     """The single definition of a provisioned config.json.
 
@@ -520,6 +522,16 @@ def build_config(
     # Only present when a key was actually provisioned — see UPDATE_KEY_FILENAME.
     if update_public_key:
         config["update_public_key"] = update_public_key
+    # A machine whose firmware already has a Setup password cannot be boot-locked without
+    # it: the HP layer must authenticate before it can change anything, and without the
+    # password it aborts so the whole boot lock rolls back (S271). Optional, and omitted when
+    # empty so the agent keeps generating a password on machines that have none.
+    if uefi_password:
+        config["uefi_password"] = uefi_password
+    # The Google Geolocation key provisioned at install time (ruling C, S306 / ADR-008).
+    # Omitted when empty so a no-key install stays byte-identical to today.
+    if google_api_key:
+        config["google_api_key"] = google_api_key
     return config
 
 
@@ -530,11 +542,20 @@ def write_config(
     device_id: str,
     boot_lock_enabled: bool = True,
     update_public_key: str = "",
+    uefi_password: str = "",
+    google_api_key: str = "",
 ) -> Path:
     """Write the agent config.json to the install directory."""
 
     config = build_config(
-        server_url, api_key, hostname, device_id, boot_lock_enabled, update_public_key
+        server_url,
+        api_key,
+        hostname,
+        device_id,
+        boot_lock_enabled,
+        update_public_key,
+        uefi_password,
+        google_api_key,
     )
 
     print_step(2, f"Writing config to {CONFIG_FILE}...")
@@ -641,6 +662,9 @@ def run_baked_install(config_path: Path, boot_lock_enabled: bool | None = None) 
         baked["device_id"],
         boot_lock_enabled=use_boot_lock,
         update_public_key=pinned,
+        # A per-device config may bake the machine's existing BIOS password; carry it so a
+        # re-install does not silently lose the only input the boot-lock layer needs.
+        uefi_password=str(baked.get("uefi_password") or ""),
     )
     installed_agent = install_files(agent_exe)
     add_defender_exclusions()
@@ -1077,6 +1101,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device hostname (default: machine hostname)",
     )
     parser.add_argument(
+        "--uefi-password",
+        default=None,
+        help=(
+            "The BIOS Setup password this machine already has. Without it the HP boot-lock "
+            "layer cannot authenticate, so it aborts and the boot lock rolls back. Omit on a "
+            "machine with no BIOS password: the agent generates one."
+        ),
+    )
+    parser.add_argument(
         "--no-boot-lock",
         action="store_true",
         help="Disable BCD/UEFI boot lockdown",
@@ -1217,6 +1250,10 @@ def main():
         device_id,
         boot_lock_enabled=boot_lock,
         update_public_key=pinned,
+        # --uefi-password (or $UEFI_PASSWORD) supplies the firmware password this machine
+        # already has, so the boot-lock layer can authenticate instead of aborting.
+        uefi_password=(args.uefi_password or os.environ.get("UEFI_PASSWORD", "") or "").strip(),
+        google_api_key=str(enroll_data.get("google_api_key") or ""),
     )
 
     # --- Step 3: Install files ---

@@ -1,0 +1,73 @@
+=== S305: the dashboard lint gate now lints the dashboard (2026-11-19) ===
+
+S304 found the gate measured nothing (docs/artifacts/s304-dashboard-location-honesty.txt §3).
+This makes it real, then clears everything it found. The fix and the cleanup have to land
+together: `--ext` alone takes the tree from "0 linted, green" to "72 linted, 30 red".
+
+--- [1] before / after, same binary, same config ---
+  $ cd dashboard && npx eslint .                     S304:  21 files   0 .jsx   0 errors
+  $ cd dashboard && npx eslint src/ tests/ \
+        --max-warnings=0                             S304:  13 files   0 .jsx   0 errors
+  $ cd dashboard && npx eslint . --ext .js,.jsx      S304:  72 files  51 .jsx  30 errors  1 warning
+  $ cd dashboard && npx eslint src/ tests/ \
+        --ext .js,.jsx --max-warnings=0              S305:  72 files  51 .jsx   0 errors  0 warnings  exit 0
+
+--- [2] the four gate surfaces ---
+  Makefile:290                     @cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0
+  .github/workflows/lint.yml:75    (dashboard job) same --ext form
+  .github/workflows/release.yml:69 (dashboard job) same --ext form
+  AGENTS.md                        the documented command replaced, plus one sentence: eslint v8 with
+                                   .eslintrc.json lints `.js` only unless --ext is passed, so a
+                                   directory-taking lint gate must be judged by the count of files it
+                                   read, not by its exit code.
+Untouched on purpose: Makefile:258, lint.yml:46, release.yml:55 — the three SERVER lint lines. The
+server is not affected: 102 files, all .js, 0 .cjs, 0 .jsx (measured), so its gate already reads
+everything it owns.
+
+--- [3] the 30 errors, resolved per finding ---
+  22 no-unused-vars — unused `React` default imports dropped in the 10 components/pages that no
+     longer need them (the automatic JSX runtime is in use: `plugin:react/jsx-runtime`), plus the
+     dead named specifiers (`formatDistanceToNow` x3, `format`, `User`/`ShieldAlert`, `fireEvent`,
+     `Route`/`Routes` where only `MemoryRouter` is used) and two dead test consts in
+     tests/EnrollPage.test.jsx (`mockClick`, `originalCreateElement` — zero references left).
+     No `_`-prefix renames were needed; nothing was silenced.
+  7 react/no-unescaped-entities — `&apos;` / `&quot;` in JSX text, e.g. EnrollDevicePage's
+     "Only download &quot;Agent Only&quot; if you&apos;re using the command-line installer." Rendered
+     text is character-identical, which is why the existing assertions still pass unchanged.
+  1 no-undef — `afterEach` at tests/EnrollDevicePage.test.jsx:42 is a real vitest global
+     (vitest.config.js sets `globals: true`), so this was a config gap, not a defect. Fixed in
+     dashboard/.eslintrc.json with an `overrides` entry for `tests/**/*.{js,jsx}` declaring the nine
+     vitest globals readonly — no plugin (that would be a new dependency) and no repo-wide globals.
+  1 react-hooks/exhaustive-deps (warning) — PblPolicyPage.jsx:70, a mount-once `useEffect` calling
+     `loadData`. Fixed for real, not disabled: `loadPolicyVersions` and `loadData` became `useCallback`
+     (the former with `[]`) hoisted above the effect, and the effect depends on `[loadData]`, whose
+     identity is stable, so the fetch still happens once on mount. `grep -c eslint-disable` over the
+     diff = 0.
+
+--- [4] gates re-run by the parent session, not taken from the worker ---
+  $ cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0   exit 0
+  $ cd dashboard && npx eslint . --ext .js,.jsx -f json                     72 files / 51 .jsx / 0 / 0
+  $ cd dashboard && npm run test                                            272 passed (272), 30 files, exit 0
+  $ cd dashboard && npx vite build                                          ✓ built in 5.06s, exit 0
+  $ cd dashboard && npm run test:coverage
+      Statements 70.62 (floor 68) · Branches 66.59 (61) · Functions 62.59 (62) · Lines 71.40 (70)  exit 0
+  $ make lint-dashboard          exit 0
+  $ make lint-server             exit 0
+  $ make lint-workflows          exit 0   (actionlint 1.7.12 + shellcheck, both present)
+  $ python3 -c "yaml.safe_load(lint.yml, release.yml)"                      both parse
+
+--- [5] what the workflow got wrong, and how it was caught ---
+The worker's first pass dropped the recipe TAB on Makefile:290, so `make` could not parse the file
+at all — every target died with "missing separator". The worker's own report said "make
+lint-workflows not re-run here but YAML valid", which is exactly the wrong check (the failure is
+Makefile syntax, not YAML). The oracle blocked on it, the fix round restored `^I` (verified with
+`sed -n 290p Makefile | cat -A`), and the re-review approved. Two cosmetic nits the oracle called
+harmless were also reverted by the parent: quote style flipped on two import lines in
+tests/MapPage.test.jsx and tests/setup.jsx, and an `&apos;` inside a JSX comment in HealthPage.jsx
+(never rendered, but reads as markup). Diff after that: 21 files, +59/-51 in the gate+lint commit.
+
+--- [6] honesty repair in AGENTS.md ---
+Three places stated the dashboard test count in a paragraph dated 2026-11-13/17. The count 272 was
+measured 2026-11-19, so each figure now says "(re-measured 2026-11-19, S305)" instead of inheriting
+an older date. The 260 figure that had been there was itself stale — 266 was the real HEAD baseline
+before S304's six new cases.

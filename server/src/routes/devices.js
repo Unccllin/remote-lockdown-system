@@ -8,6 +8,7 @@ const { groupPbaCredentials } = require('../db/pbaCredentials');
 const { readDualMode } = require('../db/fieldCrypto');
 const { sendNotification } = require('../notifications/notify');
 const { createSharedEnv } = require('../pbl/kvStore');
+const { parseDbTimestamp, coalescedTimeOrderSql } = require('../db/timestamps');
 
 const router = express.Router();
 
@@ -104,33 +105,18 @@ const INSERT_COMMAND_SQL = `INSERT INTO commands (device_id, command_type, expir
 const INSERT_COMMAND_WITH_PBA_SQL = `INSERT INTO commands (device_id, command_type, expires_at, enable_pba) VALUES ($1, $2, ${commandExpirySql()}, $3) RETURNING *`;
 
 /**
- * Strip server-only columns before a device row goes over the wire.
- *
- * Device rows come from `SELECT *` / `RETURNING *`, so they carry
- * `api_key_hash` — a SHA-256 of the device's API key. No client needs it, and
- * shipping it only enables offline guessing. The column stays in the database
- * (routes/agent.js authenticates against it); it is removed here, at the
- * serialisation boundary, for every response that returns a device.
- */
-/**
  * A timestamp as written by either dialect, in milliseconds.
  *
- * PostgreSQL returns a timestamp that serialises as `2026-11-05T10:00:00.000Z`; SQLite stores
- * `datetime('now')`, which is `2026-11-05 10:00:00` — **no zone marker**. V8 parses that second
- * form as *local* time, so comparing the two without normalising makes a staleness window
- * dependent on the host's UTC offset (2 hours in CET, 0 in UTC). Zoneless values are therefore
- * read as UTC, which is what both dialects actually write (S258).
+ * PostgreSQL returns `2026-11-05T10:00:00.000Z`; SQLite stores `datetime('now')`, which is
+ * `2026-11-05 10:00:00` — **no zone marker**, and V8 reads that as *local* time. Comparing
+ * the two without normalising makes any staleness window depend on the host's UTC offset
+ * (2 hours in CET, 0 in UTC), which is D-258.
+ *
+ * The implementation lives in `db/timestamps.js` rather than here: the agent's location route
+ * needs the same reading to validate an agent-supplied `observed_at`, and a require between the
+ * two route modules would be circular. Re-exported at the bottom of this file so the D-258
+ * fixture keeps testing it through this module.
  */
-function parseDbTimestamp(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value.getTime();
-  const raw = String(value).trim();
-  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw)
-    ? `${raw.replace(' ', 'T')}Z`
-    : raw;
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? null : ms;
-}
 
 // Longer than the maximum adaptive poll interval (300 s), so an ordinary check-in cycle can
 // never trip it; short enough that a device which stopped reporting shows up the same day.
@@ -153,6 +139,14 @@ function isAgentVersionStale(device) {
   return lastCheckin - reported > AGENT_VERSION_STALE_MS;
 }
 
+/**
+ * Strip server-only columns before a device row goes over the wire.
+ *
+ * Device rows come from `SELECT *` / `RETURNING *`, so they carry `api_key_hash` — a SHA-256 of
+ * the device's API key. No client needs it, and shipping it only enables offline guessing. The
+ * column stays in the database (routes/agent.js authenticates against it); it is removed here,
+ * at the serialisation boundary, for every response that returns a device.
+ */
 function publicDevice(row) {
   if (!row) return row;
   const device = { ...row };
@@ -161,6 +155,101 @@ function publicDevice(row) {
   // has to reproduce the timestamp arithmetic above.
   device.agent_version_stale = isAgentVersionStale(row);
   return device;
+}
+
+/**
+ * How recent a check-in must be for a queued lockdown to count as *about to be fetched*.
+ *
+ * Mirrors the Worker's `LOCK_STATE_FRESH_MS` value verbatim. The number is not re-derived here
+ * on purpose: two surfaces that disagree about whether a device is reachable would give the same
+ * fleet two different answers depending on which one the dashboard is pointed at.
+ */
+const LOCK_STATE_FRESH_MS = 180 * 1000;
+
+/**
+ * What a lockdown actually did, from the newest lockdown and the newest unlock.
+ *
+ * `status: stolen` is written when a lockdown is QUEUED, so on its own it reports what was
+ * asked for, not what happened. A machine that is offline when it is flagged keeps that status
+ * while nothing on it changes. Same five values as the Worker (`serverless/worker.ts`
+ * `lockStateFor`), same order of decisions:
+ *
+ *   applied   a lockdown executed — the evidence is the ACK
+ *   applying  queued, and the device checked in recently, so it will fetch it on the next poll
+ *   armed     queued, but the device has gone quiet: it locks on reconnect, or after the deadman
+ *   failed    a lockdown was attempted and reported failure
+ *   none      no lockdown in play, or an unlock came after it
+ *
+ * @param {{lockdown?: object, unlock?: object}|undefined} parts newest rows from `loadLockStateParts`
+ * @param {{last_checkin?: string|null}} device
+ * @param {number} [now] milliseconds, injectable so the freshness window is testable
+ * @returns {'applied'|'applying'|'armed'|'failed'|'none'}
+ */
+function lockStateFor(parts, device, now = Date.now()) {
+  const lockdown = parts && parts.lockdown;
+  if (!lockdown) return 'none';
+
+  const lockdownAt = parseDbTimestamp(lockdown.created_at);
+  const unlockAt = parseDbTimestamp(parts.unlock && parts.unlock.created_at);
+  if (lockdownAt !== null && unlockAt !== null && unlockAt >= lockdownAt) return 'none';
+
+  if (lockdown.status === 'executed') return 'applied';
+  if (lockdown.status === 'failed') return 'failed';
+  if (lockdown.status === 'cancelled') return 'none';
+
+  const lastCheckin = parseDbTimestamp(device && device.last_checkin);
+  const fresh = lastCheckin !== null && now - lastCheckin <= LOCK_STATE_FRESH_MS;
+  return fresh ? 'applying' : 'armed';
+}
+
+/**
+ * The ranked-command query, with a placeholder list sized by the caller.
+ *
+ * Only the *count* is interpolated, and it comes from an array length, so the fragment can
+ * carry no caller text — the ids themselves are bound as `$1..$n`. Same shape (and same reason)
+ * as `commandExpirySql` above: named next to its safety argument instead of inline at the call.
+ *
+ * @param {number} count
+ * @returns {string}
+ */
+function lockStateRowsSql(count) {
+  const placeholders = Array.from({ length: count }, (_, i) => `$${i + 1}`).join(', ');
+  return `SELECT device_id, command_type, status, created_at FROM (
+            SELECT device_id, command_type, status, created_at,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY device_id, command_type ORDER BY created_at DESC
+                   ) AS rn
+              FROM commands
+             WHERE command_type IN ('lockdown', 'unlock')
+               AND device_id IN (${placeholders})
+          ) ranked
+          WHERE rn = 1`;
+}
+
+/**
+ * The newest lockdown and newest unlock per device, in one query.
+ *
+ * `ROW_NUMBER() OVER (PARTITION BY ...)` rather than a correlated subquery inside the device
+ * SELECT: `SELECT * FROM devices` is matched verbatim by 162 test fixtures, and adding columns to
+ * that statement would rewrite them all for a field that is not part of the device row.
+ * Portable to SQLite ≥3.25 and PostgreSQL alike.
+ *
+ * @param {string[]} deviceIds
+ * @returns {Promise<Map<string, {lockdown?: object, unlock?: object}>>}
+ */
+async function loadLockStateParts(deviceIds) {
+  const ids = [...new Set((deviceIds || []).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const result = await pool.query(lockStateRowsSql(ids.length), ids);
+
+  const byDevice = new Map();
+  for (const row of result.rows) {
+    const entry = byDevice.get(row.device_id) || {};
+    entry[row.command_type === 'lockdown' ? 'lockdown' : 'unlock'] = row;
+    byDevice.set(row.device_id, entry);
+  }
+  return byDevice;
 }
 
 /**
@@ -210,13 +299,18 @@ router.get('/', requireAuth, async (req, res) => {
   }
 
   const shaped = result.rows.map(publicDevice);
-  res.json(wantsStale ? shaped.filter((d) => d.agent_version_stale) : shaped);
+  const filtered = wantsStale ? shaped.filter((d) => d.agent_version_stale) : shaped;
+  // Derived here, not in `publicDevice`: that helper also shapes the lockdown/recover responses,
+  // which hold no command rows, and a lockdown queued one line earlier would read `none`.
+  const lockStates = await loadLockStateParts(filtered.map((d) => d.id));
+  res.json(filtered.map((d) => ({ ...d, lock_state: lockStateFor(lockStates.get(d.id), d) })));
 });
 
 router.get('/:id', requireAuth, async (req, res) => {
   const device = await getDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found. Verify the device ID is correct and the device is enrolled in the system.' });
-  res.json(publicDevice(device));
+  const lockStates = await loadLockStateParts([device.id]);
+  res.json({ ...publicDevice(device), lock_state: lockStateFor(lockStates.get(device.id), device) });
 });
 
 /**
@@ -275,6 +369,7 @@ router.post('/', requireAuth, requireRole('operator'), async (req, res) => {
     res.status(201).json({
       ...publicDevice(result.rows[0]),
       api_key: apiKey, // plaintext — capture now, never shown again
+      ...(process.env.GOOGLE_API_KEY ? { google_api_key: process.env.GOOGLE_API_KEY } : {}),
     });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Hostname already registered. Choose a different hostname or use the existing device.' });
@@ -648,13 +743,21 @@ router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req,
 /**
  * Get location history for a device.
  * FA5: Decrypts sensitive location fields before returning to the dashboard.
+ *
+ * Ordered by when the fix was TAKEN: a report backfilled from a scan taken while the device was
+ * offline carries `observed_at`, and sorting on receipt time alone would put it at the end of
+ * the trail instead of where it happened. Rows with no `observed_at` (every online report, and
+ * everything written before migration 019) sort on `reported_at`, unchanged.
+ *
+ * The comparison is delegated to `coalescedTimeOrderSql` because the two columns hold different
+ * text SHAPES in SQLite and a bare COALESCE orders them by character, not by time (S272).
  */
 router.get('/:id/locations', requireAuth, async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 500);
   const result = await pool.query(
     `SELECT * FROM location_reports
      WHERE device_id = $1
-     ORDER BY reported_at DESC
+     ORDER BY ${coalescedTimeOrderSql('observed_at', 'reported_at', pool.driver)}
      LIMIT $2`,
     [req.params.id, limit]
   );
@@ -665,12 +768,16 @@ router.get('/:id/locations', requireAuth, async (req, res) => {
 /**
  * Get the latest known location for a device.
  * FA5: Decrypts sensitive location fields before returning to the dashboard.
+ *
+ * Same ordering as the history route, so "latest" and "first row of the history" can never
+ * disagree — a backfilled older fix must not become "the last seen location" just because it
+ * arrived later.
  */
 router.get('/:id/location/latest', requireAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT * FROM location_reports
      WHERE device_id = $1
-     ORDER BY reported_at DESC
+     ORDER BY ${coalescedTimeOrderSql('observed_at', 'reported_at', pool.driver)}
      LIMIT 1`,
     [req.params.id]
   );
@@ -889,4 +996,10 @@ module.exports.syncAgentStatusToPbl = syncAgentStatusToPbl;
 // Attached the same way routes/installer.js attaches its helpers: the timestamp
 // normalisation is the part that can silently drift with the host's timezone (D-258), so it is
 // tested directly rather than only through a fixture whose two timestamps shift together.
-module.exports.helpers = { parseDbTimestamp, isAgentVersionStale, publicDevice };
+module.exports.helpers = {
+  parseDbTimestamp,
+  isAgentVersionStale,
+  publicDevice,
+  lockStateFor,
+  LOCK_STATE_FRESH_MS,
+};

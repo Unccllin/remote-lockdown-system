@@ -4,6 +4,8 @@ Both behaviours exist because the frozen agent cannot enforce them itself: it ha
 single-instance guard, and it never asks Windows to stay awake.
 """
 
+import hashlib
+import json
 import sys
 import urllib.request
 from pathlib import Path
@@ -252,3 +254,85 @@ class TestServerReachable:
             patch.object(urllib.request, "urlopen", return_value=response),
         ):
             assert service_host.server_reachable() is True
+
+
+# ---------------------------------------------------------------------------
+# S298: the service host applies what the agent verified
+# ---------------------------------------------------------------------------
+# On MOLE the agent downloaded and signature-verified 1.0.1 and nothing consumed the
+# signal, because only agent/watchdog.py reads .update_pending and a service install has
+# no watchdog. These tests pin the consumer: what it swaps, what it refuses, and that a
+# refused swap leaves the working binary alone.
+class TestApplyPendingUpdate:
+    def _setup(self, tmp_path, *, sha_ok=True, raw_signal=None):
+        target = tmp_path / "lockdown-agent.exe"
+        target.write_bytes(b"OLD")
+        download = tmp_path / ".update_downloaded"
+        download.write_bytes(b"NEW")
+        digest = hashlib.sha256(b"NEW").hexdigest() if sha_ok else "0" * 64
+        signal = (
+            raw_signal
+            if raw_signal is not None
+            else json.dumps(
+                {
+                    "version": "1.0.1",
+                    "sha256": digest,
+                    "download_path": str(download),
+                    "signature_verified": True,
+                }
+            )
+        )
+        (tmp_path / ".update_pending").write_text(signal, encoding="utf-8")
+        return target, download
+
+    def test_no_signal_is_none(self, tmp_path):
+        assert service_host.apply_pending_update(tmp_path) == "none"
+
+    def test_a_valid_update_is_swapped_in_and_backed_up(self, tmp_path):
+        target, download = self._setup(tmp_path)
+
+        assert service_host.apply_pending_update(tmp_path) == "applied"
+
+        assert target.read_bytes() == b"NEW"
+        assert (tmp_path / "lockdown-agent.bak").read_bytes() == b"OLD"
+        assert not (tmp_path / ".update_pending").exists()
+        assert not download.exists()
+
+    def test_bytes_that_do_not_match_the_signed_hash_are_refused(self, tmp_path):
+        """The agent verified the signature; the supervisor still refuses bytes that are
+        not the bytes the signal names — that is the whole point of checking twice."""
+        target, download = self._setup(tmp_path, sha_ok=False)
+
+        assert service_host.apply_pending_update(tmp_path) == "corrupt"
+
+        assert target.read_bytes() == b"OLD"
+        assert not (tmp_path / ".update_pending").exists()
+        assert not download.exists()
+
+    def test_an_unreadable_signal_is_corrupt_and_cleared(self, tmp_path):
+        target, _ = self._setup(tmp_path, raw_signal="{not json")
+
+        assert service_host.apply_pending_update(tmp_path) == "corrupt"
+
+        assert target.read_bytes() == b"OLD"
+        assert not (tmp_path / ".update_pending").exists()
+
+    def test_a_missing_download_is_corrupt(self, tmp_path):
+        target, download = self._setup(tmp_path)
+        download.unlink()
+
+        assert service_host.apply_pending_update(tmp_path) == "corrupt"
+        assert target.read_bytes() == b"OLD"
+
+    def test_restore_backup_puts_the_previous_binary_back(self, tmp_path):
+        target = tmp_path / "lockdown-agent.exe"
+        target.write_bytes(b"NEW")
+        (tmp_path / "lockdown-agent.bak").write_bytes(b"OLD")
+
+        assert service_host.restore_backup(tmp_path) is True
+        assert target.read_bytes() == b"OLD"
+
+    def test_restore_backup_without_one_reports_false(self, tmp_path):
+        (tmp_path / "lockdown-agent.exe").write_bytes(b"NEW")
+
+        assert service_host.restore_backup(tmp_path) is False

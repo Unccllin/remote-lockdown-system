@@ -1,0 +1,72 @@
+=== S306: the geolocation key reaches a token-flow install, on both surfaces (2026-11-19) ===
+
+Option (b) of docs/artifacts/s303-location-diagnosis.txt §5 said "provision google_api_key on the
+serverless path". Reading the code before implementing it changed both the place and the size of
+the gap, so the delivery channel went to the user as a ruling instead of being assumed.
+
+--- [1] what the read changed ---
+  The instruction named serverless/installer-scripts.ts. That file is the served, cacheable,
+  secret-free PowerShell template (B-070): it carries no config at all — it downloads
+  lockdown-setup.exe and passes --server-url/--token/--silent. A key there would put an operator
+  credential in a text artifact the Worker serves.
+  The real gap was wider: the key reached an agent ONLY through
+  server/src/routes/installer.js::buildDeviceConfig (Express's generated per-device installer).
+  The token flow enrols via POST /api/enroll/claim and builds config.json in
+  agent/installer.py::build_config — which had no google_api_key — and
+  agent/installer_gui.py duplicated that builder in its own write_config(). So BOTH surfaces'
+  token installs shipped without a key; the Worker was accused, not uniquely guilty.
+  S303 also bounds the payoff: a session-0 service install cannot scan BSSIDs at all, so the key
+  only helps interactive installs.
+
+--- [2] the ruling (PENDING-RULING, S306 Q1) ---
+  A  install-time: key in the enrolment response, written by the installer. Cheap, parity now;
+     the shared operator key is baked into every device config, so rotation means reinstall.
+  B  check-in refresh: authenticated settings endpoint + agent cache. Key never enters an
+     installer artifact and rotates centrally. Two surfaces + agent cache + tests.
+  C  A now, B tracked -> CHOSEN.
+  Recorded as docs/adr/ADR-008-geolocation-key-delivery.md (status accepted), including the
+  rotation-requires-reinstall consequence and B as the tracked follow-up rather than a silent gap.
+
+--- [3] the change (15 files + 1 ADR, +394/-1) ---
+  serverless/pbl/env.ts        GOOGLE_API_KEY?: string added to Env (Worker secret, optional)
+  serverless/worker.ts         conditional spread on all FOUR success responses: handleEnroll
+                               200 re-associated + 201 created, handleEnrollClaim 200 + 201
+  server/src/routes/devices.js POST /api/devices 201 (Express has no admin enrol in enroll.js —
+                               the admin surface is this route, found by the planner)
+  server/src/routes/enroll.js  POST /api/enroll/claim 200 re-associated + 201 created
+  agent/installer.py           build_config/write_config take google_api_key: str = ""; set the key
+                               only when non-empty; main() threads str(enroll_data.get(...) or "")
+                               so BOTH flows (token claim, admin devices) carry it; the --config-file
+                               baked path deliberately gains nothing
+  agent/installer_gui.py       its duplicated write_config takes the same optional argument, both
+                               call sites (wizard line ~1016, run_headless ~1392) pass it
+  Every addition is a conditional spread keyed on a non-empty env var: with no key configured the
+  response and the config are unchanged — pinned by tests that assert property ABSENCE, not a
+  falsy value.
+
+--- [4] gates, measured by the parent session (not the worker's report) ---
+  cd server && npm test                882 passed, 52 suites, exit 0     (876 + the 6 new cases)
+  cd server && npx eslint .            exit 0
+  cd serverless && npm test            490 passed, 4 files, exit 0       (485 + the 5 new cases)
+  cd serverless && npx tsc --noEmit -p .  exit 0
+  scripts/run-agent-tests.sh -q        exit 0, 976 tests collected       (10 new test functions in this diff)
+  scripts/lint-agent.sh                ruff check + format clean
+  scripts/test_cross_surface_contract.py  24 passed, exit 0
+  node --check on both edited Express routes  exit 0
+
+--- [5] what the oracle caught, twice ---
+  Block 1: every gate green, but "the diff is missing most of the plan's required test coverage,
+  and the ADR claims verification that does not exist". A shipped ADR listing tests that were never
+  written is a factual false claim — the same class the first round blocked on.
+  Block 2: the follow-up added the tests, but docs/API.md's new sentence had been inserted BETWEEN
+  the 201 row and the 400/409 rows of the response table, splitting the markdown table so 400/409
+  rendered detached from their header.
+  Parent fixes before commit: the API.md sentence moved below the 409 row (content unchanged, plus
+  one clause naming the serverless POST /api/enroll), and the ADR's "Extends: ADR-003 (device
+  storage)" line corrected to "Relates to: ADR-004 (per-entity location reports)" — a key-delivery
+  decision does not extend a storage ADR.
+
+--- [6] what is still not true ---
+  The key cannot be rotated without reinstalling the fleet (ADR-008 §Consequences). B is tracked in
+  the ADR, not in the debt ledger, because the ledger feeds the graph's convergence count and a new
+  OPEN item there is a decided graph change, not a byproduct of this feature.

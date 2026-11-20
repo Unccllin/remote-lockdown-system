@@ -565,6 +565,68 @@ describe('POST /api/agent/checkin', () => {
 // ---------------------------------------------------------------------------
 // S4: /api/agent/escrow-key — escrow-before-arm
 // ---------------------------------------------------------------------------
+describe('POST /api/agent/checkin — runtime settings (ADR-010)', () => {
+  const app = createApp();
+
+  afterEach(() => {
+    delete process.env.GOOGLE_API_KEY;
+  });
+
+  test('env unset → settings absent and top-level key set is byte-identical', async () => {
+    delete process.env.GOOGLE_API_KEY;
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res.status).toBe(200);
+    expect(res.body.settings).toBeUndefined();
+    expect(Object.keys(res.body).sort()).toEqual(
+      ['command', 'device_id', 'pbl_boot', 'poll_interval', 'server_time', 'status'].sort()
+    );
+  });
+
+  test('env set → settings.google_api_key === key, revision non-empty, stable, changes with key', async () => {
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+    const { apiKey } = provisionDevice();
+    const res1 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res1.status).toBe(200);
+    expect(res1.body.settings.google_api_key).toBe('test-google-key');
+    expect(res1.body.settings.revision).toBeTruthy();
+    const rev1 = res1.body.settings.revision;
+
+    const { apiKey: apiKey2 } = provisionDevice();
+    const res2 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey2)
+      .send({ hostname: 'DEV-001' });
+    expect(res2.body.settings.revision).toBe(rev1);
+
+    process.env.GOOGLE_API_KEY = 'different-key';
+    const { apiKey: apiKey3 } = provisionDevice();
+    const res3 = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey3)
+      .send({ hostname: 'DEV-001' });
+    expect(res3.body.settings.revision).not.toBe(rev1);
+  });
+
+  test("env set to '' → google_api_key null with revision present", async () => {
+    process.env.GOOGLE_API_KEY = '';
+    const { apiKey } = provisionDevice();
+    const res = await request(app)
+      .post('/api/agent/checkin')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001' });
+    expect(res.status).toBe(200);
+    expect(res.body.settings.google_api_key).toBeNull();
+    expect(res.body.settings.revision).toBeTruthy();
+  });
+});
+
 describe('POST /api/agent/escrow-key', () => {
   const app = createApp();
 
@@ -940,6 +1002,78 @@ describe('POST /api/agent/location', () => {
     expect(insertCall).toBeDefined();
     expect(insertCall[1]).toContain('New York');
     expect(insertCall[1]).toContain('1.2.3.4');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// observed_at — when the fix was taken, not when it arrived (S272)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/agent/location observed_at', () => {
+  const app = createApp();
+
+  function insertParams() {
+    const insertCall = mockPool.query.mock.calls.find(
+      (c) => c[0].includes('INSERT INTO location_reports')
+    );
+    expect(insertCall).toBeDefined();
+    // Position 10 (0-based) is `observed_at`, between wifi_count and the encrypted block.
+    return insertCall[1][10];
+  }
+
+  test('stores the scan time the agent backfilled', async () => {
+    // A device that was offline in a bag resolves its scan on reconnect. Without this the trail
+    // reads as if it were in that building at reconnect time (S271).
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+    const scannedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: scannedAt });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBe(scannedAt);
+  });
+
+  test('stores NULL when no observation time is sent', async () => {
+    // The online path sends no observed_at at all, so receipt time stays the only timestamp.
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 } });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
+  });
+
+  test('drops a claim from the future instead of storing it', async () => {
+    // A device clock is not trusted (MOLE's w32time had stopped, S271). A claim from tomorrow
+    // must not become a pin placed tomorrow; NULL lets the read side use receipt time.
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: tomorrow });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
+  });
+
+  test('drops an unparseable claim instead of failing the report', async () => {
+    const { apiKey } = provisionDevice({ hostname: 'DEV-001', status: 'tracking' });
+
+    const res = await request(app)
+      .post('/api/agent/location')
+      .set('x-agent-key', apiKey)
+      .send({ hostname: 'DEV-001', location: { latitude: 1, longitude: 2 }, observed_at: 'yesterday-ish' });
+
+    expect(res.status).toBe(200);
+    expect(insertParams()).toBeNull();
   });
 });
 

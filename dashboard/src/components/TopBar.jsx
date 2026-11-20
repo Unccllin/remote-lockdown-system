@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Search, Bell, ChevronDown, LogOut, User, ShieldAlert,
+  Search, Bell, ChevronDown, LogOut,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { getUnreadAlertCount } from '../api/alerts';

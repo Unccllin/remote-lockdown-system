@@ -1,0 +1,100 @@
+=== S308: can a session-0 service ever obtain BSSIDs? the sourced answer, and what is still unmeasured ===
+
+This settles the question that must be answered before any code for option (c) of
+docs/artifacts/s303-location-diagnosis.txt §5. It is a documentation + measurement record; no code
+was changed.
+
+--- [1] the platform rule, from Microsoft's own page ---
+Source: "Changes to API behavior for Wi-Fi access and location" (Win32, nativewifi), ms.date
+2025-05-30, fetched 2026-11-19 —
+https://learn.microsoft.com/en-us/windows/win32/nativewifi/wi-fi-access-location-changes
+
+  "access to APIs that provide the necessary Basic Service Set Identifiers (BSSIDs) will be
+   restricted to only those apps that the user has configured as being allowed to access the
+   user's precise location. That consent ... can be set at the DEVICE level, the USER level, or the
+   INDIVIDUAL APP level."
+
+  These Win32 calls return ERROR_ACCESS_DENIED without that consent:
+    WlanGetAvailableNetworkList · WlanGetNetworkBssList · WlanScan ·
+    WlanQueryInterface (OpCode = wlan_intf_opcode_current_connection)
+
+  The consent prompt: "a one-time-per-app system prompt will be displayed IF THE PROCESS IS RUNNING
+  WITHIN THE USER'S CONTEXT AND OUTSIDE OF THE C:\Windows\System32 FOLDER."
+
+  Microsoft's own recommended replacement: "If your app needs to know the host device's location,
+  then it should call the Geolocation APIs, rather than use a Wi-Fi scan."
+
+--- [2] what that means for this product, exactly ---
+  A LocalSystem service in session 0 is neither "within the user's context" nor outside
+  System32, so:
+    - the one-time consent prompt can NEVER appear for our agent, and
+    - the agent can hold no per-app consent record of its own.
+  What remains possible in principle is DEVICE-level consent, which the document says is one of the
+  three levels. That is the only foothold option (c) has on Windows.
+
+--- [3] what this repo has actually measured (S303, on MOLE) ---
+  docs/artifacts/s303-location-diagnosis.txt §3, verbatim outcomes:
+    netsh wlan show networks mode=bssid   -> "Network shell commands need location permission ...
+                                             Access is denied", 0 SSIDs, 0 BSSIDs
+    HKLM ConsentStore\location\Value=Allow            -> still denied
+    HKCU ConsentStore\location\Value=Allow (created)-> still denied
+    lfsvc restarted, HKLM lfsvc Status=1              -> still denied
+    SYSTEM scheduled task to rule out the SSH user     -> NEVER RAN (MOLE's Task Scheduler is the
+                                                          broken one documented in service_host.py)
+
+  So the device-level toggle was set and a *user-context* netsh still failed, and the one attempt to
+  test the SYSTEM context could not execute. "Session-0 LocalSystem + device-level consent" has
+  therefore NEVER been measured in this repo. Everything in §2 above is spec-checked, not
+  hardware-verified — the evidence ladder puts it at `spec-checked`, below `emulated` and `hardware`.
+
+--- [4] the three routes that survive the read ---
+  (c1) In-session helper. A per-user process started at logon scans (WlanGetNetworkBssList, with the
+       user's own prompt/consent) or calls Geolocator, and writes one file the service reads. Works
+       only while a user is logged on — the most common state for a laptop, never for a headless box.
+       B-075 forbids the AGENT being a Run key/scheduled task; a separate helper is a different actor,
+       so this needs an explicit ruling, not a workaround.
+       Cost: helper + IPC/staleness handling + tests; ~1 session. Unproven until run on hardware.
+
+  (c2) Ask Windows instead of triangulating. Call Windows.Devices.Geolocation (Geolocator) from the
+       service, which is Microsoft's recommended path and needs no Google key and no BSSID parsing.
+       It will most likely return DeniedBySystem for SYSTEM without device-level consent — the same
+       unknown as (c1), cheap to probe. If it works, it also removes the need for the S306 key on
+       Windows entirely (the key stays for Linux/macOS and interactive installs).
+       Cost: a probe first (hours if hardware is available), then a small agent change.
+
+  (d) Accept IP-level for service installs and say so. Already half-delivered: S304 labels an ip fix
+      "Approximate — ISP location, city-level" in the UI. What is missing is the written statement in
+      README/product that a service install is IP-level by platform design, on Windows 11 24H2+.
+      Cost: documentation only. No hardware needed.
+
+--- [5] the probe that would settle (c1)/(c2) in one sitting ---
+  Needs FRANKENSTEIN (or MOLE) with an interactive admin session and the ability to run a script as
+  LocalSystem — the Task Scheduler route is broken there (B-073), so the probe must use `psexec -s`
+  or a temporary service. Sequence, once each for device-level consent on and off:
+    1. as the interactive admin: WlanGetNetworkBssList / netsh (expect: works if consent on)
+    2. as LocalSystem via a temporary service: the same call
+    3. as LocalSystem: Geolocator.GetGeopositionAsync
+  Three results decide (c1) vs (c2) vs (d) with measurement instead of documentation.
+
+--- [6] the ruling, and what shipped from it ---
+  Q1 in .devin/PENDING-RULING.md asked how to finish option (c); the answer chosen was
+  **(d) accept IP-level for service installs and document it**. Documentation only — no source
+  file changed, so no suite was re-run for this session (the standing numbers from S307 hold:
+  server 882, agent 976, dashboard 272, worker 490, electron 30, API E2E 14).
+
+  Written:
+    docs/adr/ADR-009-location-precision-by-install-type.md  the decision of record: a Windows
+        service install reports source 'ip' by platform design; the two alternative paths
+        (in-session helper, Geolocator-from-service) are recorded as unproven-not-disproven with
+        the probe that would settle them
+    README.md                    new "Location Reporting" section: install type -> source ->
+        precision table, the platform rule, and the MS citation
+    docs/PRIVACY_POLICY.md       §1.2 now says what is actually collected: Wi-Fi access points only
+        "where the operating system permits a scan", and an ip fix carries no accuracy radius
+    serverless/README.md         the GOOGLE_API_KEY row points at ADR-009
+    AGENTS.md                    a paragraph beside the FRANKENSTEIN notes so a future session does
+        not re-open the BSSID question from the docs alone
+
+  Deliberately NOT done: no change to agent/agent.py (scan_wifi_networks already falls back to IP
+  when the OS refuses), no "helper" scaffolding, and no claim anywhere that BSSIDs are obtainable
+  from a service — the ladder for that remains spec-checked, and §5 names the probe.

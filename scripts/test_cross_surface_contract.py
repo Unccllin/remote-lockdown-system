@@ -362,7 +362,7 @@ def test_the_legacy_scheme_has_not_passed_its_sunset():
 
     data = json.loads(VECTORS.read_text(encoding="utf-8"))
     sunset = datetime.date.fromisoformat(data["legacy_sunset"])
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    today = datetime.datetime.now(datetime.UTC).date()
 
     assert today < sunset, (
         f"the legacy uninstall-token scheme reached its sunset on {sunset.isoformat()} "
@@ -444,7 +444,10 @@ def test_express_hashes_admin_passwords_with_bcrypt_cost_12():
 
 
 def test_worker_pbkdf2_sits_at_the_documented_platform_ceiling():
-    src = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    # S277 moved admin hashing into serverless/admin-auth.ts to get the Worker back under the
+    # 5000-line analysis limit. The VALUE is what ADR-001 pins, so the test follows it rather
+    # than the file it used to live in.
+    src = (REPO / "serverless/admin-auth.ts").read_text(encoding="utf-8")
     assert "PBKDF2_ITERATIONS = 100_000" in src, (
         "the Worker iteration count changed; ADR-001 explains it is the WebCrypto "
         "maximum, so raising it requires a runtime that supports more"
@@ -478,3 +481,144 @@ if __name__ == "__main__":
     from script_test_runner import run
 
     raise SystemExit(run(__file__))
+
+
+# ---------------------------------------------------------------------------
+# Derived fields both surfaces must derive the same way (S272)
+# ---------------------------------------------------------------------------
+#
+# `lock_state` answers "did it lock, or is it only armed?" — the question an operator
+# asks about a device showing `status: stolen`. The Worker gained it in S271 and
+# Express deliberately did not, which is exactly the divergence class this file
+# exists for: the same fleet would read differently depending on which deployment the
+# dashboard pointed at, and no single surface's tests can see it.
+#
+# What is pinned is the CONTRACT, not the implementation: the five values, the
+# freshness window that separates `applying` from `armed`, and the fact that both
+# surfaces actually attach the field to the device payload.
+
+LOCK_STATES = ("applied", "applying", "armed", "failed", "none")
+
+
+def test_both_surfaces_define_the_same_lock_states():
+    express = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    # S278 moved the Worker's stores into serverless/kv-store.ts; the contract is about the
+    # values both surfaces derive, so it follows the code rather than the file it used to sit in.
+    worker = (REPO / "serverless/kv-store.ts").read_text(encoding="utf-8")
+
+    for state in LOCK_STATES:
+        assert f"'{state}'" in express, f"Express no longer produces lock_state {state!r}"
+        assert f"'{state}'" in worker, f"the Worker no longer produces lock_state {state!r}"
+
+
+def test_the_freshness_window_is_the_same_number_on_both_surfaces():
+    express = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    worker = (REPO / "serverless/kv-store.ts").read_text(encoding="utf-8")
+
+    assert "LOCK_STATE_FRESH_MS = 180_000" in worker, (
+        "the Worker freshness window changed; the Express constant documents that it "
+        "mirrors this value, so both must move together"
+    )
+    assert "LOCK_STATE_FRESH_MS = 180 * 1000" in express, (
+        "the Express freshness window no longer mirrors the Worker's 180_000 ms, so the "
+        "same device would read `applying` on one surface and `armed` on the other"
+    )
+
+
+def test_both_surfaces_attach_lock_state_to_the_device_payload():
+    express = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+
+    # The list route and the detail route on each surface, or the chip silently disappears.
+    assert express.count("lock_state: lockStateFor(") == 2, (
+        "Express must attach lock_state on both GET /api/devices and GET /api/devices/:id"
+    )
+    assert worker.count("lock_state: lockStateFor(") == 2, (
+        "the Worker must attach lock_state on both the list and the detail route"
+    )
+
+
+def test_the_observation_time_contract_matches_on_both_surfaces():
+    """`observed_at` is the scan time, and an unusable claim is dropped — on both."""
+    express = (REPO / "server/src/routes/agent.js").read_text(encoding="utf-8")
+    # The Worker half of this contract is split across two modules since S280: the write side
+    # (the skew clamp and the location route that applies it) moved to agent-routes.ts, while the
+    # read-side ordering helper went with it and worker.ts keeps the location read routes. Both
+    # files are the Worker surface, so both are read — pinned to one path, this test would go
+    # vacuous the next time a handler moves rather than fail.
+    worker = "\n".join(
+        (REPO / path).read_text(encoding="utf-8")
+        for path in ("serverless/worker.ts", "serverless/agent-routes.ts")
+    )
+
+    for name, src in (("Express", express), ("the Worker", worker)):
+        assert "OBSERVED_AT_MAX_SKEW_MS = 5 * 60 * 1000" in src, (
+            f"{name} lost the future-claim clamp; a device clock that has stopped "
+            f"(measured on MOLE, S271) could then pin itself tomorrow"
+        )
+        assert "observed_at" in src, f"{name} no longer reads observed_at"
+
+    # The read side must order by the observation time with receipt as the fallback, or a
+    # backfilled trail reads as if the device moved when it reconnected.
+    devices = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    assert devices.count("coalescedTimeOrderSql('observed_at', 'reported_at', pool.driver)") == 2, (
+        "both the location history and the latest-location route must order through "
+        "coalescedTimeOrderSql, which is the only place that handles SQLite's mixed "
+        "timestamp text shapes"
+    )
+    timestamps = (REPO / "server/src/db/timestamps.js").read_text(encoding="utf-8")
+    assert "datetime(${pair}) DESC" in timestamps, (
+        "dropping the SQLite datetime() normalisation re-breaks location ordering: SQLite "
+        "compares 'YYYY-MM-DDTHH:MM:SSZ' against 'YYYY-MM-DD HH:MM:SS' by character, so 'T' "
+        "sorts above ' ' and a 06:45 fix outranks a 11:45 one (measured, S272 artifact step 15)"
+    )
+    assert "l.observed_at || l.created_at" in worker, (
+        "the Worker must order location rows by the same key it reports as observed_at"
+    )
+
+
+def test_the_observed_at_migration_exists_in_both_dialects():
+    """A column added to one dialect's schema is a runtime failure on the other."""
+    for dialect_dir in ("migrations", "migrations-sqlite"):
+        path = REPO / "server/src/db" / dialect_dir / "019_location_observed_at.sql"
+        assert path.is_file(), f"{path} is missing; SQLite and PostgreSQL must both get the column"
+        assert "observed_at" in path.read_text(encoding="utf-8")
+
+
+def test_the_geolocation_key_contract_matches_on_both_surfaces():
+    # Ruling C / S306: the Google geolocation key is provisioned at install time
+    # on both surfaces; Express and the Worker read the same env name and omit
+    # the field when unset, installer.py carries it, and installer-scripts.ts
+    # must never mention it (B-070: the served template carries no config/secret).
+    devices = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
+    enroll = (REPO / "server/src/routes/enroll.js").read_text(encoding="utf-8")
+    worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    env = (REPO / "serverless/pbl/env.ts").read_text(encoding="utf-8")
+    installer = (REPO / "agent/installer.py").read_text(encoding="utf-8")
+    scripts = (REPO / "serverless/installer-scripts.ts").read_text(encoding="utf-8")
+    assert "process.env.GOOGLE_API_KEY" in devices
+    assert "process.env.GOOGLE_API_KEY" in enroll
+    assert "env.GOOGLE_API_KEY" in worker
+    assert "GOOGLE_API_KEY?: string" in env
+    assert "google_api_key" in installer
+    assert "google_api_key" not in scripts
+    assert "GOOGLE_API_KEY" not in scripts
+
+
+def test_the_checkin_settings_contract_matches_on_both_surfaces():
+    agent_js = (REPO / "server/src/routes/agent.js").read_text(encoding="utf-8")
+    worker_ts = (REPO / "serverless/agent-routes.ts").read_text(encoding="utf-8")
+    agent_py = (REPO / "agent/agent.py").read_text(encoding="utf-8")
+    installer = (REPO / "agent/installer.py").read_text(encoding="utf-8")
+    scripts = (REPO / "serverless/installer-scripts.ts").read_text(encoding="utf-8")
+    assert "settings" in agent_js
+    assert "settings" in worker_ts
+    assert "google_api_key" in agent_js
+    assert "google_api_key" in worker_ts
+    assert "revision" in agent_js
+    assert "revision" in worker_ts
+    assert "RUNTIME_SETTINGS_FILE" in agent_py
+    assert ".runtime_settings" in agent_py
+    assert "_effective_google_key" in agent_py
+    assert "google_api_key" in installer
+    assert "google_api_key" not in scripts

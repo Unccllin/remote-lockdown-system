@@ -32,8 +32,10 @@ that could discard unrelated work.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -220,7 +222,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/escrow",
         "label": "WRK/escrow-ownership",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "  const cmd = commands.find(\n    (c) => c.id === command_id && c.device_id === device.id,\n  );\n  if (!cmd) {\n    return errorResponse('Command not found for this device', 404);",
         "new": "  const cmd = commands.find(\n    (c) => c.id === command_id,  // MUTATION: no ownership check\n  );\n  if (!cmd) {\n    return errorResponse('Command not found for this device', 404);",
         "why": "a device can escrow a key against another device's command id",
@@ -247,7 +249,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/checkin-device",
         "label": "WRK/checkin-device-filter",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id && c.status === 'pending')\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
         "new": "  const pendingCmds = commands\n    .filter((c) => c.status === 'pending')  // MUTATION: no device filter\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
         "why": "a device is handed ANOTHER device's pending command (tell B to lock)",
@@ -256,7 +258,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/checkin-pending",
         "label": "WRK/checkin-pending-filter",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id && c.status === 'pending')\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
         "new": "  const pendingCmds = commands\n    .filter((c) => c.device_id === device.id)  // MUTATION: any status\n    .sort((a, b) => a.created_at.localeCompare(b.created_at));",
         "why": "an executed command is re-delivered, so a recovered device re-locks",
@@ -418,7 +420,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/effectiveness",
         "label": "WRK/effectiveness-crit",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "      lockdownEffective = criticalTotal > 0;",
         "new": "      lockdownEffective = true;  // MUTATION: zero critical controls reads as success",
         "why": "an encrypted-only device is recorded as a clean boot-locked lockdown",
@@ -436,7 +438,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/effectiveness-scope",
         "label": "WRK/effectiveness-scope",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "    if (detail.boot_lock_attempted === true) {",
         "new": "    if (true) {  // MUTATION: an unattempted boot-lock reads as ineffective",
         "why": "a device that never tried boot-lock is marked ineffective rather than unknown",
@@ -472,7 +474,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/ack-audit-action",
         "label": "WRK/ack-audit-action",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "      `agent_${command.command_type}_confirmed`,",
         "new": "      'command_acked',  // MUTATION: the action the dashboard scans for is gone",
         "why": "the effectiveness panel finds no confirmation entry and stays dark",
@@ -490,7 +492,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/ack-audit-scope",
         "label": "WRK/ack-audit-scope",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "  if (result_status === 'executed') {\n    await addAuditEntry(",
         "new": "  if (true) {  // MUTATION: failed commands also claim confirmation\n    await addAuditEntry(",
         "why": "a failed lockdown is recorded as a confirmed one",
@@ -499,7 +501,7 @@ MUTATIONS: list[dict] = [
         "path": "worker/pba-hardcoded",
         "label": "WRK/pba-hardcoded",
         "runner": "vitest",
-        "file": "serverless/worker.ts",
+        "file": "serverless/agent-routes.ts",
         "old": "      enable_pba: pendingCmd.enable_pba === true,",
         "new": "      enable_pba: false,  // MUTATION: the opt-in never reaches the agent",
         "why": "pre-boot authentication is silently never enabled on this backend",
@@ -523,6 +525,67 @@ MUTATIONS: list[dict] = [
         "why": "a client sending the string \"true\" silently enables PBA",
     },
 ]
+
+# ---------------------------------------------------------------------------
+# S322: re-anchored rows.
+#
+# S280 split the Worker's agent-facing handlers into `agent-routes.ts`, and the ACK path moved with
+# them; `artifact_json` was also renamed `_artifact_json` when it stopped being used. Twelve rows kept
+# matching their pre-S280 text, so they reported SKIPPED — and because the summary counted table rows
+# rather than kills, the audit still said "all 55 mutations killed". Both halves are fixed here: the
+# summary now fails on unverified rows, and these rows point at the code that exists today.
+#
+# Applied as a table instead of editing the literals above so the original anchors stay readable
+# next to their replacements, and so this change is reviewable as one block.
+# ---------------------------------------------------------------------------
+_REANCHORED = [
+    ('worker/ack', 'serverless/agent-routes.ts',
+     "  if (!command || command.device_id !== device.id) {\n    return errorResponse('Command not found', 404);\n  }",
+     "  if (!command) {\n    return errorResponse('Command not found', 404);\n  }", None),
+    ('worker/ack-terminal', 'serverless/agent-routes.ts',
+     "  if (command.status === 'executed') {\n    return jsonResponse({ ok: true, deduplicated: true });\n  }",
+     '  if (false) {\n    return jsonResponse({ ok: true, deduplicated: true });\n  }', None),
+    ('worker/ack-uuid', 'serverless/agent-routes.ts',
+     '    ...(payload.command_uuid ? { command_uuid: payload.command_uuid } : {}),',
+     '    ...(false ? { command_uuid: payload.command_uuid } : {}),', None),
+    ('worker/ack-blocked-files', 'serverless/agent-routes.ts',
+     "    encryption_blocked_files: (encryption_blocked_files ?? null) as Command['encryption_blocked_files'],",
+     "    encryption_blocked_files: null as Command['encryption_blocked_files'],", None),
+    ('worker/ack-session-context', 'serverless/agent-routes.ts',
+     "    lock_session_context: (lock_session_context ?? null) as Command['lock_session_context'],",
+     "    lock_session_context: null as Command['lock_session_context'],", None),
+    ('worker/ack-track', 'serverless/agent-routes.ts',
+     "      track: 'tracking',",
+     "      track: 'active',", None),
+    ('worker/ack-audit-detail', 'serverless/agent-routes.ts',
+     '        lockdown_effective: confirmed.lockdown_effective ?? undefined,',
+     '        lockdown_effective: undefined,', None),
+    ('worker/effectiveness-persist', 'serverless/agent-routes.ts',
+     '    lockdown_effective: lockdownEffective,',
+     '    lockdown_effective: null,', None),
+    ('worker/recover', 'serverless/agent-routes.ts',
+     '      keyMaterial = deviceKey.key_material;',
+     '      keyMaterial = undefined;', 'recovery answers the unlock request without the escrowed key, so the device stays encrypted while the server records a release'),
+    ('worker/uninstall-authz', 'serverless/worker.ts',
+     'async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  const auth = await uninstallAuth(request, env);\n  if (!auth) {',
+     'async function handleUninstallAuth(request: Request, env: Env): Promise<Response> {\n  const auth = await uninstallAuth(request, env);\n  if (false && !auth) {', None),
+    ('worker/uninstall-verify', 'serverless/worker.ts',
+     '    if (timingSafeEqualStr(providedToken, expected)) {',
+     '    if (true) {', None),
+    ('worker/hw-artifact-blob', 'serverless/worker.ts',
+     '    .map(({ artifact_json: _artifact_json, ...summaryRow }) => summaryRow);',
+     '    .map((row) => row);', None),
+]
+
+for _row, _file, _old, _new, _why in _REANCHORED:
+    for _m in MUTATIONS:
+        if _m["path"] == _row:
+            _m["file"], _m["old"], _m["new"] = _file, _old, _new
+            if _why:
+                _m["why"] = _why
+            break
+    else:
+        raise SystemExit(f"re-anchor names a row that does not exist: {_row}")
 
 
 def repo_path(rel: str) -> Path:
@@ -571,6 +634,75 @@ def _pytest_failures(lines: list[str]) -> set[str]:
     return out
 
 
+def _dump_invalid(runner: str, out: str, limit: int = 40) -> None:
+    """Print the head and tail of a run that produced no verdict.
+
+    S323: the first two CI runs of the audit could only report the last line, which was a Worker log
+    line — so a failing baseline looked like a failing assertion and cost two 10-minute round trips to
+    learn nothing. When the verdict is "could not run", the output IS the diagnosis.
+    """
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    print(f"--- {runner} output ({len(lines)} lines) ---", file=sys.stderr)
+    for ln in lines[:limit]:
+        print(f"  | {ln}"[:400], file=sys.stderr)
+    if len(lines) > limit:
+        print(f"  | … {len(lines) - limit} more line(s)", file=sys.stderr)
+        for ln in lines[-5:]:
+            print(f"  | {ln}"[:400], file=sys.stderr)
+    print(f"--- end {runner} output ---", file=sys.stderr)
+
+
+def _invalid_summary(rc: int, out: str, why: str) -> str:
+    """S323: an INVALID verdict has to say enough to diagnose it.
+
+    The first CI run of this audit reported only the LAST line of the vitest output — which happened
+    to be a Worker log line, so the message read like a failing assertion when the run had actually
+    died early. Exit code plus the tail of the output is the minimum that distinguishes the two.
+    """
+    lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+    tail = " / ".join(lines[-3:])[:300]
+    return f"{why} [rc={rc}] :: {tail}"
+
+def _invalid(rc: int, out: str, why: str, runner: str) -> tuple[None, str, set[str]]:
+    """`_invalid_summary` plus the evidence, printed once per failing baseline."""
+    _dump_invalid(runner, out)
+    return None, _invalid_summary(rc, out, why), set()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escapes before parsing a runner's output.
+
+    S323: vitest writes its tally as `\x1b[2m      Tests \x1b[22m ... 495 passed`, so
+    `line.strip().startswith("Tests")` is false even though the line is exactly that. This was the
+    first theory, wrongly retired: the local check piped vitest through `grep`, which disables colour,
+    so the test removed the evidence it was looking for. CI showed the escapes in the INVALID dump.
+    """
+    return _ANSI_RE.sub("", text)
+
+
+def _run_captured(cmd: list[str], cwd: Path, timeout: int = 900) -> tuple[int, str]:
+    """Run a suite with its output going to a FILE, not a pipe.
+
+    S323: the same vitest command, run from a shell with `> file`, produced 107 lines including the
+    "Test Files 4 passed" tally; run through `capture_output=True` it produced 72 lines, no tally, and
+    still exited 0 — so the audit declared a passing run "could not run". A pipe changes how the child's
+    stdio is flushed and buffered, and vitest's reporter is sensitive to it. The diagnostic step in
+    `.github/workflows/audit-teeth.yml` is what caught the difference; every runner now writes to a
+    temporary file and reads it back, so the audit sees what a human would see in a terminal.
+    """
+    with tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False) as fh:
+        path = Path(fh.name)
+    try:
+        with open(path, "w", encoding="utf-8", errors="replace") as out:
+            proc = subprocess.run(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, timeout=timeout)
+        return proc.returncode, path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
     """Run a component suite. Returns (passed, summary); None means invalid.
 
@@ -587,20 +719,20 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
     """
     if runner == "vitest":
         node = str(NODE) if NODE.exists() else "node"
-        proc = subprocess.run(
-            [node, "node_modules/vitest/vitest.mjs", "run"],
-            cwd=REPO / "serverless", capture_output=True, text=True, timeout=900,
+        rc, out = _run_captured(
+            [node, "node_modules/vitest/vitest.mjs", "run"], REPO / "serverless"
         )
-        out = proc.stdout + proc.stderr
+        out = _strip_ansi(out)
         lines = [ln for ln in out.strip().splitlines() if ln.strip()]
         summary = lines[-1][:90] if lines else "(no output)"
         # vitest prints a "Tests  N passed" tally; without it the run did not
         # finish (same validity rule as jest).
         finished = any(ln.strip().startswith("Tests") for ln in lines)
         if not finished or "Error: Cannot find module" in out:
-            return None, summary, set()
-        if proc.returncode in (0, 1):
-            return proc.returncode == 0, summary, _vitest_failures(lines)
+            why = "vitest printed no 'Tests' tally" if not finished else "vitest could not load a module"
+            return _invalid(rc, out, why, "vitest")
+        if rc in (0, 1):
+            return rc == 0, summary, _vitest_failures(lines)
         return None, summary, set()
 
     if runner == "jest":
@@ -623,9 +755,10 @@ def run_suite(runner: str = "pytest") -> tuple[bool | None, str, set[str]]:
         finished = any(ln.startswith(("Tests:", "Test Suites:")) for ln in lines)
         crashed = "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG" in out or "Node.js v" in out
         if not finished or crashed:
-            return None, summary, set()
+            why = "jest crashed" if crashed else "jest printed no tally"
+            return _invalid(proc.returncode, out, why, "jest")
         if any(m in out for m in ("No tests found", "Cannot find module")):
-            return None, summary, set()
+            return _invalid(proc.returncode, out, "jest ran no tests", "jest")
         if proc.returncode in (0, 1):
             return proc.returncode == 0, summary, _jest_failures(lines)
         return None, summary, set()
@@ -689,12 +822,19 @@ def main() -> int:
 
     survivors = []
     invalid = []
+    skipped = []
+    killed = 0
     for m in table:
         target = repo_path(m["file"])
         original = target.read_text()
         hits = original.count(m["old"])
         if hits != 1:
-            print(f"{m['path']:16} SKIPPED — anchor matched {hits} times in {m['file']}")
+            # S322: a skipped anchor is an UNVERIFIED behaviour, not a quiet success. It used to be
+            # dropped from every list, so the closing line said "all N mutations killed" counting
+            # table rows rather than kills — and the twelve rows whose anchors no longer match were
+            # folded into that claim. Same defect class as S318-S321: report what was examined.
+            skipped.append(m)
+            print(f"{m['path']:16} UNVERIFIED — anchor matched {hits} times in {m['file']}")
             continue
         try:
             target.write_text(original.replace(m["old"], m["new"], 1))
@@ -712,6 +852,7 @@ def main() -> int:
             verdict = "SURVIVED"
         else:
             verdict = "KILLED"
+            killed += 1
             summary = "caught by: " + sorted(new_failures)[0][:70]
         print(f"{m.get('label', m['path']):22} {verdict:9} {summary}")
 
@@ -730,6 +871,15 @@ def main() -> int:
         print("\n  the full agent suite passed with these defects reintroduced:")
         return 1
     if invalid:
+        return 1
+    if skipped:
+        print(f"{len(skipped)} of {len(table)} mutations never ran — their anchors match nothing, so "
+              f"those behaviours are UNVERIFIED (not killed, not survived):")
+        for m in skipped:
+            print(f"  {m.get('label', m['path'])}: anchor no longer present in {m['file']} — {m['why']}")
+        print()
+        print(f"{killed} of {len(table)} mutations killed; {len(skipped)} unverified.")
+        print("  An unverified behaviour means the suite is unknown for it, so this is not a pass.")
         return 1
     print(f"all {len(table)} mutations killed — every audited suite has teeth")
     return 0

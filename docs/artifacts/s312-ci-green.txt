@@ -1,0 +1,70 @@
+=== S312: 23 local commits meet CI for the first time, and the gate that never ran locally (2026-11-19) ===
+
+S301→S311 had never been pushed. The first push ran every workflow over code and history that had only
+ever been checked on this host, and CI found three things — one of them mine, two older than my work.
+
+--- [1] the push ---
+  272b7fa  23 commits (S301 close → S311 close, incl. the rotation feature, the lint-gate fix, the wizard)
+  9ff542c  wizard dry-run fixes (ARTIFACT override, banner correction)
+  c330b3f  S301 token redaction + the AGENTS.md rule that came from it
+  f96f7ef  SAST triage
+  Before pushing, the publish range was grepped for credential shapes and for .env/.pem/.key files:
+  nothing. The repo's own scanner then disagreed — see §2.
+
+--- [2] the secret scan: a real finding, 16 hours dead ---
+  [FAIL] assigned-secret: .devin/graph/current-state.md  (4c43b58 docs(state): close S301)
+  [FAIL] assigned-secret: .devin/graph/trace.md          (4c43b58 docs(state): close S301)
+
+  S301's session block quoted a whole token response body — {"token":"<redacted>"} — and because
+  'close-session' copies the latest block into current-state.md, one pasted value landed in two files.
+  The token was minted 2026-11-18T12:03:25Z with a 900-second TTL: expired at 12:18 that day, and
+  single-use. Disproportionate to rewrite history for it; redacted forward to <redacted — S311> with
+  the shape and TTL kept, which is what the block was actually documenting.
+  After c330b3f the job reports: Secret scan (publish range) → success.
+
+  Caught myself doing it again: the AGENTS.md guardrail I wrote reproduced the same fragment, which
+  the scanner flagged as "WARN assigned-secret in fixture/example". Amended before pushing — the rule
+  now shows the shape only ({"token":"<8 chars>…"}).
+
+--- [3] SAST: red on master since 2026-11-18, invisible locally ---
+  Same 48-finding summary on the run for 0c13b19 (2026-11-18T11:38) as on my push, so this predates
+  S304. CI was the only place the gate ran: `make sast` exits 2 when semgrep is absent, and AGENTS.md
+  said "45 findings / 0 ERROR all dispositioned" — a claim about a command nobody could run here.
+
+  Triage (each reason cites the guard in the code):
+    agent/service_host.py:223             dynamic-urllib-use          false-positive
+        five lines above: `if not base.startswith(("http://","https://")): return False`; the call
+        also gets an explicit ssl context when verify_tls is false.
+    agent/service_host.py:339             insecure-file-permissions   accepted-risk
+        `os.chmod(target, 0o755)` on the agent/update executable just moved into place, gated to
+        non-Windows. 0o755 IS the requirement; 0o600 would be a broken install.
+    scripts/acceptance_lifecycle.py:650   dynamic-urllib-use          false-positive
+        operator acceptance client; __init__ rejects a non-http(s) base_url before this line.
+    agent/hw_test_harness.py              insecure-request-object     DELETED
+        the match text still exists at line 2772, but Semgrep no longer raises the finding there —
+        the gate's own definition of a stale exception.
+
+--- [4] verified locally, then in CI ---
+  python3 -m venv /tmp/sgvenv && /tmp/sgvenv/bin/pip install semgrep==1.182.1
+  PATH=/tmp/sgvenv/bin:$PATH make sast
+    Semgrep findings: 48
+    [OK] every finding is either fixed or carries a reviewed reason        exit 0
+
+  CI on f96f7ef — Lint run 44505246648, every job:
+    Lint Agent (ruff) success · Secret scan (publish range) success · Type-check Worker (tsc) success
+    Lint Server (ESLint) success · Lint Dashboard (ESLint) success · Lint Workflows (actionlint) success
+    OpenAPI route coverage success · SAST (Semgrep) success
+  Also on f96f7ef: CI (full suite) success · CodeQL success.
+  The Dashboard ESLint job is worth naming: it runs the `--ext .js,.jsx --max-warnings=0` gate that
+  S305 argued for, so CI now lints the 51 .jsx files it previously skipped entirely.
+
+--- [5] one red I could not attribute, and did not claim ---
+  CI failed on 0c13b19 (master before the push) with Server Tests and Dashboard Tests failing. On
+  c330b3f the same workflow passes. No reproduction, so no attribution: this repo has two documented
+  flaky classes in exactly that area (the SQLite teardown race, S267; a dev server squatting 5173,
+  S307). Recorded as "pre-existing, not reproduced, attribution unknown" rather than as a fix.
+
+--- [6] documentation corrected ---
+  AGENTS.md: "make sast 45 findings / 0 ERROR" → 48 findings / 0 ERROR, all dispositioned (S312) — 45
+  was the accepted count, and three unclassified had appeared since. The section now carries the venv
+  recipe, because a missing binary made the gate a silent no-op and that is how it stayed red for a day.

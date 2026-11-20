@@ -1,0 +1,60 @@
+=== S282: the lab link is live — end-to-end evidence, 2026-11-18T06:40:57Z ===
+
+--- [1] what MOLE's agent is actually configured to call ---
+server_url=http://192.168.1.43:8787
+device_id=d166e8f7a348d3543eefe1902dc6519c
+verify_tls=False
+poll_interval=30
+boot_lock_enabled=True
+  ^ the target port is 8787, which ufw ALLOWS (allowed tcp: 53317, 8000, 8787).
+    The :3001 question is a separate port the agent never calls.
+
+--- [2] server on this host ---
+LISTEN 0      511                *:8787            *:*    users:(("node-MainThread",pid=168042,fd=24))
+$ curl http://192.168.1.43:8787/api/health   (from this host)
+{"status":"ok","timestamp":"2026-11-18T06:40:58.995Z"}  HTTP 200
+
+--- [3] the same call from MOLE over the SSH route ---
+$ ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249 'curl http://192.168.1.43:8787/api/health'
+{"status":"ok","timestamp":"2026-11-18T06:40:59.631Z"}  MOLE HTTP 200
+
+--- [4] the device as the server now holds it (GET /api/devices, admin auth) ---
+  id: d166e8f7a348d3543eefe1902dc6519c
+  hostname: MOLE
+  owner_name: Lab
+  status: active
+  hardware_uuid: BE10009B-5867-337C-5024-E390E760DA74
+  mac_address: DC:71:96:20:4D:4B
+  serial_number: None
+  agent_version: 1.0.0
+  update_verification: sha256-only
+  lock_state: none
+  last_checkin: 2026-11-18 06:39:50
+  firmware_audit_at: 2026-11-18 06:39:50
+  firmware_audit: {"platform":"Windows","secure_boot":false,"setup_mode":null,"bios_vendor":"HP","bios_version":"R70 Ver. 01.36.00","manufacturer":"HP","model":"HP EliteBook 830 
+  (total device rows in DB: 6)
+
+--- [5] the agent's own log, straight from MOLE ---
+2026-11-18 09:39:40 [SERVICE] agent stalled - no answered check-in for 73557s; terminating it
+2026-11-18 09:39:41 [SERVICE] starting agent: C:\ProgramData\LockdownAgent\lockdown-agent.exe --silent --config C:\ProgramData\LockdownAgent\config.json
+2026-11-18 09:39:44,984 [INFO] Loaded JSON config from: C:\ProgramData\LockdownAgent\config.json
+2026-11-18 09:39:44,986 [INFO] Running in silent mode - stdout logging suppressed (file logging continues)
+2026-11-18 09:39:44,987 [INFO] Agent starting - hostname=MOLE server=http://192.168.1.43:8787 poll=30s
+2026-11-18 09:39:59,963 [WARNING] TPM key creation failed: 
+2026-11-18 09:39:59,964 [ERROR] Could not create/open TPM seal key
+2026-11-18 09:39:59,964 [WARNING] TPM seal failed - falling back to DPAPI/plaintext
+2026-11-18 09:39:59,997 [INFO] Adaptive polling: 30s -> 300s (status=active)
+
+--- [6] how the device got there (the steps, all reversible) ---
+  a. POST /api/devices {hostname: MOLE, owner_name: Lab} -> 201, id d166e8f7..., api_key returned once
+  b. config.json backed up on MOLE to config.json.bak-s282, then api_key + device_id patched
+     (server_url, verify_tls, poll_interval, boot_lock_enabled and every other key left untouched)
+  c. Restart-Service LockdownAgent -> service Running, agent logged a check-in within 8 s
+
+--- [7] what this does and does not prove ---
+  PROVEN: MOLE reaches this host's server, authenticates with a per-device key, and its
+          check-in lands in the database with firmware audit, agent version and status.
+  NOT PROVEN: the Worker path (server_url points at the Express server, not the Worker),
+          and any lockdown behaviour — no command was queued, so nothing was enforced.
+  NOTE: MOLE has no usable TPM (seal key creation fails -> DPAPI/plaintext fallback), and
+        firmware_audit reports secure_boot=false ('secure_boot_off').

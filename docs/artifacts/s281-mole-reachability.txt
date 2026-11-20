@@ -1,0 +1,62 @@
+=== S281: why MOLE cannot reach the lab server — probes, 2026-11-18T05:59:46Z ===
+
+--- [1] the SSH route itself (key that works; default key was rejected) ---
+$ ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249 'hostname & whoami'
+MOLE
+mole\labadmin
+$ ssh -i ~/.ssh/id_ed25519 labadmin@192.168.1.249   # -> Permission denied (publickey)
+
+--- [2] MOLE's own port proxy, the blocker the trace has named since S277 ---
+$ netsh interface portproxy show v4tov4   (on MOLE)
+
+  (no output above = no proxy exists at all)
+
+--- [3] routing MOLE -> this host ---
+$ ping -n 2 192.168.1.43   (on MOLE)
+
+Ping statistics for 192.168.1.43:
+    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),
+Approximate round trip times in milli-seconds:
+    Minimum = 4ms, Maximum = 5ms, Average = 4ms
+
+--- [4] the server on this host ---
+$ ss -ltn | grep 3001
+LISTEN 0      511                *:3001            *:*    users:(("node-MainThread",pid=97855,fd=24))
+$ curl -s -m 20 --retry 15 --retry-connrefused http://192.168.1.43:3001/api/health   (from this host)
+{"status":"ok","timestamp":"2026-11-18T05:59:49.711Z"}
+  HTTP 200
+
+--- [5] the same request from MOLE ---
+$ curl -s -m 8 http://192.168.1.43:3001/api/health   (on MOLE)
+
+  MOLE HTTP 000
+$ Test-NetConnection -ComputerName 192.168.1.43 -Port 3001   (on MOLE)
+WARNING: TCP connect to (192.168.1.43 : 3001) failed
+False
+
+--- [6] what this host actually is ---
+$ head -2 /etc/os-release ; uname -r
+NAME="Omarchy"
+PRETTY_NAME="Omarchy"
+7.2.15-1-omarchy
+  -> a native Arch/Omarchy install with the LAN address on wlp0s20f3, NOT WSL:
+  wlp0s20f3 192.168.1.43/24
+
+--- [7] the gate: ufw default-deny with no rule for 3001 ---
+ENABLED=yes
+DEFAULT_INPUT_POLICY="DROP"
+  allowed tcp input ports:
+    53317
+    8000
+    8787
+
+--- [8] conclusion ---
+  Ping reaches this host (TTL 64, 2 ms). TCP 3001 is DROPPED by this host's own ufw
+  (default INPUT policy DROP, and 3001 has no allow rule). The server is listening on
+  *:3001 (0.0.0.0), MOLE has no portproxy at all, and no proxy is needed: this host
+  holds 192.168.1.43 directly. The fix is one rule on THIS host, and it needs root:
+
+    sudo ufw allow 3001/tcp
+    # or, LAN-only:  sudo ufw allow from 192.168.1.0/24 to any port 3001 proto tcp
+
+  Not run: passwordless sudo is unavailable in this session (sudo -n -> 'a password is required').

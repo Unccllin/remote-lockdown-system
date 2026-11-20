@@ -1037,6 +1037,16 @@ def stage_cleanup(args):
 
 # ─── Index Management ───────────────────────────────────────────────────────
 
+def _md_cell(value) -> str:
+    """Escape a value for a markdown table cell.
+
+    A literal `|` in a title splits the row: the index rendered with shifted columns and markdownlint
+    reported "Table column count [Expected: 8; Actual: 10]" for every memory whose text contained a
+    shell pipe (S313 found it via a title naming `electronApiUrl || VITE_API_URL`).
+    """
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
 def stage_index(args):
     """Rebuild the master index from consolidated memories."""
     mem_files = list(CONSOLIDATED_DIR.glob("m-*.md"))
@@ -1124,9 +1134,9 @@ def stage_index(args):
         lines.append("|----|-------|------|------|-----------|-------|-----|--------|")
         for e in entries:
             lines.append(
-                f"| {e['id']} | {e['title'][:50]} | {e['tags'][:18]} | "
+                f"| {_md_cell(e['id'])} | {_md_cell(e['title'][:50])} | {_md_cell(e['tags'][:18])} | "
                 f"{e['confidence']:.2f} | {e['last_seen']} | {e['score']:.3f} | "
-                f"{e['rel_count']} | {e['impact'][:30]} |"
+                f"{e['rel_count']} | {_md_cell(e['impact'][:30])} |"
             )
         lines.append("")
 
@@ -1136,7 +1146,10 @@ def stage_index(args):
         lines.append("| ID | Title | Superseded By | Date |")
         lines.append("|----|-------|---------------|------|")
         for s in superseded:
-            lines.append(f"| {s['id']} | {s['title'][:50]} | {s['superseded_by']} | {s['date']} |")
+            lines.append(
+                f"| {_md_cell(s['id'])} | {_md_cell(s['title'][:50])} | "
+                f"{_md_cell(s['superseded_by'])} | {s['date']} |"
+            )
         lines.append("")
 
     if decayed:
@@ -1145,7 +1158,10 @@ def stage_index(args):
         lines.append("| ID | Title | Decayed On | Reason |")
         lines.append("|----|-------|------------|--------|")
         for d in decayed:
-            lines.append(f"| {d['id']} | {d['title'][:50]} | {d['date']} | {d['reason'][:40]} |")
+            lines.append(
+                f"| {_md_cell(d['id'])} | {_md_cell(d['title'][:50])} | "
+                f"{d['date']} | {_md_cell(d['reason'][:40])} |"
+            )
         lines.append("")
 
     # Check line count

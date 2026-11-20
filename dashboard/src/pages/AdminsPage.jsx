@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { RefreshCw, Plus, Trash2, ShieldCheck, UserCog } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { listAdmins, createAdmin, deleteAdmin, updateAdminRole } from '../api/admins';

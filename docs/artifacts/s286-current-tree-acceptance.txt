@@ -1,0 +1,64 @@
+=== S286: the CURRENT tree on hardware — WinRE fix + BIOS-restore reporting, 2026-11-18T08:01:05Z ===
+
+--- [1] what changed on the device ---
+MOLE C:\ProgramData\LockdownAgent\lockdown-agent.exe
+  before: 16,377,410 bytes  2026-11-17 10:41  sha256 bb32c3d22eb9e2a5e456221b04a92c58ee0e4b461212770af65e0f791e168de0
+  after : 16,851,916 bytes  2026-11-18 10:51  sha256 b17f390d6330d92bcf0e09490bc35b80c4c3cdbdde89221836ec421ba591984d
+  backup: C:\ProgramData\LockdownAgent\lockdown-agent.exe.bak-s286
+Built on MOLE from this tree: Python 3.14.8 installed at C:\Python314 (matches the dev
+interpreter), deps from agent/requirements.txt, PyInstaller 6.22.3, `PyInstaller agent.spec`.
+Source transferred as a 315,946-byte tarball whose sha256 prefix d6c28af4 was verified on arrival.
+
+--- [2] the WinRE fix, on hardware (the line only the new code emits) ---
+2026-11-18 10:57:39,240 [INFO] WinRE already disabled (reagentc /disable returned 2) - the state is
+                                 what lockdown wants, so this is success, not a critical failure
+
+--- [3] the BCD layer before and after, from the ACK detail ---
+S283 (old binary):  bcd = {success: false, rolled_back: true,  critical_applied: 0, best_effort_applied: 0}
+                    lockdown_effective = 0
+S286 (new binary):  bcd = {success: true,  rolled_back: false, critical_applied: 3, best_effort_applied: 5, best_effort_failed: 1}
+                    hp_uefi = {success: false, rolled_back: true, critical_applied: 0}   <- unchanged, password cause (S285)
+                    lockdown_effective = 1
+
+--- [4] the live command records ---
+  unlock    executed  exec=2026-11-18 08:00:17 eff=None boot=None
+  lockdown  executed  exec=2026-11-18 07:58:16 eff=1 boot=partial
+  unlock    executed  exec=2026-11-18 07:23:48 eff=None boot=None
+
+--- [5] the BIOS-restore reporting fix, on hardware (S271 code, first time deployed here) ---
+old binary (S283):  [INFO] Restored 0 BIOS settings to pre-lockdown state
+                    [INFO] UEFI boot lockdown removed - BIOS restored to pre-lockdown state     <- FALSE
+new binary (S286):  [ERROR] Restored 0 of 5 BIOS settings - every write was refused; the boot
+                            settings may still hold the lockdown values and must be restored in BIOS Setup
+                    [ERROR] UEFI boot lockdown removal did NOT restore the BIOS - the boot settings
+                            may still hold the lockdown values; restore them in BIOS Setup
+
+--- [6] the unlock, end to end ---
+10:59:57 [INFO] UNLOCK command received
+10:59:57 [INFO] Decrypted: README.txt
+10:59:57 [INFO] Lock screen removed - normal login restored
+10:59:57 [INFO] BCD restored: recoveryenabled -> No
+10:59:58 [INFO] BCD restored: displaybootmenu -> No
+10:59:58 [INFO] BCD restored: bootmenupolicy -> Standard
+10:59:58 [INFO] BCD restored: bootstatuspolicy -> IgnoreAllFailures
+10:59:58 [INFO] BCD restored: nointegritychecks -> No
+10:59:58 [INFO] WinRE was disabled before lockdown - not re-enabling
+10:59:58 [INFO] BCD lockdown removed: 5 restored, 0 failed
+11:00:17 [ERROR] (BIOS) every write was refused ... restore them in BIOS Setup
+11:00:17 [INFO] ACK sent: status=executed
+
+On device after recovery: SENTINEL=absent, README.txt 172 bytes in plaintext,
+recovery_key=absent, 'Newark User' Account active Yes.
+Server: status=active, lock_state=none.
+
+--- [7] verdict ---
+PASS  WinRE idempotency   the layer applies on a unit whose WinRE was already off; 3/3 critical
+                          BCD controls applied, no rollback, sentinel written.
+PASS  BIOS-restore honesty the tree no longer claims a restore that did not happen.
+PASS  data path           encrypt -> escrow -> decrypt, sentinel and recovery key cleaned up.
+FAIL  HP UEFI layer       still 0/3 critical writes (S285: a Setup password the agent never set).
+                          lockdown_effective=1 because the server's rule is critical_applied_total>0;
+                          the unapplied firmware layer remains visible in boot_lock_detail and the
+                          dashboard's 'why a boot lock did not apply' panel.
+NOTE  a rebuild is now reproducible on MOLE (Python 3.14.8 + PyInstaller 6.22.3), so 'current tree
+      on hardware' is no longer blocked — it is a copy of installed exe and a service restart.

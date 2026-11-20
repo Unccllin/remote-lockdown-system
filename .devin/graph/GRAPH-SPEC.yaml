@@ -448,18 +448,21 @@ enforcement_paths:
     component: C-AGENT
     entry_function: "agent._lock_workstation / agent.disable_console_account"
     verified_by: [V-AGENT]
-    # Demoted 2026-11-17 from verified-on-hardware (S270). The Azure artifact cited
-    # here records that tsdiscon was ISSUED with session_id=0 — not that a sign-in
-    # attempt was refused, which is the claim the path's name makes. The operator
-    # signed straight back in to a "locked" MOLE with the same password; the code says
-    # why: from Session 0 tsdiscon only disconnects the console, and the overlay cannot
-    # be created at all (CreateWindowEx failed: 2, repeating every 10 s). `lock` now
-    # disables the interactive account and verifies it by reading the account back, so
-    # re-promote only after a console sign-in is shown REFUSED on hardware.
-    status: verified-in-unit-test
-    risk_notes: "S270: lock no longer merely disconnects — it disables the interactive
-                account (verified by read-back) and lockdown_effective is false when
-                logon was not prevented. Hardware re-verification outstanding."
+    # Re-promoted 2026-11-18 (S289) on evidence of the refusal itself, which is what S270
+    # said was missing. S270 had demoted it because the cited artifact recorded that tsdiscon
+    # was ISSUED at session_id=0, not that a sign-in was refused — and the operator then signed
+    # straight back in to a "locked" MOLE. `lock` has since disabled the interactive account and
+    # verifies it by read-back, and this run captured Windows saying so itself: eight Security
+    # 4625 events with LogonType=2 (the console path), Status=0xc000006e and
+    # SubStatus=0xc0000072 (STATUS_ACCOUNT_DISABLED), while the operator's own password was
+    # refused with "The account is currently disabled". The overlay still cannot be created from
+    # session 0, so the disabled account — not the visual lock screen — is what refuses.
+    status: verified-on-hardware
+    hardware_artifact_ref: "docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01"
+    risk_notes: "S289: a console sign-in is REFUSED on hardware, from the OS's own security log
+                rather than from a report of it. Scope of the claim: one unit (MOLE, HP EliteBook
+                830 G6, no usable TPM); the lock-screen overlay is still not rendered from
+                session 0, so enforcement rests on the disabled account plus the guardian."
 
   - id: E-GUARDIAN
     name: lock-guardian

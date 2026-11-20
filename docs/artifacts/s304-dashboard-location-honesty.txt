@@ -1,0 +1,71 @@
+=== S304: dashboard location honesty + a lint gate that lints no JSX (2026-11-18) ===
+
+Options (a) and a byproduct. Option (a) of docs/artifacts/s303-location-diagnosis.txt §5 is
+"UI honesty (no new data)": show source, accuracy and age, and label ip fixes approximate.
+It is implemented and gated. Chasing the gate to the end found that the dashboard lint gate
+never lints a .jsx file, so the whole UI layer has been unlinted while every surface reported
+green.
+
+--- [1] what changed (option a) ---
+  dashboard/src/pages/MapPage.jsx            | 28 +++++++++-
+  dashboard/src/pages/DeviceDetailPage.jsx   | 33 +++++++++--
+  dashboard/tests/MapPage.test.jsx           | 47 +++++++++++++++-
+  dashboard/tests/DeviceDetailPage.rendering.test.jsx | 65 ++++++++++++++++++++++
+  4 files changed, 162 insertions(+), 11 deletions(-)
+
+Copy now rendered, exactly:
+  APPROX_NOTE = "Approximate — IP-based fix: resolves the ISP's city-level location, not the device."
+  accuracy     = "~25m" when accuracy_meters is a number, otherwise "not reported"
+  footer       = "IP-based fixes are city-level (ISP location); devices behind one egress can plot
+                  at the same point."  (only when a plotted point has source === 'ip')
+MapPage popup:   Source / Accuracy / APPROX_NOTE when source === 'ip'   (age line untouched)
+Detail card:     Accuracy row is now unconditional ("not reported" instead of hidden)
+Detail popups:   Source / Accuracy / APPROX_NOTE per report
+Also removed while touching: unused `React`, `TileLayer`, `formatDistanceToNow` imports in
+MapPage.jsx. No new dependencies, no API shape change, no server/serverless/agent edits.
+
+--- [2] the gates, measured on this host ---
+  $ cd dashboard && npx vitest run
+     Test Files  30 passed (30)
+          Tests  272 passed (272)        (HEAD baseline 266; the diff adds exactly 6 it() blocks)
+  $ cd dashboard && npx vite build
+     ✓ built in 6.96s                  exit 0   (chunk-size warning only, pre-existing 641 kB)
+  $ cd dashboard && npm run test:coverage
+     Statements 70.57% (floor 68) · Branches 66.59% (floor 61)
+     Functions  62.59% (floor 62) · Lines    71.36% (floor 70)          exit 0
+  $ cd dashboard && npx eslint .
+     exit 0
+
+--- [3] the gate above is not measuring the UI ---
+Measured with the same binary the repo pins (eslint v8.57.1, `.eslintrc.json`, no eslint.config.*):
+
+  $ npx eslint .                              -> files linted: 21   .jsx files linted: 0
+                                                 errors: 0                       exit 0
+  $ npx eslint src/ tests/ --max-warnings=0   -> files linted: 13   .jsx files linted: 0
+                                                 errors: 0                       exit 0
+  $ npx eslint . --ext .js,.jsx               -> files linted: 72   errors: 30  warnings: 1
+
+Rules behind the 30: no-unused-vars 22, react/no-unescaped-entities 7, no-undef 1, spread over
+16 files (worst: EnrollDevicePage.jsx 4, TopBar.jsx 3, EnrollPage.jsx 3, HealthPage.jsx 3).
+eslintrc format cannot declare file extensions; v8 defaults to `.js` unless `--ext` is passed.
+So every documented dashboard lint invocation — `Makefile:290`, `.github/workflows/lint.yml:46`
+and `:75`, `.github/workflows/release.yml:69`, and the `cd dashboard && npx eslint .` line in
+AGENTS.md — lints 0 of the dashboard's .jsx files and exits 0 while 30 errors sit in the tree.
+
+--- [4] is any of it ours? ---
+Under `--ext .js,.jsx`, the only finding inside the four changed files is
+  tests/MapPage.test.jsx:2  no-unused-vars  'fireEvent' is defined but never used
+and that import is byte-identical at HEAD (`git show HEAD:dashboard/tests/MapPage.test.jsx`).
+Zero errors are attributable to an added line. Baseline 30 is therefore unchanged by this work;
+the correct fix is a separate, mechanical pass: add `--ext`, clear the 22 unused vars and the 7
+unescaped entities (both mechanical), and fix the 1 `no-undef` by declaring the vitest globals
+for `tests/` — `tests/EnrollDevicePage.test.jsx:42` uses the global `afterEach` (available in
+vitest config via `globals: true`) with no eslint env for it, so that one is a config gap and
+not a defect. Do not widen this diff to absorb a 30-error cleanup.
+
+--- [5] what this means for the "eslint clean" claims ---
+AGENTS.md, the diagnostic-sweep section, and S271/S303's VERIFY lines all cite dashboard eslint
+as a passing gate. They are true statements about the command that was run and false statements
+about the dashboard's lint state. The server side is unaffected (its files are .js, and jest+
+eslint there do lint). This is a Layer-4 (verification feedback) failure: a gate whose green
+does not depend on the code it claims to check.

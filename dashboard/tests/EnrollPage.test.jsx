@@ -25,10 +25,6 @@ const mockRevokeObjectURL = vi.fn();
 Object.defineProperty(URL, 'createObjectURL', { value: mockCreateObjectURL });
 Object.defineProperty(URL, 'revokeObjectURL', { value: mockRevokeObjectURL });
 
-// Mock document.createElement for download links
-const mockClick = vi.fn();
-const originalCreateElement = document.createElement.bind(document);
-
 const mockDevice = {
   id: 'dev-001',
   hostname: 'TEST-LAPTOP-001',

@@ -35,4 +35,34 @@ export interface Env {
    * and each call site used to reach for them with `as unknown as Record<…>`.
    */
   INSTALLER_GUI?: string;
+  /**
+   * How many location reports one device keeps (ADR-004; default 500 when unset).
+   *
+   * Declared on Env for the same reason as ACTIVE_POLL_SECONDS — and because a retention limit
+   * that cannot be exercised is one nobody has watched work: the pruning path is only reachable
+   * by crossing it.
+   */
+  LOCATION_HISTORY_LIMIT?: string;
+  /**
+   * How many audit entries are retained (ADR-005; default 1000 when unset).
+   *
+   * Same reasoning as the location cap: retention is only exercised by crossing it.
+   */
+  AUDIT_HISTORY_LIMIT?: string;
+  /**
+   * R2 bucket for artifacts that do not fit a KV value.
+   *
+   * Cloudflare caps a KV value at 27 MiB, and the generic NSIS installer — which embeds
+   * `lockdown-agent.exe` plus `lockdown-installer.exe` — crossed it at 33 MB of payload (S291:
+   * "content size of 41203591 bytes exceeds maximum allowed size of 27MiB"). Optional on
+   * purpose: with no binding, `readBinary()` behaves exactly as the KV-only code did, so a
+   * deployment that has not enabled R2 keeps working unchanged.
+   */
+  BINARIES?: R2Bucket;
+  /**
+   * Google Geolocation key, provisioned into the enrolment response at install
+   * time (ruling C, S306 — see docs/adr/ADR-008-geolocation-key-delivery.md).
+   * Optional on purpose: unset means the response omits google_api_key entirely.
+   */
+  GOOGLE_API_KEY?: string;
 }

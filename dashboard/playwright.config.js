@@ -34,7 +34,14 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://localhost:5173',
     timeout: 30_000,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse: on 2026-11-19 a Vite dev server S303 had left running on 5173 since the day
+    // before was silently reused here, so the suite drove a server whose /api proxy had been
+    // resolved WITHOUT this run's E2E_BACKEND_PORT — the browser talked to a foreign backend
+    // while the fixture's own axios login talked to the right one, and the result was 7 test
+    // failures that looked like "login is broken" (nothing in the output named the reuse).
+    // A busy 5173 must be one setup error the operator can read, not a suite that tests someone
+    // else's server. Set PLAYWRIGHT_REUSE_DEV_SERVER=1 only if you know that server is this one.
+    reuseExistingServer: process.env.PLAYWRIGHT_REUSE_DEV_SERVER === '1',
     // A developer's dashboard/.env may point the UI at the deployed Worker via VITE_API_URL
     // (that is what a standalone build wants). The E2E suite is a SAME-ORIGIN test against the
     // fixture backend, so that value must not leak in: with it, every authenticated test talked

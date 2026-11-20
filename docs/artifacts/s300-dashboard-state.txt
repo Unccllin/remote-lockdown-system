@@ -1,0 +1,39 @@
+=== S300: the dashboard — what was actually wrong (nothing in its code), 2026-11-18T11:23:27Z ===
+
+--- [1] measured state, before touching anything ---
+  dashboard unit tests:   266 passed (30 files)
+  dashboard/dist:         index.html dated Nov 16 12:04, with 3 src files NEWER than it — a stale bundle
+  dashboard E2E:          11 FAILED, every one with the same error:
+      browserType.launch: Executable doesn't exist at
+        ~/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell
+  -> the failures were environmental (browser binary never downloaded), not a regression.
+
+--- [2] after: fresh bundle, installed browser, E2E green ---
+  npx vite build                     -> dist/assets/index-BiqBoQfX.js 640.20 kB (gzip 185.46)
+  npx playwright install             -> chromium_headless_shell-1234 + ffmpeg
+  E2E_BACKEND_PORT=3101 LD_LIBRARY_PATH=~/.local/lib/nspr npx playwright test
+                                    -> 11 passed (18.3s), against a real backend
+
+--- [3] the structural finding: the dev scaffold never served the UI ---
+  server/src/index.js (production entry) has served dashboard/dist since the S294-era prod bug
+  ("the image built dashboard/dist and served none of it"). server/dev-start-sqlite.js — the
+  scaffold every hardware session has used, including the one MOLE has been polling all day —
+  mounted /api/* and /metrics only. So "the server" meant two different things depending on the
+  entry point, and a UI demo against the dev server could only ever get 404s.
+
+  Now it mounts the built dist with the same cache rules as src/index.js (hashed assets
+  immutable, index.html never cached) and the same SPA fallback.
+
+--- [4] verified on the running dev server ---
+  /                                              HTTP 200 text/html; charset=UTF-8 649 B
+  /devices                                       HTTP 200 text/html; charset=UTF-8 649 B
+  /devices/d166e8f7a348d3543eefe1902dc6519c      HTTP 200 text/html; charset=UTF-8 649 B
+  /assets/index-BiqBoQfX.js                      HTTP 200 application/javascript; charset=UTF-8 640200 B
+  (deep links return index.html — react-router resolves them client-side)
+
+--- [5] what a UI demo still needs ---
+  The bundle is built with no VITE_API_URL, so the client uses '/api' (same-origin) — correct for
+  the Express server it is served by. A dashboard pointed at the Worker needs
+  VITE_API_URL=https://lockdown-serverless.<account>.workers.dev/api at build time; there is no
+  dashboard/.env today.
+  Login on the dev scaffold: admin / admin123 (seeded demo admin).

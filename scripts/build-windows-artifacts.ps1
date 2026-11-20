@@ -64,6 +64,20 @@ try {
 
     $selected = if ($Only -eq 'all') { $targets.Keys } else { @($Only) }
 
+    # The service is the one artefact whose dependency is fatal but silent: without pywin32
+    # the frozen exe builds fine and then fails at SCM start with error 1053 and no log line,
+    # because service_host.py guards the pywin32 imports instead of raising (measured on MOLE,
+    # S298). Check before building, so the failure is one sentence here instead of a service
+    # that will not start on the target.
+    if ($selected -contains 'service') {
+        & $Python -c "import servicemanager, win32serviceutil" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail 'pywin32 is not installed for this interpreter - the service would build and then fail to start (SCM 1053)'
+            Write-Fail 'fix: pip install -r agent/requirements.txt   (pywin32 is Windows-only)'
+            exit 1
+        }
+    }
+
     foreach ($name in $selected) {
         if (-not $targets.Contains($name)) { continue }
         Write-Step "building $name"

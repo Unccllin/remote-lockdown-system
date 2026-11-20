@@ -66,7 +66,7 @@ jobs:
         run: cd dashboard && npm ci && ../scripts/audit-with-exceptions.sh
 
       - name: Dashboard — ESLint
-        run: cd dashboard && npx eslint src/ tests/ --max-warnings=0
+        run: cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0
 
       - name: Dashboard — tests
         run: cd dashboard && npm test

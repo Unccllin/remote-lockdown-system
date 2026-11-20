@@ -93,6 +93,16 @@ describe('served enrolment (the dashboard one-liner)', () => {
     expect(body).not.toMatch(/token=/);
   });
 
+  it('served setup.ps1 contains no google_api_key even when env var is set (B-070)', async () => {
+    const worker = await getWorker();
+    const env = { ...makeEnv(), GOOGLE_API_KEY: 'secret-google-key-value' };
+    const resp = await worker.fetch(req('/api/enroll/setup.ps1'), env);
+    expect(resp.status).toBe(200);
+    const body = await resp.text();
+    expect(body).not.toContain('secret-google-key-value');
+    expect(body).not.toContain('google_api_key');
+  });
+
   it('still offers the wizard when INSTALLER_GUI=true', async () => {
     const worker = await getWorker();
     const env = { ...makeEnv(), INSTALLER_GUI: 'true' };
@@ -270,7 +280,13 @@ describe('recover is usable on an enrolled device', () => {
 describe('unlock key selection', () => {
   it('delivers the newest key, never the first match', async () => {
     const { readFileSync } = await import('fs');
-    const src = readFileSync(new URL('./worker.ts', import.meta.url), 'utf8');
+    // The two sites that hand out an escrowed key have lived in different files since S280:
+    // the check-in that releases it on unlock is in agent-routes.ts, the recover handler that
+    // releases the key it rewrote stays in worker.ts. Both are read, so moving one again cannot
+    // turn this assertion into a vacuous pass over a file that no longer contains the line.
+    const src = ['./worker.ts', './agent-routes.ts']
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n');
 
     expect(src).toContain('deviceKeys[deviceKeys.length - 1]');
     expect(src).toContain('unreleased[unreleased.length - 1]');

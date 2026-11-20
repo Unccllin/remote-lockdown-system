@@ -1,0 +1,62 @@
+=== S295: the update trust root is staged and validated — one publish left, 2026-11-18T10:12:42Z ===
+
+--- [1] the keypair (generated locally, nothing published) ---
+scripts/generate-update-keys.sh
+  private key: ~/.lockdown-secrets/update_signing.key   (mode 600)
+  public  key: ~/.lockdown-secrets/update_signing.pub
+  The default OUT_DIR is deliberately outside the working copy — S242 measured that the old
+  default dropped a private key into a tree where only agent/dist/ was ignored.
+
+--- [2] the signed release record ---
+scripts/sign-release-metadata.py --version 1.0.0 \
+    --key ~/.lockdown-secrets/update_signing.key \
+    --artifact win=/tmp/release/lockdown-agent.exe --out /tmp/agent-release.json
+
+  latest_version 1.0.0
+  built_at       2026-11-18T09:08:18.000Z
+  platforms.win  sha256 d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3
+                 size 16852161
+                 signature valudUTzLX9ZoAMcYyBsa1U9GMJ/HlAhaI6ikyrcclLoB26Irx41smOk4yB7J1V/xuoSncoHqBYwNF1AYZpYBQ==
+                 signature_alg ed25519
+  top-level      same hash/size/signature (single platform)
+  The signed message is "v1:1.0.0:d9e45902…" — the hash is bound to the version it claims.
+
+--- [3] validation, three independent ways ---
+a. openssl, independently of this repo:
+     $ openssl pkeyutl -verify -pubin -inkey ~/.lockdown-secrets/update_signing.pub \
+         -rawin -in <("v1:1.0.0:d9e45902…") -sigfile sig.bin
+     Signature Verified Successfully
+
+b. the agent's own verifier (agent.verify_update_signature):
+     verification mode                          -> signature
+     genuine signature                          -> True
+     tampered sha256                            -> False
+     tampered version                           -> False
+     no pinned key                              -> False
+     pin pointing at a missing file             -> mode 'key-unreadable' (fails closed)
+
+c. the Worker's update path, against local workerd:
+     make test-worker-e2e                       -> 5 passed in 31.36s
+
+--- [4] what publishing would and would not change ---
+  publishing:  npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path /tmp/agent-release.json
+  effect:      /api/agent/update stops answering "no_release_published" and starts offering
+               1.0.0 to devices that poll it.
+
+  It does NOT by itself make updates signature-verified: a device only pins the key if its
+  config names update_public_key (a PATH to update_signing.pub, not the PEM text — measured:
+  passing the PEM inline yields 'Update public key not found'). So publishing metadata and
+  shipping the public key are ONE decision with two halves. Today MOLE reports 'sha256-only'.
+
+  The two halves:
+    a. publish agent_release (above)
+    b. stage update_signing.pub beside the agent binaries before rebuilding the wrapper
+       (agent/dist or STAGE=... for scripts/build-generic-installer.sh), so installed agents
+       write update_public_key into config.json and refuse unsigned updates.
+
+--- [5] custody, which is the part that is hard to undo ---
+  update_signing.key signs every future release. If it is lost, every pinned device must be
+  re-provisioned with a new public key; if it leaks, anyone can sign an "update". Whatever
+  happens next, that file should be copied somewhere offline and not left only on this host.
+  Nothing has been published, so deleting ~/.lockdown-secrets/ and stopping here leaves the
+  fleet exactly as it is today: sha256-only, no updates offered.

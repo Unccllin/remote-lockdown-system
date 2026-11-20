@@ -39,1013 +39,6 @@
  */
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface Device {
-  id: string;
-  hostname: string;
-  owner_name: string;
-  status: 'active' | 'stolen' | 'locked' | 'recovering' | 'tracking';
-  mac_address: string | null;
-  hardware_uuid: string | null;
-  serial_number: string | null;
-  /** Hardware model reported by the check-in (from firmware_audit); display only. */
-  model?: string | null;
-  last_checkin: string | null;
-  enrolled_at: string;
-  api_key_hash: string;
-  // Optional link to the firmware-side PBL device_id (64 hex chars, C1 §4).
-  // Absent for agents that were never matched to a PBL boot record.
-  pbl_device_id?: string | null;
-  // Populated from checkin metadata (KV-RACE-001), not stored on `devices`.
-  firmware_audit?: Record<string, unknown> | null;
-  firmware_audit_at?: string | null;
-  // D-222: the agent's own version, reported at check-in. Nullable and absent for
-  // pre-D-222 agents — "never reported" is a different fact from "on version X", and a
-  // rollout cannot be verified if a missing value reads as compliance.
-  agent_version?: string | null;
-  agent_version_at?: string | null;
-  // Derived on the way out (D-258): the device is checking in, but its version report is
-  // absent or more than an hour behind that check-in — i.e. the build it runs does not
-  // report a version at all. A never-checked-in device is "offline", not stale.
-  agent_version_stale?: boolean;
-  // update_verification: "signature" when the agent has a pinned update key and
-  // will only apply detached-signature-verified updates, "sha256-only" when it
-  // would accept whatever this backend serves (B-006). Reported per check-in so
-  // the operator can see which devices are unauthenticated for updates.
-  update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
-}
-
-/** A hardware-test artifact as stored in KV, after parsing an upload (D-129). */
-interface HwTestArtifact {
-  // Serial, rendered as a decimal string: the dashboard validates /^\d+$/.
-  id: string;
-  device_id: string | null;
-  admin_id: string | null;
-  hostname: string | null;
-  harness_version: string | null;
-  agent_hash: string | null;
-  total_tests: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-  errors: number;
-  artifact_json: unknown;
-  created_at: string;
-}
-
-/**
- * An artifact as *uploaded*, before it is normalised into HwTestArtifact.
- *
- * Two shapes are accepted on purpose: CTRF (`results.{tool,summary,extra}`) from
- * harness v2.0, and the legacy flat shape the harness emitted for months before
- * CTRF support landed. A rejected artifact on window day is a lost hardware run.
- */
-interface HwTestArtifactUpload {
-  results?: {
-    tool?: { name?: string; version?: string };
-    summary?: HwTestSummary;
-    extra?: { environment?: HwTestEnvironment };
-  };
-  harness_version?: string;
-  summary?: HwTestSummary;
-  environment?: HwTestEnvironment;
-  [key: string]: unknown;
-}
-
-interface HwTestSummary {
-  tests?: number;
-  total?: number;
-  passed?: number;
-  failed?: number;
-  skipped?: number;
-  errors?: number;
-}
-
-interface HwTestEnvironment {
-  hostname?: string;
-  agent_binary_hash?: string;
-  [key: string]: unknown;
-}
-
-
-interface Command {
-  id: string;
-  device_id: string;
-  command_type: 'lockdown' | 'unlock' | 'track' | 'stop_track';
-  status: 'pending' | 'executed' | 'failed' | 'cancelled';
-  created_at: string;
-  executed_at: string | null;
-  command_uuid: string | null;
-  // T7/T8: opt-in pre-boot authentication, chosen by the operator on flag-stolen.
-  // The agent sets an HP power-on password / BitLocker TPM+PIN when it is true.
-  enable_pba?: boolean;
-  // D-204 / E-EFFECTIVENESS: reported by the agent on ACK. `lockdown_effective`
-  // is false when boot-lock was attempted but zero critical controls applied —
-  // the device is encrypted-only, which must not read as a clean lockdown.
-  boot_lock_status?: string | null;
-  boot_lock_detail?: unknown;
-  lockdown_effective?: boolean | null;
-  // D-011: files the agent could not encrypt (open/locked). The dashboard shows
-  // these so an operator does not believe a folder is encrypted when it is not.
-  encryption_blocked_files?: unknown;
-  // Session context for the lock that was applied (duress / interactive logging).
-  lock_session_context?: unknown;
-  // Duress code: when truthy on an unlock command, the agent pretends
-  // to unlock but silently re-encrypts and re-locks after a delay.
-  // Set by the admin via the "Release with Duress Code" dashboard option.
-  duress_code?: boolean | null;
-}
-
-interface EncryptionKey {
-  device_id: string;
-  command_id: string;
-  key_material: string;
-  /**
-   * ISO timestamp of escrow. Optional because records written before S269 have
-   * none; key selection must therefore fall back to array order (escrow appends),
-   * which is why "newest" is the last element rather than a sorted first.
-   */
-  created_at?: string;
-  released_at: string | null;
-}
-
-interface LocationReport {
-  device_id: string;
-  latitude: number | null;
-  longitude: number | null;
-  accuracy_meters: number | null;
-  source: string;
-  city: string | null;
-  region: string | null;
-  country: string | null;
-  ip_address: string | null;
-  wifi_count: number | null;
-  created_at: string;
-}
-
-interface AuditEntry {
-  id: string;
-  device_id: string;
-  action: string;
-  detail: string;
-  created_at: string;
-  hostname?: string;
-  admin_username?: string;
-}
-
-// S4-serverless: BIOS/PBA credential store (mirrors server's bios_passwords
-// table). The agent ACKs these during lockdown (bios_password → 'setup',
-// power_on_password → 'power_on', bitlocker_pin → 'bitlocker_pin',
-// bitlocker_recovery_password → 'bitlocker_recovery'). Stored plaintext in
-// KV — same threat posture as the encryption_keys store; a KV_KEK envelope
-// layer can be added uniformly later.
-interface BiosPassword {
-  device_id: string;
-  password_type: 'setup' | 'power_on' | 'bitlocker_pin' | 'bitlocker_recovery';
-  password: string;
-  created_at: string;
-}
-
-/** Group bios_password rows by type, most recent of each (server parity). */
-function groupPbaCredentials(rows: BiosPassword[]): {
-  setup_password: string | null;
-  power_on_password: string | null;
-  bitlocker_pin: string | null;
-  bitlocker_recovery_password: string | null;
-} {
-  const creds = {
-    setup_password: null as string | null,
-    power_on_password: null as string | null,
-    bitlocker_pin: null as string | null,
-    bitlocker_recovery_password: null as string | null,
-  };
-  // rows sorted newest-first; first of each type wins.
-  for (const row of rows) {
-    if (row.password_type === 'setup' && !creds.setup_password) creds.setup_password = row.password;
-    else if (row.password_type === 'power_on' && !creds.power_on_password) creds.power_on_password = row.password;
-    else if (row.password_type === 'bitlocker_pin' && !creds.bitlocker_pin) creds.bitlocker_pin = row.password;
-    else if (row.password_type === 'bitlocker_recovery' && !creds.bitlocker_recovery_password) creds.bitlocker_recovery_password = row.password;
-  }
-  return creds;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-async function sha256(data: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const hash = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/**
- * SHA-256 of raw bytes, lowercase hex.
- *
- * Used to label binary downloads with x-content-sha256 so a client can prove the
- * body it received is the body this Worker served. It is transport integrity,
- * not authenticity — a hash delivered alongside the bytes is self-certifying
- * (see the same caveat in agent/agent.py's update path). Authenticity needs a
- * signature; the installer binaries are not Authenticode-signed yet.
- */
-async function sha256HexBytes(bytes: ArrayBuffer): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/** Constant-time string comparison (length + byte-wise). */
-function timingSafeEqualStr(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-async function hmacSha256(key: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(key),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
-  return Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function generateId(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function generateApiKey(): string {
-  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-}
-
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': TOKEN_API_CORS_ORIGIN,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Agent-Key, X-Timestamp, X-Nonce, X-Signature, X-Sig-Version',
-    },
-  });
-}
-
-function errorResponse(message: string, status = 400): Response {
-  return jsonResponse({ error: message }, status);
-}
-
-// ---------------------------------------------------------------------------
-// Agent auth (HMAC-SHA256)
-// ---------------------------------------------------------------------------
-
-async function verifyAgentAuth(
-  request: Request,
-  env: Env,
-  body: string,
-): Promise<Device | null> {
-  const agentKey = request.headers.get('X-Agent-Key');
-  const timestamp = request.headers.get('X-Timestamp');
-  const nonce = request.headers.get('X-Nonce');
-  const signature = request.headers.get('X-Signature');
-
-  if (!agentKey || !timestamp || !nonce || !signature) {
-    return null;
-  }
-
-  // Find device by API key hash
-  const keyHash = await sha256(agentKey);
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.api_key_hash === keyHash);
-  if (!device) {
-    return null;
-  }
-
-  // Verify HMAC signature
-  // Signature = HMAC-SHA256(agent_key, "{timestamp}:{nonce}:{body_sha256}")
-  // This matches the agent's sign_headers() format and the full server's
-  // hmacAuth.js verifyHmac() — so the same agent can talk to either backend.
-  const bodyHash = await sha256(body);
-  const expectedSig = await hmacSha256(agentKey, `${timestamp}:${nonce}:${bodyHash}`);
-  if (signature !== expectedSig) {
-    return null;
-  }
-
-  // Check timestamp freshness (within 5 minutes)
-  const now = Math.floor(Date.now() / 1000);
-  const ts = parseInt(timestamp, 10);
-  if (Math.abs(now - ts) > 300) {
-    return null;
-  }
-
-  return device;
-}
-
-// ---------------------------------------------------------------------------
-// Admin auth — resolves a Bearer credential to an admin record.
-//
-// Accepts either a signed session token (issued by /api/auth/login) or the
-// break-glass ADMIN_TOKEN env secret (which maps to a synthetic super-admin).
-// Returns the authenticated admin claims (id, username, role) or null.
-// ---------------------------------------------------------------------------
-
-interface AdminClaims {
-  id: string;
-  username: string;
-  role: AdminRole;
-}
-
-async function resolveAdminAuth(request: Request, env: Env): Promise<AdminClaims | null> {
-  const auth = request.headers.get('Authorization');
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = auth.slice(7);
-
-  // Break-glass: the env ADMIN_TOKEN maps to a synthetic super-admin so the
-  // Worker is usable before any admin is created (bootstrap / recovery).
-  if (token === env.ADMIN_TOKEN) {
-    return { id: 'admin-token', username: 'admin', role: 'super-admin' };
-  }
-
-  // Otherwise verify a signed session token.
-  return verifyAdminToken(env, token);
-}
-
-/**
- * Role gate — mirrors the Express server's requireRole(minRole).
- * Returns the admin claims if authorized, or a Response (401/403) to return.
- */
-async function requireRole(
-  request: Request,
-  env: Env,
-  minRole: AdminRole,
-): Promise<AdminClaims | Response> {
-  const admin = await resolveAdminAuth(request, env);
-  if (!admin) {
-    return errorResponse('Admin authentication required', 401);
-  }
-  const level = ROLE_HIERARCHY[admin.role] ?? 0;
-  if (level < ROLE_HIERARCHY[minRole]) {
-    return errorResponse(
-      `Insufficient permissions. This endpoint requires the '${minRole}' role.`,
-      403,
-    );
-  }
-  return admin;
-}
-
-// ---------------------------------------------------------------------------
-// KV storage helpers
-// ---------------------------------------------------------------------------
-
-
-
-// ---------------------------------------------------------------------------
-// S4-serverless: multi-admin RBAC on KV (end-state serverless auth).
-//
-// The end goal is a fully-serverless system; the Worker is the deployed
-// authority. This layer ports the Express server's admin model (username +
-// password + role) onto KV so the dashboard and admin-plane endpoints work
-// without Postgres.
-//
-// - admins[] stored in a single KV key (low-cardinality, mirrors devices).
-// - Passwords hashed with PBKDF2-SHA256 (native WebCrypto, NIST floor).
-// - Sessions are stateless HMAC-signed tokens ({id, username, role, exp}).
-// - ADMIN_TOKEN remains as a break-glass super-admin fallback so the Worker
-//   still works before any admin is created (bootstrap / recovery).
-// ---------------------------------------------------------------------------
-
-type AdminRole = 'viewer' | 'operator' | 'super-admin';
-
-interface Admin {
-  id: string;
-  username: string;
-  password_hash: string; // base64 PBKDF2
-  salt: string;          // base64
-  // PBKDF2 iteration count used for password_hash. Optional for backward
-  // compat — admins created before this field existed used the then-current
-  // PBKDF2_ITERATIONS default. Recording it per-admin lets us change the
-  // cost without invalidating existing hashes.
-  pbkdf2_iterations?: number;
-  role: AdminRole;
-  created_at: string;
-}
-
-const ADMINS_KEY = 'admins';
-// Cloudflare Workers' WebCrypto caps PBKDF2 at 100,000 iterations
-// (NotSupportedError above that). 210k was the NIST floor we targeted but it
-// crashes on the real Workers runtime (error 1101 on create-admin). 100k is
-// the platform max and still a strong PBKDF2-SHA256 cost.
-const PBKDF2_ITERATIONS = 100_000;
-// Iteration count used for admins created before pbkdf2_iterations was
-// recorded (they were hashed at the original 210k — which only ever ran in
-// Node tests, never on the live Worker, so no live admin uses it).
-const LEGACY_PBKDF2_ITERATIONS = 210_000;
-const TOKEN_TTL_SECONDS = 8 * 3600; // match server's JWT_EXPIRES_IN default (8h)
-
-const ROLE_HIERARCHY: Record<AdminRole, number> = {
-  viewer: 0,
-  operator: 1,
-  'super-admin': 2,
-};
-
-/**
- * Parse a JSON blob read from KV.
- *
- * KV is external storage: a truncated or hand-edited value would otherwise raise
- * a bare SyntaxError from deep inside a handler with no clue which key was bad.
- * This names the key and re-throws. It deliberately does NOT fall back to an empty
- * collection — silently treating corruption as "no data" would make a tampered
- * fleet look empty, which is the wrong direction for an anti-theft system.
- */
-function parseKvJson<T>(raw: string, key: string): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error(`corrupt KV value at "${key}" — refusing to treat it as empty`);
-  }
-}
-
-/**
- * Parse a request body that was already read as text (agent HMAC verification
- * needs the raw bytes, so the handlers cannot re-read the stream).
- *
- * Returns null instead of throwing: a malformed body from an authenticated agent
- * is the caller's bug, and the honest answer is 400. Before this, the throw
- * escaped the handler and the runtime turned it into a 500 with no explanation.
- */
-function parseJsonBody(text: string): any | null {
-  try {
-    const value = JSON.parse(text);
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The request's URL.
- *
- * `Request.url` is absolute by construction, so a throw here means the Request
- * itself is malformed and never reached a handler. Centralised so the seven call
- * sites do not each need a try/catch, and so a hypothetical malformed URL
- * degrades to empty route params rather than a 500.
- */
-function requestUrl(request: Request): URL {
-  try {
-    return new URL(request.url);
-  } catch {
-    return new URL('https://invalid.invalid/');
-  }
-}
-
-async function listAdmins(env: Env): Promise<Admin[]> {
-  const data = await env.LOCKDOWN_KV.get(ADMINS_KEY);
-  return data ? parseKvJson<Admin[]>(data, ADMINS_KEY) : [];
-}
-
-async function saveAdmins(env: Env, admins: Admin[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(ADMINS_KEY, JSON.stringify(admins));
-}
-
-function b64encode(buf: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)));
-}
-
-function b64decode(b64: string): Uint8Array {
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-}
-
-/** PBKDF2-SHA256 password hash (base64) for a given salt + iteration count. */
-async function pbkdf2Hash(password: string, saltB64: string, iterations: number = PBKDF2_ITERATIONS): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: b64decode(saltB64) as BufferSource,
-      iterations,
-    },
-    keyMaterial,
-    256,
-  );
-  return b64encode(bits);
-}
-
-/** Create an admin record with a fresh random salt + PBKDF2 hash. */
-async function makeAdmin(username: string, password: string, role: AdminRole): Promise<Admin> {
-  const salt = b64encode(crypto.getRandomValues(new Uint8Array(16)).buffer);
-  const password_hash = await pbkdf2Hash(password, salt, PBKDF2_ITERATIONS);
-  return {
-    id: generateId(),
-    username,
-    password_hash,
-    salt,
-    pbkdf2_iterations: PBKDF2_ITERATIONS,
-    role,
-    created_at: new Date().toISOString(),
-  };
-}
-
-function b64urlEncode(str: string): string {
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function b64urlDecode(s: string): string {
-  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
-  return atob(s.replace(/-/g, '+').replace(/_/g, '/') + pad);
-}
-
-/** Issue a stateless HMAC-signed session token (JWT-shape: header.payload.sig). */
-async function signAdminToken(env: Env, admin: Admin): Promise<string> {
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
-  const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64urlEncode(
-    JSON.stringify({
-      id: admin.id,
-      username: admin.username,
-      role: admin.role,
-      exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS,
-    }),
-  );
-  const sig = await hmacSha256(secret, `${header}.${payload}`);
-  return `${header}.${payload}.${b64urlEncode(sig)}`;
-}
-
-/** Verify a signed token; returns the embedded admin claims or null. */
-async function verifyAdminToken(
-  env: Env,
-  token: string,
-): Promise<{ id: string; username: string; role: AdminRole } | null> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
-  const expected = await hmacSha256(secret, `${parts[0]}.${parts[1]}`);
-  const sig = b64urlDecode(parts[2]);
-  // Constant-time comparison.
-  if (sig.length !== expected.length) return null;
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return null;
-  try {
-    const payload = JSON.parse(b64urlDecode(parts[1]));
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null; // expired
-    if (!payload.id || !payload.role) return null;
-    return { id: payload.id, username: payload.username, role: payload.role };
-  } catch {
-    return null;
-  }
-}
-
-// The Worker authenticates with `Authorization: Bearer` and `X-Agent-Key` headers —
-// never cookies — so a wildcard origin does not expose credentials: a hostile page
-// can send the request but cannot attach a token it does not have. Restricting it
-// would break the Electron app, which loads the dashboard from file:// and
-// therefore sends a null origin. Named once here so the decision is reviewable
-// rather than repeated as a bare literal in three response paths.
-const TOKEN_API_CORS_ORIGIN = '*';
-
-const DEVICES_KEY = 'devices';
-const COMMANDS_KEY = 'commands';
-const KEYS_KEY = 'encryption_keys';
-const LOCATIONS_KEY = 'locations';
-const AUDIT_KEY = 'audit_log';
-const HW_ARTIFACTS_KEY = 'hw_test_artifacts';
-
-// Agent release metadata for GET /api/agent/update, written at release time by
-// CI (see serverless/README.md). It holds the version, the binary's sha256/size
-// and the detached Ed25519 signature over "v1:{version}:{sha256}" — produced
-// wherever the signing key lives, never in the Worker. The Worker only serves it,
-// so it cannot drift from the signature's payload.
-const AGENT_RELEASE_KEY = 'agent_release';
-const BIOS_PASSWORDS_KEY = 'bios_passwords';
-
-// KV-RACE-001: Checkin metadata is stored in a separate KV key from device
-// status. This prevents the checkin handler's read-modify-write of the
-// `devices` key from racing with the ACK handler's status update.
-// The checkin handler writes ONLY to `device_checkin:{id}`, never to
-// `devices`. Admin endpoints merge checkin metadata when returning device data.
-const CHECKIN_KEY_PREFIX = 'device_checkin:';
-
-async function listDevices(env: Env): Promise<Device[]> {
-  const data = await env.LOCKDOWN_KV.get(DEVICES_KEY);
-  return data ? parseKvJson<Device[]>(data, DEVICES_KEY) : [];
-}
-
-async function saveDevices(env: Env, devices: Device[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(DEVICES_KEY, JSON.stringify(devices));
-}
-
-// Checkin metadata helpers — separate KV key per device.
-// This is the fix for KV-RACE-001: the checkin handler writes to
-// `device_checkin:{id}` instead of modifying the `devices` array,
-// so it can never overwrite the ACK handler's status update.
-interface CheckinMetadata {
-  last_checkin: string | null;
-  mac_address: string | null;
-  hardware_uuid: string | null;
-  serial_number: string | null;
-  // firmware_audit: per-device SPI/Secure-Boot recon sent by the agent's
-  // firmware_audit module (PblPersistDxe delivery-path decision input).
-  // Stored on the checkin-metadata KV key (not `devices`) so it survives the
-  // KV-RACE-001 separation and is refreshed every checkin.
-  firmware_audit?: Record<string, unknown> | null;
-  firmware_audit_at?: string | null;
-  // How the device verifies updates (B-006). Absent means it never reported one;
-  // "unknown" is not the same fact as "unverified".
-  update_verification?: 'signature' | 'sha256-only' | 'key-unreadable';
-  // D-222: the agent's version. Stored on the checkin-metadata key for the same
-  // KV-RACE-001 reason as everything else here, and timestamped so a stale report is
-  // distinguishable from a current one.
-  agent_version?: string | null;
-  agent_version_at?: string | null;
-}
-
-/**
- * D-222: the agent version string, as reported at check-in.
- *
- * Bounded and charset-restricted because it is device-reported data the dashboard renders
- * verbatim. Anything that does not look like a version stays undefined (unknown) rather
- * than being stored, so a malformed value cannot read as compliance.
- */
-/** Hardware model from a check-in's firmware_audit block, when present and non-empty. */
-function firmwareAuditModel(audit: unknown): string | null {
-  if (!audit || typeof audit !== 'object' || Array.isArray(audit)) return null;
-  const model = (audit as Record<string, unknown>)['model'];
-  return typeof model === 'string' && model.trim() ? model.trim() : null;
-}
-
-function normalizeAgentVersion(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 64) return undefined;
-  return /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(trimmed) ? trimmed : undefined;
-}
-
-/**
- * Accept only the two modes the agent can report.
- *
- * An unrecognised or absent value must stay null (unknown) rather than be coerced
- * — "unknown" and "unverified" are different facts, and the dashboard shows them
- * differently.
- */
-function normalizeUpdateVerification(
-  value: unknown,
-): 'signature' | 'sha256-only' | 'key-unreadable' | undefined {
-  return value === 'signature' || value === 'sha256-only' || value === 'key-unreadable'
-    ? value
-    : undefined;
-}
-
-/**
- * A timestamp as written by either backend, in milliseconds (D-258).
- *
- * The Worker writes `new Date().toISOString()`, but a device first recorded by Express can carry
- * SQLite's zone-less `2026-11-05 10:00:00`, which V8 parses as *local* time. Zoneless values are
- * read as UTC — both backends write UTC — so the staleness window does not depend on where the
- * code runs.
- */
-function parseDbTimestamp(value: unknown): number | null {
-  if (!value) return null;
-  if (value instanceof Date) return value.getTime();
-  const raw = String(value).trim();
-  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(raw)
-    ? `${raw.replace(' ', 'T')}Z`
-    : raw;
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-/**
- * How often an ACTIVE device should poll, in seconds.
- *
- * 60 rather than 300: the agent only learns about a queued command when it polls, so a
- * five-minute interval made flagging a device look inert for five minutes (S269).
- *
- * A function, not two literals, because the S269 fix landed in one response branch while
- * `ADAPTIVE_POLL` kept returning 300 from the other — measured on MOLE as
- * "Adaptive polling: 30s -> 300s (status=active)" AFTER the fix (S270). A change nobody
- * read back is a change nobody can rely on.
- */
-function activePollSeconds(env: Env): number {
-  const raw = Number(env.ACTIVE_POLL_SECONDS ?? 60);
-  return Number.isFinite(raw) && raw > 0 ? raw : 60;
-}
-
-
-const AGENT_VERSION_STALE_MS = 60 * 60 * 1000;
-
-function isAgentVersionStale(device: Device): boolean {
-  const lastCheckin = parseDbTimestamp(device.last_checkin);
-  if (lastCheckin === null) return false;
-  const reported = parseDbTimestamp(device.agent_version_at);
-  if (reported === null) return true;
-  return lastCheckin - reported > AGENT_VERSION_STALE_MS;
-}
-
-async function getCheckinMetadata(env: Env, deviceId: string): Promise<CheckinMetadata | null> {
-  const data = await env.LOCKDOWN_KV.get(`${CHECKIN_KEY_PREFIX}${deviceId}`);
-  return data ? parseKvJson<CheckinMetadata>(data, `${CHECKIN_KEY_PREFIX}${deviceId}`) : null;
-}
-
-async function saveCheckinMetadata(env: Env, deviceId: string, metadata: CheckinMetadata): Promise<void> {
-  await env.LOCKDOWN_KV.put(`${CHECKIN_KEY_PREFIX}${deviceId}`, JSON.stringify(metadata));
-}
-
-// Merge checkin metadata into a device object for admin API responses.
-// Falls back to the device's own fields if no checkin metadata exists
-// (e.g., for devices enrolled before the KV-RACE-001 fix).
-function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata | null): Device {
-  if (!metadata) return device;
-  return {
-    ...device,
-    last_checkin: metadata.last_checkin ?? device.last_checkin,
-    mac_address: metadata.mac_address ?? device.mac_address,
-    hardware_uuid: metadata.hardware_uuid ?? device.hardware_uuid,
-    serial_number: metadata.serial_number ?? device.serial_number,
-    firmware_audit: metadata.firmware_audit ?? device.firmware_audit ?? null,
-    firmware_audit_at: metadata.firmware_audit_at ?? device.firmware_audit_at ?? null,
-    update_verification: metadata.update_verification ?? null,
-    agent_version: metadata.agent_version ?? device.agent_version ?? null,
-    agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
-    // Surface the hardware model the check-in reported. It only exists inside
-    // firmware_audit, and nothing mapped it onto the device, so the UI showed its
-    // 'no value' placeholder on every device.
-    model: firmwareAuditModel(metadata.firmware_audit) ?? device.model ?? null,
-    agent_version_stale: isAgentVersionStale({
-      ...device,
-      last_checkin: metadata.last_checkin ?? device.last_checkin,
-      agent_version_at: metadata.agent_version_at ?? device.agent_version_at ?? null,
-    }),
-  };
-}
-
-const COMMAND_INDEX_KEY = 'command_index';
-const COMMAND_KEY_PREFIX = 'command:';
-
-/** KV key for one command record (ADR-002). */
-function commandKey(id: string): string {
-  return `${COMMAND_KEY_PREFIX}${id}`;
-}
-
-/** One command record, or null when the key is absent or unreadable. */
-async function getCommand(env: Env, id: string): Promise<Command | null> {
-  const data = await env.LOCKDOWN_KV.get(commandKey(id));
-  if (!data) return null;
-  try {
-    return JSON.parse(data) as Command;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Ids of every command, migrating the legacy whole-list key on first read.
- *
- * ADR-002: commands are per-entity records so an ACK cannot rewrite the list a concurrent
- * lock/flag was building. The migration is lazy and idempotent — two isolates migrating at
- * once write identical `command:<id>` records and the same index, then both delete the
- * legacy key.
- */
-async function listCommandIds(env: Env): Promise<string[]> {
-  const data = await env.LOCKDOWN_KV.get(COMMAND_INDEX_KEY);
-  if (data) {
-    try {
-      const parsed: unknown = JSON.parse(data);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
-      }
-    } catch {
-      // Corrupt index: fall through and rebuild it from the legacy key if that exists.
-    }
-  }
-
-  const legacy = await env.LOCKDOWN_KV.get(COMMANDS_KEY);
-  if (!legacy) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(legacy);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-
-  const commands = parsed.filter(
-    (c): c is Command => !!c && typeof (c as Command).id === 'string',
-  );
-  if (commands.length === 0) return [];
-
-  for (const command of commands) {
-    await env.LOCKDOWN_KV.put(commandKey(command.id), JSON.stringify(command));
-  }
-  const ids = commands.map((c) => c.id);
-  await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(ids));
-  await env.LOCKDOWN_KV.delete(COMMANDS_KEY);
-  return ids;
-}
-
-async function listCommands(env: Env): Promise<Command[]> {
-  const ids = await listCommandIds(env);
-  const records = await Promise.all(ids.map((id) => getCommand(env, id)));
-  // An index entry whose record is gone — deleted, or an append that has not propagated
-  // across colos yet — is skipped rather than thrown: a poll must not fail because one id
-  // lagged, which is the same tolerance the list-based read had.
-  return records.filter((c): c is Command => c !== null);
-}
-
-/** Remove every command belonging to a device, one record at a time. */
-async function deleteCommandsForDevice(env: Env, deviceId: string): Promise<number> {
-  const ids = await listCommandIds(env);
-  const keep: string[] = [];
-  let removed = 0;
-  for (const id of ids) {
-    const command = await getCommand(env, id);
-    if (command && command.device_id === deviceId) {
-      await env.LOCKDOWN_KV.delete(commandKey(id));
-      removed += 1;
-    } else {
-      keep.push(id);
-    }
-  }
-  if (removed > 0) {
-    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(keep));
-  }
-  return removed;
-}
-
-async function createCommand(env: Env, command: Command): Promise<void> {
-  await env.LOCKDOWN_KV.put(commandKey(command.id), JSON.stringify(command));
-  const ids = await listCommandIds(env);
-  if (!ids.includes(command.id)) {
-    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify([...ids, command.id]));
-  }
-}
-
-/**
- * Apply a patch to one command. Returns the stored record, or null when it is gone.
- *
- * This is the point of ADR-002: an ACK reads and writes exactly one key, so it cannot
- * clobber a device/command list that another request is building from an older snapshot.
- */
-async function updateCommand(
-  env: Env,
-  id: string,
-  patch: Partial<Command>,
-): Promise<Command | null> {
-  const current = await getCommand(env, id);
-  if (!current) return null;
-  const next: Command = { ...current, ...patch };
-  await env.LOCKDOWN_KV.put(commandKey(id), JSON.stringify(next));
-  return next;
-}
-
-async function listKeys(env: Env): Promise<EncryptionKey[]> {
-  const data = await env.LOCKDOWN_KV.get(KEYS_KEY);
-  return data ? parseKvJson<EncryptionKey[]>(data, KEYS_KEY) : [];
-}
-
-async function saveKeys(env: Env, keys: EncryptionKey[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(KEYS_KEY, JSON.stringify(keys));
-}
-
-// S4-serverless: secrets envelope for bios_passwords at rest. When KV_KEK
-// is provisioned, each credential's `password` is AES-256-GCM-encrypted
-// before it lands in KV and decrypted transparently on read. Rows written
-// before KV_KEK existed (plaintext `password`) still read back — a row is
-// treated as encrypted only when `password_enc` is present.
-interface StoredBiosPassword extends Omit<BiosPassword, 'password'> {
-  password?: string;      // plaintext (legacy / no KEK)
-  password_enc?: string;  // base64(nonce||ciphertext) when KV_KEK set
-}
-
-async function getKek(env: Env): Promise<CryptoKey | null> {
-  const kek = (env as { KV_KEK?: string }).KV_KEK;
-  if (!kek) return null;
-  const raw = b64decode(kek);
-  return crypto.subtle.importKey('raw', raw as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt']);
-}
-
-async function encSecret(env: Env, plaintext: string): Promise<{ password_enc?: string; password?: string }> {
-  const kek = await getKek(env);
-  if (!kek) return { password: plaintext };
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce as BufferSource }, kek, new TextEncoder().encode(plaintext));
-  const blob = new Uint8Array(nonce.length + ct.byteLength);
-  blob.set(nonce, 0);
-  blob.set(new Uint8Array(ct), nonce.length);
-  return { password_enc: b64encode(blob.buffer) };
-}
-
-async function decSecret(env: Env, row: StoredBiosPassword): Promise<string> {
-  if (row.password_enc) {
-    const kek = await getKek(env);
-    if (!kek) return ''; // encrypted but no KEK — can't decrypt
-    const blob = b64decode(row.password_enc);
-    const nonce = blob.slice(0, 12);
-    const ct = blob.slice(12);
-    const pt = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: nonce as BufferSource }, kek, ct as BufferSource);
-    return new TextDecoder().decode(pt);
-  }
-  return row.password ?? '';
-}
-
-async function listBiosPasswords(env: Env): Promise<BiosPassword[]> {
-  const data = await env.LOCKDOWN_KV.get(BIOS_PASSWORDS_KEY);
-  if (!data) return [];
-  const stored = parseKvJson<StoredBiosPassword[]>(data, BIOS_PASSWORDS_KEY);
-  // Decrypt each row's password transparently.
-  const out: BiosPassword[] = [];
-  for (const r of stored) {
-    out.push({
-      device_id: r.device_id,
-      password_type: r.password_type,
-      password: await decSecret(env, r),
-      created_at: r.created_at,
-    });
-  }
-  return out;
-}
-
-async function saveBiosPasswords(env: Env, pws: BiosPassword[]): Promise<void> {
-  const stored: StoredBiosPassword[] = [];
-  for (const p of pws) {
-    const enc = await encSecret(env, p.password);
-    stored.push({
-      device_id: p.device_id,
-      password_type: p.password_type,
-      created_at: p.created_at,
-      ...enc,
-    });
-  }
-  await env.LOCKDOWN_KV.put(BIOS_PASSWORDS_KEY, JSON.stringify(stored));
-}
-
-async function listLocations(env: Env): Promise<LocationReport[]> {
-  const data = await env.LOCKDOWN_KV.get(LOCATIONS_KEY);
-  return data ? parseKvJson<LocationReport[]>(data, LOCATIONS_KEY) : [];
-}
-
-async function saveHwArtifacts(env: Env, artifacts: HwTestArtifact[]): Promise<void> {
-  await env.LOCKDOWN_KV.put(HW_ARTIFACTS_KEY, JSON.stringify(artifacts));
-}
-
-async function saveLocations(env: Env, locations: LocationReport[]): Promise<void> {
-  // Cap at 1000 most recent to stay within KV value size limits
-  const capped = locations.slice(-1000);
-  await env.LOCKDOWN_KV.put(LOCATIONS_KEY, JSON.stringify(capped));
-}
-
-async function listAudit(env: Env): Promise<AuditEntry[]> {
-  const data = await env.LOCKDOWN_KV.get(AUDIT_KEY);
-  return data ? parseKvJson<AuditEntry[]>(data, AUDIT_KEY) : [];
-}
-
-async function saveAudit(env: Env, entries: AuditEntry[]): Promise<void> {
-  // Cap at 500 most recent to stay within KV value size limits
-  const capped = entries.slice(-500);
-  await env.LOCKDOWN_KV.put(AUDIT_KEY, JSON.stringify(capped));
-}
-
-async function addAuditEntry(env: Env, deviceId: string, action: string, detail: string): Promise<void> {
-  const entries = await listAudit(env);
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
-  entries.push({
-    id: generateId(),
-    device_id: deviceId,
-    action,
-    detail,
-    created_at: new Date().toISOString(),
-    hostname: device?.hostname || null,
-    admin_username: 'admin',
-  });
-  await saveAudit(env, entries);
-}
-
-// ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
@@ -1068,11 +61,10 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   if (!payload) return errorResponse('Invalid JSON body', 400);
   const { mac_address, hardware_uuid, serial_number } = payload;
 
-  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to
-  // the `devices` key. Same fix as handleAgentCheckin.
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx >= 0) {
+  // KV-RACE-001: write check-in metadata to a separate KV key, NOT to the device record. Same
+  // fix as handleAgentCheckin; ADR-003 means `device` is already loaded, so there is neither an
+  // index to find nor a fleet to read.
+  {
     // A ping is a partial heartbeat. Spread the stored metadata so fields this
     // payload does not carry — firmware_audit, a previously reported
     // update_verification — survive: replacing the object wholesale dropped the
@@ -1081,9 +73,9 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
     await saveCheckinMetadata(env, device.id, {
       ...existing,
       last_checkin: new Date().toISOString(),
-      mac_address: mac_address || devices[idx].mac_address,
-      hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
-      serial_number: serial_number || devices[idx].serial_number,
+      mac_address: mac_address || device.mac_address,
+      hardware_uuid: hardware_uuid || device.hardware_uuid,
+      serial_number: serial_number || device.serial_number,
       update_verification:
         normalizeUpdateVerification(payload.update_verification)
         ?? existing?.update_verification,
@@ -1098,7 +90,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
 
   if (pendingCmd) {
     return jsonResponse({
-      status: devices[idx].status,
+      status: device.status,
       command: {
         id: pendingCmd.id,
         command_type: pendingCmd.command_type,
@@ -1109,7 +101,7 @@ async function handlePing(request: Request, env: Env): Promise<Response> {
   }
 
   // No pending command — adaptive polling
-  const status = devices[idx].status;
+  const status = device.status;
   const pollInterval = status === 'stolen' ? 10 : activePollSeconds(env);
   return jsonResponse({
     status,
@@ -1185,8 +177,9 @@ async function uninstallAuth(
   const token = authHeader.replace(/^Bearer\s+/i, '');
 
   if (apiKey) {
+    // ADR-003: one read through the `agent_key:` pointer, not a scan of the fleet.
     const apiKeyHash = await sha256(apiKey);
-    const device = (await listDevices(env)).find((d) => d.api_key_hash === apiKeyHash);
+    const device = await getDeviceByApiKeyHash(env, apiKeyHash);
     if (device) return { device };
   }
   if (token && env.ADMIN_TOKEN && token === env.ADMIN_TOKEN) {
@@ -1328,258 +321,22 @@ async function handleUninstallAuthVerify(request: Request, env: Env): Promise<Re
 }
 
 /**
- * Agent-compatible checkin — matches the full server's /api/agent/checkin
- * response shape so the agent doesn't need to know which backend it's
- * talking to.
- *
- * Response: { device_id, status, poll_interval, command: { id, type,
- *   command_uuid, key_material, bios_password, power_on_password,
- *   enable_pba, ... } | null }
- *
- * For unlock commands, the encryption key + BIOS password are released
- * in the response (same as the full server's fetchUnlockMaterials).
- */
-async function handleAgentCheckin(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
-  if (!device) {
-    return errorResponse('Authentication failed', 401);
-  }
-
-  const payload = parseJsonBody(body);
-  if (!payload) return errorResponse('Invalid JSON body', 400);
-  const { mac_address, hardware_uuid, serial_number } = payload;
-  // firmware_audit: optional per-device SPI/Secure-Boot recon (PblPersistDxe
-  // delivery-path decision). Validate it is a plain object — same contract
-  // as the Express server (agent.js): malformed/non-object → null, still
-  // records the checkin (partial data is still useful posture signal).
-  const firmwareAudit = (payload.firmware_audit
-    && typeof payload.firmware_audit === 'object'
-    && !Array.isArray(payload.firmware_audit))
-    ? payload.firmware_audit as Record<string, unknown>
-    : null;
-
-  // KV-RACE-001: Write checkin metadata to a separate KV key, NOT to the
-  // `devices` key. This prevents the checkin handler from overwriting the
-  // ACK handler's device status update when KV reads return stale data.
-  // The device's status is read from `devices` (which is only written by
-  // enroll, ACK, flag-stolen, and recover — never by checkin).
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx < 0) {
-    return errorResponse('Device not found', 404);
-  }
-  // Save checkin metadata to a separate KV key (the fix for KV-RACE-001)
-  // update_verification falls back to the stored value when this check-in omits
-  // it, mirroring the Express server's `COALESCE($6, update_verification)`: an
-  // older agent must not reset a known mode to "unknown" on every check-in.
-  const existingMetadata = await getCheckinMetadata(env, device.id);
-  await saveCheckinMetadata(env, device.id, {
-    last_checkin: new Date().toISOString(),
-    mac_address: mac_address || devices[idx].mac_address,
-    hardware_uuid: hardware_uuid || devices[idx].hardware_uuid,
-    serial_number: serial_number || devices[idx].serial_number,
-    firmware_audit: firmwareAudit,
-    firmware_audit_at: firmwareAudit ? new Date().toISOString() : null,
-    update_verification:
-      normalizeUpdateVerification(payload.update_verification)
-      ?? existingMetadata?.update_verification,
-    // D-222: same rule as update_verification — a pre-D-222 agent that omits the field
-    // must not erase a version an earlier check-in reported.
-    // The agent reports its build as the X-Agent-Version header (agent.py:3437); reading only
-    // payload.agent_version left this null forever, so the dashboard's Agent column was blank.
-    agent_version: normalizeAgentVersion(payload.agent_version ?? request.headers.get('X-Agent-Version')) ?? existingMetadata?.agent_version,
-    agent_version_at: normalizeAgentVersion(payload.agent_version ?? request.headers.get('X-Agent-Version'))
-      ? new Date().toISOString()
-      : (existingMetadata?.agent_version_at ?? null),
-  });
-  // Do NOT call saveDevices() here — that would race with the ACK handler.
-
-  // Check for pending commands (oldest first)
-  const commands = await listCommands(env);
-  const pendingCmds = commands
-    .filter((c) => c.device_id === device.id && c.status === 'pending')
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const pendingCmd = pendingCmds[0] || null;
-
-  // Adaptive poll interval based on device status. `active` comes from
-  // activePollSeconds() so both response branches agree.
-  const status = devices[idx].status;
-  const ADAPTIVE_POLL: Record<string, number> = {
-    stolen: 30, tracking: 30, recovering: 30, locked: 60, active: activePollSeconds(env),
-  };
-  const pollInterval = ADAPTIVE_POLL[status] ?? activePollSeconds(env);
-
-  if (!pendingCmd) {
-    return jsonResponse({
-      device_id: device.id,
-      status,
-      poll_interval: pollInterval,
-      command: null,
-    });
-  }
-
-  // For unlock commands, fetch the encryption key + BIOS password.
-  // The key is stored in KV when the agent ACKed the lockdown. We return
-  // it to the agent so it can decrypt the files. This matches the full
-  // server's fetchUnlockMaterials() — the key is not "gated" by a release
-  // flag; it's just returned when an unlock command is pending.
-  let keyMaterial: string | null = null;
-  let biosPassword: string | null = null;
-  let powerOnPassword: string | null = null;
-  let bitlockerPin: string | null = null;
-  let bitlockerRecoveryPassword: string | null = null;
-  if (pendingCmd.command_type === 'unlock') {
-    const keys = await listKeys(env);
-    // Find the most recent key for this device (lockdown ACK key, not
-    // deadman key). Match by device_id and exclude the synthetic 'deadman'
-    // command_id. Sort by created_at implicitly via array order (most
-    // recently pushed is last, but we search all and pick the first match).
-    // Newest first. `find()` returns the FIRST match, which is the OLDEST escrowed
-    // key: after a second lockdown the agent was handed the previous key and
-    // decryption failed with cryptography.fernet.InvalidToken while the correct key
-    // sat in KV (S269). Escrow appends, so the last element is the newest; created_at
-    // is used when present because it is the explicit ordering.
-    const deviceKeys = keys
-      .filter((k) => k.device_id === device.id && k.command_id !== 'deadman')
-      .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
-    const deviceKey = deviceKeys.length ? deviceKeys[deviceKeys.length - 1] : undefined;
-    if (deviceKey) {
-      keyMaterial = deviceKey.key_material;
-      // Mark as released for tracking purposes (the agent has it now)
-      if (!deviceKey.released_at) {
-        deviceKey.released_at = new Date().toISOString();
-        await saveKeys(env, keys);
-      }
-    }
-    // S4-serverless: fetch the stored BIOS/PBA credentials the agent needs
-    // to remove UEFI lockdown (setup + power-on) and that the dashboard
-    // shows in the PBA Recovery panel (bitlocker pin + recovery).
-    const pws = await listBiosPasswords(env);
-    const devicePws = pws
-      .filter((p) => p.device_id === device.id)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at));
-    const creds = groupPbaCredentials(devicePws);
-    biosPassword = creds.setup_password;
-    powerOnPassword = creds.power_on_password;
-    bitlockerPin = creds.bitlocker_pin;
-    bitlockerRecoveryPassword = creds.bitlocker_recovery_password;
-  }
-
-  return jsonResponse({
-    device_id: device.id,
-    status,
-    poll_interval: pendingCmd.command_type === 'unlock' ? 30 : pollInterval,
-    command: {
-      id: pendingCmd.id,
-      type: pendingCmd.command_type,
-      command_uuid: pendingCmd.command_uuid || null,
-      key_material: keyMaterial,
-      bios_password: biosPassword,
-      power_on_password: powerOnPassword,
-      // Was hardcoded false, so the opt-in flag the operator sets at flag-stolen
-      // never reached the agent: PBA was silently never enabled on this backend.
-      enable_pba: pendingCmd.enable_pba === true,
-      bitlocker_pin: bitlockerPin,
-      bitlocker_recovery_password: bitlockerRecoveryPassword,
-      // Duress code: forwarded from the queued unlock command so the
-      // agent knows to pretend-unlock and silently re-lock.
-      duress_code: pendingCmd.duress_code ?? null,
-    },
-  });
-}
-
-/**
- * Agent-compatible deadman report — matches the full server's
- * /api/agent/deadman-report. Stores the encryption key and marks the
- * device as locked.
- */
-async function handleDeadmanReport(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
-  if (!device) {
-    return errorResponse('Authentication failed', 401);
-  }
-
-  const payload = parseJsonBody(body);
-  if (!payload) return errorResponse('Invalid JSON body', 400);
-  const { key_material } = payload;
-
-  if (!key_material) {
-    return errorResponse('key_material required', 400);
-  }
-
-  // Store the encryption key (idempotent — replace if exists for this device)
-  const keys = await listKeys(env);
-  const filtered = keys.filter((k) => !(k.device_id === device.id && k.command_id === 'deadman'));
-  filtered.push({
-    device_id: device.id,
-    command_id: 'deadman',
-    key_material,
-    released_at: null,
-  });
-  await saveKeys(env, filtered);
-
-  // Mark device as locked (the deadman switch actually encrypted it)
-  const devices = await listDevices(env);
-  const idx = devices.findIndex((d) => d.id === device.id);
-  if (idx >= 0) {
-    devices[idx].status = 'locked';
-    await saveDevices(env, devices);
-  }
-
-  console.log('Deadman report: device=%s key stored, status=locked', device.hostname);
-  return jsonResponse({ ok: true });
-}
-
-/**
- * Agent-compatible location report — stores location data in KV.
- */
-async function handleAgentLocation(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
-  if (!device) {
-    return errorResponse('Authentication failed', 401);
-  }
-
-  const payload = parseJsonBody(body);
-  if (!payload) return errorResponse('Invalid JSON body', 400);
-  const { location } = payload;
-  if (!location) {
-    return errorResponse('location required', 400);
-  }
-
-  const locations = await listLocations(env);
-  locations.push({
-    device_id: device.id,
-    latitude: location.latitude ?? null,
-    longitude: location.longitude ?? null,
-    accuracy_meters: location.accuracy_meters ?? null,
-    source: location.source || 'ip',
-    city: location.city ?? null,
-    region: location.region ?? null,
-    country: location.country ?? null,
-    ip_address: location.ip ?? null,
-    wifi_count: location.wifi_count ?? null,
-    created_at: new Date().toISOString(),
-  });
-  await saveLocations(env, locations);
-
-  return jsonResponse({ ok: true });
-}
-
-/**
  * Serialize state mutations inside this isolate.
  *
- * Every handler that changes device or command state loads a whole JSON list from KV,
- * edits it and writes it back. A check-in and a command-ACK arriving together therefore
- * raced: the agent ACKed `unlock … status=executed`, the audit recorded the confirmation,
- * and a read one second later still showed the command `pending` with the device
- * `locked`, because the other request's older snapshot was written last (S269).
+ * This was the first fix for the class of defect that whole-list KV records cause: every
+ * handler that changed device or command state loaded a whole JSON list, edited it and wrote
+ * it back, so a check-in and a command-ACK arriving together raced. The agent ACKed
+ * `unlock … status=executed`, the audit recorded the confirmation, and a read one second later
+ * still showed the command `pending` with the device `locked` (S269).
  *
- * A promise chain removes the race for requests served by the same isolate, which is the
- * only case that can be fixed without Durable Objects. Cross-isolate races remain; a
- * full fix means per-entity keys (`device:<id>`) instead of whole-list records.
+ * ADR-002 and ADR-003 removed the cause for commands and devices — they are per-entity records
+ * now, so two writers touch different keys. What remains here is the multi-key paths
+ * (an enrolment writes a record, an index entry and an API-key pointer) and the two small lists
+ * that are still single values: `admins`, `hw_test_artifacts`.
+ *
+ * A promise chain serialises requests served by the same isolate, which is the only case that
+ * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
+ * the same one, applied store by store.
  */
 let mutationChain: Promise<unknown> = Promise.resolve();
 function serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
@@ -1589,228 +346,6 @@ function serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return run;
-}
-
-async function handleCommandAck(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
-  if (!device) {
-    return errorResponse('Authentication failed', 401);
-  }
-
-  const payload = parseJsonBody(body);
-  if (!payload) return errorResponse('Invalid JSON body', 400);
-  const {
-    command_id,
-    result_status,
-    key_material,
-    bios_password,
-    power_on_password,
-    bitlocker_pin,
-    bitlocker_recovery_password,
-    boot_lock_status,
-    boot_lock_detail,
-    encryption_blocked_files,
-    lock_session_context,
-  } = payload;
-
-  if (!command_id || !result_status) {
-    return errorResponse('command_id and result_status required', 400);
-  }
-
-  // Update command status. One command, one key (ADR-002): this used to read and rewrite
-  // the whole list, so an ACK and a concurrent lock/flag overwrote each other's fields.
-  const command = await getCommand(env, command_id);
-  if (!command || command.device_id !== device.id) {
-    return errorResponse('Command not found', 404);
-  }
-
-  // Idempotent: if already executed, return success
-  if (command.status === 'executed') {
-    return jsonResponse({ ok: true, deduplicated: true });
-  }
-
-  // E-EFFECTIVENESS: a lockdown that reports boot-lock attempted with zero
-  // critical controls applied is NOT effective — the device is encrypted-only.
-  // The rule is Express's (server/src/routes/agent.js:411-418). This handler used
-  // to destructure boot_lock_detail and discard it, so on the serverless backend
-  // every silently no-op'd boot-lock was recorded as a plain success.
-  let lockdownEffective: boolean | null = null;
-  if (result_status === 'executed' && command.command_type === 'lockdown' && boot_lock_detail) {
-    const detail = boot_lock_detail as {
-      boot_lock_attempted?: unknown;
-      critical_applied_total?: unknown;
-    };
-    if (detail.boot_lock_attempted === true) {
-      const criticalTotal =
-        typeof detail.critical_applied_total === 'number' ? detail.critical_applied_total : 0;
-      lockdownEffective = criticalTotal > 0;
-    }
-  }
-
-  const confirmed = (await updateCommand(env, command_id, {
-    status: result_status,
-    executed_at: new Date().toISOString(),
-    boot_lock_status: typeof boot_lock_status === 'string' ? boot_lock_status : null,
-    boot_lock_detail: (boot_lock_detail ?? null) as Command['boot_lock_detail'],
-    lockdown_effective: lockdownEffective,
-    encryption_blocked_files: (encryption_blocked_files ?? null) as Command['encryption_blocked_files'],
-    lock_session_context: (lock_session_context ?? null) as Command['lock_session_context'],
-    ...(payload.command_uuid ? { command_uuid: payload.command_uuid } : {}),
-  })) ?? command;
-  // `confirmed` is the record as stored; the audit detail below must read THAT, not the
-  // snapshot taken before the update (which is what the in-place mutation used to hide).
-
-  // Store encryption key if provided
-  if (key_material) {
-    const keys = await listKeys(env);
-    // Remove any existing key for this device+command
-    const filtered = keys.filter(
-      (k) => !(k.device_id === device.id && k.command_id === command_id),
-    );
-    filtered.push({
-      device_id: device.id,
-      command_id,
-      key_material,
-      released_at: null,
-    });
-    await saveKeys(env, filtered);
-  }
-
-  // S4-serverless: store BIOS/PBA credentials by type (mirrors server's
-  // bios_passwords inserts). These power both the unlock-materials path in
-  // checkin and the pba-credentials admin endpoint.
-  const credsToStore: Array<[string | undefined, BiosPassword['password_type']]> = [
-    [bios_password, 'setup'],
-    [power_on_password, 'power_on'],
-    [bitlocker_pin, 'bitlocker_pin'],
-    [bitlocker_recovery_password, 'bitlocker_recovery'],
-  ];
-  const anyCreds = credsToStore.some(([v]) => v != null && v !== '');
-  if (anyCreds) {
-    const pws = await listBiosPasswords(env);
-    for (const [value, type] of credsToStore) {
-      if (value == null || value === '') continue;
-      // Replace any existing credential of this type for the device.
-      const idx = pws.findIndex((p) => p.device_id === device.id && p.password_type === type);
-      const row: BiosPassword = {
-        device_id: device.id,
-        password_type: type,
-        password: value,
-        created_at: new Date().toISOString(),
-      };
-      if (idx >= 0) pws[idx] = row; else pws.push(row);
-    }
-    await saveBiosPasswords(env, pws);
-  }
-
-  // Update device status based on command result
-  const devices = await listDevices(env);
-  const devIdx = devices.findIndex((d) => d.id === device.id);
-  if (devIdx >= 0) {
-    if (result_status === 'executed') {
-      if (command.command_type === 'lockdown') {
-        devices[devIdx].status = 'locked';
-      } else if (command.command_type === 'unlock') {
-        devices[devIdx].status = 'active';
-      } else if (command.command_type === 'track') {
-        devices[devIdx].status = 'tracking';
-      } else if (command.command_type === 'stop_track') {
-        devices[devIdx].status = 'active';
-      }
-    }
-    await saveDevices(env, devices);
-  }
-
-  // The dashboard's lockdown-effectiveness panel does not read the command record:
-  // it scans the AUDIT log for the most recent `agent_<type>_confirmed` entry and
-  // parses that entry's detail (dashboard/src/pages/DeviceDetailPage.jsx:40-49).
-  // Express writes one per executed command (server/src/routes/agent.js:525-534), so
-  // without this the panel was dark on the serverless backend no matter what the
-  // command record held — which made the effectiveness fields restored in sessions
-  // 185-186 unreachable from the UI.
-  if (result_status === 'executed') {
-    await addAuditEntry(
-      env,
-      device.id,
-      `agent_${command.command_type}_confirmed`,
-      JSON.stringify({
-        command_id,
-        command_uuid: confirmed.command_uuid ?? undefined,
-        boot_lock_status: confirmed.boot_lock_status ?? undefined,
-        boot_lock_detail: confirmed.boot_lock_detail ?? undefined,
-        lockdown_effective: confirmed.lockdown_effective ?? undefined,
-        encryption_blocked_files: confirmed.encryption_blocked_files ?? undefined,
-        lock_session_context: confirmed.lock_session_context ?? undefined,
-      }),
-    );
-  }
-
-  console.log(
-    'ACK: device=%s command=%s status=%s boot_lock=%s',
-    device.hostname,
-    command_id,
-    result_status,
-    boot_lock_status,
-  );
-
-  return jsonResponse({ ok: true });
-}
-
-/**
- * S4: Escrow-before-arm — dedicated key-escrow endpoint (agent path).
- *
- * Mirrors the Express server's /api/agent/escrow-key. The agent calls this
- * BEFORE encrypting during a lockdown; the server persists the key bound
- * to the command_id so the recovery key is escrowed before the point of
- * no return. If escrow fails the agent refuses to encrypt — the device
- * stays unlocked rather than locked-out.
- *
- * Idempotent on (device_id, command_id): retries keep the first key.
- */
-async function handleEscrowKey(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
-  if (!device) {
-    return errorResponse('Authentication failed', 401);
-  }
-
-  const payload = parseJsonBody(body);
-  if (!payload) return errorResponse('Invalid JSON body', 400);
-  const { command_id, key_material } = payload;
-  if (!command_id || !key_material) {
-    return errorResponse('command_id and key_material required', 400);
-  }
-  if (typeof key_material !== 'string') {
-    return errorResponse('key_material must be a string', 400);
-  }
-
-  // The command must exist and belong to this device.
-  const commands = await listCommands(env);
-  const cmd = commands.find(
-    (c) => c.id === command_id && c.device_id === device.id,
-  );
-  if (!cmd) {
-    return errorResponse('Command not found for this device', 404);
-  }
-
-  // Idempotent: keep the first escrowed key for this device+command.
-  const keys = await listKeys(env);
-  const exists = keys.some(
-    (k) => k.device_id === device.id && k.command_id === command_id,
-  );
-  if (!exists) {
-    keys.push({
-      device_id: device.id,
-      command_id,
-      key_material,
-      created_at: new Date().toISOString(),
-      released_at: null,
-    });
-    await saveKeys(env, keys);
-  }
-
-  return jsonResponse({ escrowed: true, command_id });
 }
 
 async function handleEnroll(request: Request, env: Env): Promise<Response> {
@@ -1848,7 +383,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
       existing.mac_address = payload.mac_address || existing.mac_address;
       existing.serial_number = payload.serial_number || existing.serial_number;
       existing.status = 'active';
-      await saveDevices(env, devices);
+      await putDevice(env, existing);
 
       return jsonResponse(
         {
@@ -1862,6 +397,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
+          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
           reassociated: true,
         },
         200,
@@ -1882,8 +418,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
     api_key_hash: apiKeyHash,
   };
 
-  devices.push(device);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   return jsonResponse(
     {
@@ -1897,6 +432,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
+      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
     },
     201,
   );
@@ -2031,7 +567,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
       existing.mac_address = payload.mac_address || existing.mac_address;
       existing.serial_number = payload.serial_number || existing.serial_number;
       existing.status = 'active';
-      await saveDevices(env, devices);
+      await putDevice(env, existing);
 
       return jsonResponse(
         {
@@ -2045,6 +581,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
+          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
           reassociated: true,
         },
         200,
@@ -2065,8 +602,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
     api_key_hash: apiKeyHash,
   };
 
-  devices.push(device);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   return jsonResponse(
     {
@@ -2080,6 +616,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
+      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
     },
     201,
   );
@@ -2100,18 +637,23 @@ async function handleListDevices(request: Request, env: Env): Promise<Response> 
   // `api_key_hash` is destructured out so it can never leave the Worker; the `_` prefix is
   // what marks the binding as deliberately unused (the harness treats an unprefixed unused
   // binding as a bug, which it is everywhere else in this file).
-  const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => d);
+  const commands = await listCommands(env);
+  const safe = merged.map(({ api_key_hash: _api_key_hash, ...d }) => ({
+    ...d,
+    lock_state: lockStateFor(commands, d),
+  }));
   // D-222: a rollout asks "which devices are not on build X?". `unknown` is a distinct
   // query from any literal version — never-reported is not "on some other version".
-  const url = new URL(request.url);
+  const url = requestUrl(request);
   const requestedVersion = (url.searchParams.get('agent_version') || '').trim();
   if (!requestedVersion) return jsonResponse(safe);
-  const filtered = requestedVersion === 'unknown'
-    ? safe.filter((d) => !d.agent_version)
-    : requestedVersion === 'stale'
-      ? safe.filter((d) => d.agent_version_stale)
-      : safe.filter((d) => d.agent_version === requestedVersion);
-  return jsonResponse(filtered);
+  if (requestedVersion === 'unknown') {
+    return jsonResponse(safe.filter((d) => !d.agent_version));
+  }
+  if (requestedVersion === 'stale') {
+    return jsonResponse(safe.filter((d) => d.agent_version_stale));
+  }
+  return jsonResponse(safe.filter((d) => d.agent_version === requestedVersion));
 }
 
 async function handleGetDevice(
@@ -2121,8 +663,8 @@ async function handleGetDevice(
 ): Promise<Response> {
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2133,7 +675,8 @@ async function handleGetDevice(
   // `res.json(device)` shape (the dashboard expects devRes.data to be
   // the device, not a wrapper object).
   const { api_key_hash: _api_key_hash, ...safeDevice } = merged;
-  return jsonResponse(safeDevice);
+  const commands = await listCommands(env);
+  return jsonResponse({ ...safeDevice, lock_state: lockStateFor(commands, merged) });
 }
 
 /**
@@ -2188,7 +731,7 @@ async function handleRearm(request: Request, env: Env): Promise<Response> {
   // dropped bootstrap can install the real agent on first Windows boot.
   const apiKey = generateApiKey();
   device.api_key_hash = await sha256(apiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'rearm',
     `hardware_uuid=${payload.hardware_uuid} status=${device.status}`);
 
@@ -2260,8 +803,8 @@ async function handleFlagStolen(
 
   const payload = await request.json() as { hostname_confirm?: string; enable_pba?: boolean };
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2282,7 +825,7 @@ async function handleFlagStolen(
 
   // Update device status
   device.status = 'stolen';
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   // Queue lockdown command
   const cmd: Command = {
@@ -2330,8 +873,8 @@ async function handleRecover(
     payload = {};
   }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2358,22 +901,22 @@ async function handleRecover(
 
   // Update device status
   device.status = 'recovering';
-  await saveDevices(env, devices);
+  await putDevice(env, device);
 
   // Release encryption key
-  const keys = await listKeys(env);
+  const keys = await listKeysForDevice(env, deviceId);
   // Newest unreleased key, for the same reason as the check-in path: the first
   // match is the oldest, and an older key cannot decrypt the current lockdown's
   // files.
   const unreleased = keys
-    .filter((k) => k.device_id === deviceId && k.released_at === null)
+    .filter((k) => k.released_at === null)
     .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
   const deviceKey = unreleased.length ? unreleased[unreleased.length - 1] : undefined;
   let releasedKey: string | null = null;
   if (deviceKey) {
     deviceKey.released_at = new Date().toISOString();
     releasedKey = deviceKey.key_material;
-    await saveKeys(env, keys);
+    await saveKeysForDevice(env, deviceId, keys);
   }
 
   // Cancel any other pending command for this device. A stale queued `track` firing
@@ -2433,8 +976,8 @@ async function handleTrackAction(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2456,12 +999,13 @@ async function handleTrackAction(
   }
 
   // Update device status for track/stop_track
+  // ADR-003: the transition writes this device, not the fleet.
   if (action === 'track') {
     device.status = 'tracking';
-    await saveDevices(env, devices);
+    await putDevice(env, device);
   } else if (action === 'stop_track') {
     device.status = 'active';
-    await saveDevices(env, devices);
+    await putDevice(env, device);
   }
   // 'locate' doesn't change status — it just queues a one-time location report
 
@@ -2535,19 +1079,16 @@ async function handleGetLocations(
   if (auth instanceof Response) return auth;
   const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
-  const locations = await listLocations(env);
-  const deviceLocs = locations
-    .filter((l) => l.device_id === deviceId)
+  const reports = await listLocationsForDevice(env, deviceId);
+  const deviceLocs = reports
+    // Order by when each fix was TAKEN, then slice: ordering by insertion alone drops the newest
+    // rows once a backfilled report arrives with an older scan time than what is stored.
+    .sort((a, b) => locationTime(a).localeCompare(locationTime(b)))
     .slice(-limit)
-    // Map created_at → reported_at for dashboard compatibility (the Express
-    // server uses `reported_at`, the Worker uses `created_at` internally).
-    // Also add a synthetic id (the Worker doesn't store one) and reverse to
-    // most-recent-first, matching the Express server's ORDER BY DESC.
-    .map((l, idx) => ({
-      ...l,
-      id: `loc-${deviceId}-${idx}`,
-      reported_at: l.created_at,
-    }))
+    // Map created_at → reported_at for dashboard compatibility (the Express server uses
+    // `reported_at`). `id` is the stored record id (ADR-004) — the old synthetic
+    // `loc-<deviceId>-<idx>` changed whenever the window shifted.
+    .map((l) => ({ ...l, reported_at: l.created_at }))
     .reverse();
   return jsonResponse(deviceLocs);
 }
@@ -2609,8 +1150,8 @@ async function handleDownloadEfsCert(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -2645,14 +1186,12 @@ async function handleGetPbaCredentials(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
-  const pws = await listBiosPasswords(env);
-  const devicePws = pws
-    .filter((p) => p.device_id === deviceId)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const devicePws = (await listBiosPasswordsForDevice(env, deviceId)).sort((a, b) =>
+    b.created_at.localeCompare(a.created_at));
   const creds = groupPbaCredentials(devicePws);
 
   await addAuditEntry(
@@ -2681,8 +1220,8 @@ async function handleReleaseDevice(
   let payload: { hostname_confirm?: string } = {};
   try { payload = JSON.parse(await request.text()); } catch { /* empty ok */ }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
   if (device.hostname !== payload.hostname_confirm) {
     return errorResponse('Confirmation hostname does not match.', 400);
@@ -2693,22 +1232,26 @@ async function handleReleaseDevice(
   }
 
   // Anonymize audit entries for this device (preserve for accountability).
-  const audit = await listAudit(env);
+  //
+  // ADR-005: amend this device's entries only. The old shape rewrote the whole trail to touch a
+  // few lines — and dropped whatever fell off the 500-entry cap mid-rewrite.
   const releasedAt = new Date().toISOString();
-  for (const e of audit) {
-    if (e.device_id === deviceId) {
-      e.detail = `${e.detail || ''} released_at=${releasedAt}`.trim();
-    }
+  const auditIndex = await listAuditIndex(env);
+  for (const indexed of auditIndex) {
+    if (indexed.device_id !== deviceId) continue;
+    const entry = await getAuditEntry(env, indexed.id);
+    if (!entry) continue;
+    entry.detail = `${entry.detail || ''} released_at=${releasedAt}`.trim();
+    await env.LOCKDOWN_KV.put(auditKey(entry.id), JSON.stringify(entry));
   }
-  await saveAudit(env, audit);
   await addAuditEntry(env, deviceId, 'device_released', `hostname=${device.hostname} by=${auth.username}`);
 
   // Cascade-delete the device's data across the KV stores.
-  await saveDevices(env, devices.filter((d) => d.id !== deviceId));
+  await deleteDevice(env, deviceId);
   await deleteCommandsForDevice(env, deviceId);
-  await saveKeys(env, (await listKeys(env)).filter((k) => k.device_id !== deviceId));
-  await saveBiosPasswords(env, (await listBiosPasswords(env)).filter((p) => p.device_id !== deviceId));
-  await saveLocations(env, (await listLocations(env)).filter((l) => l.device_id !== deviceId));
+  await deleteKeysForDevice(env, deviceId);
+  await deleteBiosPasswordsForDevice(env, deviceId);
+  await deleteLocationsForDevice(env, deviceId);
   await env.LOCKDOWN_KV.delete(`${CHECKIN_KEY_PREFIX}${deviceId}`);
 
   return jsonResponse({
@@ -2840,14 +1383,14 @@ async function handleInstaller(request: Request, env: Env, deviceId: string): Pr
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
   // Fresh api_key for this install (re-keys the device; old key is replaced).
   const apiKey = generateApiKey();
   device.api_key_hash = await sha256(apiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, deviceId, 'installer_generated', `by=${auth.username} host=${device.hostname}`);
 
   // Base URL the agent should check in against (this Worker's origin).
@@ -2888,11 +1431,14 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
   const url = requestUrl(request);
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
   const deviceId = url.searchParams.get('device_id');
-  const entries = await listAudit(env);
-  let filtered = deviceId
-    ? entries.filter((e) => e.device_id === deviceId)
-    : entries;
-  filtered = filtered.slice(-limit).reverse(); // most recent first
+  // ADR-005: the index carries the device id, so a scoped read selects its own ids instead of
+  // loading the whole trail and discarding most of it.
+  const auditIndex = await listAuditIndex(env);
+  const selected = (deviceId ? auditIndex.filter((e) => e.device_id === deviceId) : auditIndex)
+    .slice(-limit)
+    .reverse(); // most recent first
+  const loaded = await Promise.all(selected.map((e) => getAuditEntry(env, e.id)));
+  const filtered = loaded.filter((e): e is AuditEntry => e !== null);
   // Map created_at → timestamp for dashboard compatibility (the Express
   // server uses `timestamp`, the Worker uses `created_at` internally)
   const mapped = filtered.map((e) => ({
@@ -3256,184 +1802,11 @@ export default {
 
     // Admin endpoints (bearer auth)
 
-/**
- * GET /api/enroll/setup.ps1 — the script behind the dashboard's one-liner.
- *
- * Served by the Worker as well as by Express: the serverless deployment is the
- * one operators actually point at, and until S269 it had no served installer
- * path, so the one-liner the dashboard displays answered 404 for every Worker
- * user (the route only existed in server/src/routes/enroll.js).
- *
- * No secret is in the URL: the token is prompted for on the target, because a
- * `?token=` would be written to request logs, shell history and browser history
- * (B-070). The script delegates to the shipped installer rather than
- * re-implementing enrolment, config writing or service registration.
- */
-function composeEnrollSetupScript(serverUrl: string, gui: boolean): string {
-  const parsed = new URL(serverUrl);
-  const host = parsed.hostname;
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
-  const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
-  const remedy = isIpLiteral
-    ? `Check this machine is on the same network as ${host}, and that the server is running.`
-    : `Check the VPN is connected, then try: Resolve-DnsName ${host}`;
-  const plainHttp = parsed.protocol === 'http:';
-
-  // Substituted as ONE PowerShell argument, and quoted for the here-string it lands in:
-  // the inner script body is a single-quoted here-string, so a bare `,'--flag'` closes
-  // the enclosing `.Replace(...)` call — measured on MOLE as
-  // `Missing ')' in method call` (S270). A double-quoted PowerShell string carries the
-  // inner single quotes intact.
-  const insecureReplacement = plainHttp ? `${'"'},\'--allow-insecure-http\'${'"'}` : "''";
-
-  if (gui) {
-    return [
-      `# Lockdown agent installer for ${serverUrl}`,
-      `$ErrorActionPreference = 'Stop'`,
-      `$u = '${serverUrl}'`,
-      `if (-not (Test-NetConnection '${host}' -Port ${port}).TcpTestSucceeded) {`,
-      `    throw "Cannot reach $u on port ${port}. ${remedy}"`,
-      `}`,
-      `$e = Join-Path $env:TEMP 'lockdown-setup.exe'`,
-      `Invoke-WebRequest "$u/api/download/installer" -OutFile $e`,
-      `Invoke-WebRequest "$u/api/download/agent" -OutFile (Join-Path $env:TEMP 'lockdown-agent.exe')`,
-      `Unblock-File $e`,
-      `$t = Read-Host 'Enrollment token (from the dashboard)'`,
-      `Write-Host "Opening the setup wizard ..." -ForegroundColor Cyan`,
-      `Set-Clipboard $u`,
-      `Start-Process $e -Verb RunAs`,
-    ].join('\r\n') + '\r\n';
-  }
-
-  // Everything below runs in ONE elevated PowerShell. The downloads happen there
-  // rather than in the caller's session: elevation can switch accounts (a standard
-  // user entering Administrator's credentials), and %TEMP% then points somewhere
-  // else entirely — which is how "Cannot find lockdown-agent.exe" came back after
-  // the agent had already been staged (S269).
-  //
-  // Paths are machine-wide for the same reason: C:\ProgramData is visible to both
-  // the elevated process and the caller that prints the log.
-  return [
-    `# Lockdown agent installer for ${serverUrl}`,
-    `# Generated by the dashboard. Paste into PowerShell, or run setup.cmd.`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$u = '${serverUrl}'`,
-    ``,
-    `Write-Host "Checking $u ..." -ForegroundColor Cyan`,
-    `if (-not (Test-NetConnection '${host}' -Port ${port}).TcpTestSucceeded) {`,
-    `    throw "Cannot reach $u on port ${port}. ${remedy}"`,
-    `}`,
-    ``,
-    `# $env:LOCKDOWN_ENROLL_TOKEN makes this non-interactive, which is what an MDM or`,
-    `# an automated acceptance test needs; Read-Host is the fallback for a human.`,
-    `$t = $env:LOCKDOWN_ENROLL_TOKEN`,
-    `if (-not $t) { $t = Read-Host 'Enrollment token (from the dashboard)' }`,
-    `if (-not $t) { throw 'An enrollment token is required (or set $env:LOCKDOWN_ENROLL_TOKEN).' }`,
-    ``,
-    `$inner = Join-Path $env:ProgramData 'LockdownAgent/setup-inner.ps1'`,
-    `$log = Join-Path $env:ProgramData 'LockdownAgent/install.log'`,
-    `New-Item -ItemType Directory -Force -Path (Split-Path $inner) | Out-Null`,
-    `$body = @'`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$log = '__LOG__'`,
-    `$stage = Join-Path $env:ProgramData 'LockdownAgent/staging'`,
-    `New-Item -ItemType Directory -Force -Path $stage | Out-Null`,
-    `$inst = Join-Path $env:ProgramData 'LockdownAgent'`,
-    `# Plain HTTP is a lab posture, and the AGENT refuses it unless its config says`,
-    `# verify_tls false ("key material must be transported over TLS"). The installer owns`,
-    `# that decision — --allow-insecure-http writes it — so this script passes the flag`,
-    `# and then READS the result back. It used to patch config.json itself after a`,
-    `# successful install (takeown + icacls + a JSON rewrite), which is the "manual step`,
-    `# after install" the repo's rule forbids, and it could not run at all when the`,
-    `# install failed — leaving a config that makes the agent refuse to start (S270).`,
-    `$t0 = Get-Date`,
-    `# The log is a ledger, not a snapshot: it is APPENDED to, and every run writes a`,
-    `# start marker and an exit line. It used to be truncated by the installer's own`,
-    `# redirection, which meant a run that died before the installer started left the`,
-    `# PREVIOUS run's log in place — and the caller printed that as this run's output,`,
-    `# "Installation Complete" and all (S270 on MOLE: a re-install that never ran`,
-    `# looked like a success with a broken exit code).`,
-    `Add-Content -LiteralPath $log ("=== installer run started " + (Get-Date).ToString('o') + " ===")`,
-    `# $ErrorActionPreference is Stop, so any download/staging failure aborts this`,
-    `# script before a single line reaches the log. The trap is what makes such an`,
-    `# abort visible instead of silent — otherwise the tail below is the last run's.`,
-    `trap {`,
-    `    Add-Content -LiteralPath $log ("=== ABORTED before the installer ran: " + $_.Exception.Message + " ===")`,
-    `    exit 1`,
-    `}`,
-    `Invoke-WebRequest '__URL__/api/download/installer' -OutFile (Join-Path $stage 'lockdown-setup.exe')`,
-    `Invoke-WebRequest '__URL__/api/download/agent' -OutFile (Join-Path $stage 'lockdown-agent.exe')`,
-    `Invoke-WebRequest '__URL__/api/download/service' -OutFile (Join-Path $stage 'lockdown-service.exe')`,
-    `Get-ChildItem $stage | Unblock-File`,
-    `# lockdown-service.exe is NOT copied here. The SCM runs it, so a second copy over a`,
-    `# running service fails with "used by another process" — which aborted this script`,
-    `# before the installer started and exited 1 (S270). installer.py::_copy_binary now`,
-    `# stages both binaries, stopping the service to replace an image it holds and`,
-    `# leaving step 6 to recreate and start it. One owner for installation, as intended.`,
-    `$outF = Join-Path $env:TEMP ('lockdown-install-' + [guid]::NewGuid().ToString('N') + '.out.txt')`,
-    `$errF = Join-Path $env:TEMP ('lockdown-install-' + [guid]::NewGuid().ToString('N') + '.err.txt')`,
-    `# Start-Process with redirected files, NOT a native call redirected inline. Under`,
-    `# $ErrorActionPreference = 'Stop' a native command's FIRST stderr line becomes a`,
-    `# terminating error in Windows PowerShell 5.1, so the trap below fired mid-run and`,
-    `# the log kept one line — "Traceback (most recent call last):" — with the actual`,
-    `# PermissionError discarded (measured on MOLE, S270). Redirected files carry the`,
-    `# whole traceback and cannot abort the script; the exit code stays the verdict.`,
-    `$p = Start-Process -FilePath (Join-Path $stage 'lockdown-setup.exe') -ArgumentList @('--server-url','__URL__','--token','__TOKEN__','--silent'__INSECURE__) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outF -RedirectStandardError $errF`,
-    `$code = $p.ExitCode`,
-    `Add-Content -LiteralPath $log (Get-Content $outF -ErrorAction SilentlyContinue)`,
-    `if ((Get-Item $errF -ErrorAction SilentlyContinue).Length -gt 0) {`,
-    `    Add-Content -LiteralPath $log '--- installer stderr ---'`,
-    `    Add-Content -LiteralPath $log (Get-Content $errF -ErrorAction SilentlyContinue)`,
-    `}`,
-    `Remove-Item $outF,$errF -Force -ErrorAction SilentlyContinue`,
-    `Add-Content -LiteralPath $log ("=== installer exited " + $code + " ===")`,
-    `Add-Content $log ("service state: " + (Get-Service LockdownAgent -ErrorAction SilentlyContinue).Status)`,
-    `if ($code -eq 0 -and '__PLAIN__' -eq 'yes') {`,
-    `    # Evidence, not intent: read what the installer actually wrote. A plain-HTTP`,
-    `    # server with verify_tls left true is a device that will not start, so this exits`,
-    `    # non-zero instead of printing a cheerful line next to a dead agent.`,
-    `    $cfg = Join-Path $inst 'config.json'`,
-    `    $check = $null`,
-    `    if (Test-Path $cfg) {`,
-    `        try { $check = (Get-Content $cfg -Raw | ConvertFrom-Json).verify_tls } catch { $check = $null }`,
-    `    }`,
-    `    Add-Content -LiteralPath $log ("verify_tls in config: " + $check)`,
-    `    if ($check -ne $false) {`,
-    `        Add-Content -LiteralPath $log 'FAILED: plain-HTTP server but verify_tls is not false — the agent will refuse to start.'`,
-    `        $code = 3`,
-    `    } else {`,
-    `        Restart-Service LockdownAgent -ErrorAction SilentlyContinue`,
-    `    }`,
-    `}`,
-    `exit $code`,
-    `'@`,
-    `$body = $body.Replace('__EXE__', '').Replace('__URL__', $u).Replace('__TOKEN__', $t).Replace('__LOG__', $log).Replace('__PLAIN__', '${plainHttp ? 'yes' : 'no'}').Replace('__INSECURE__', ${insecureReplacement})`,
-    `[IO.File]::WriteAllText($inner, $body)`,
-    ``,
-    `Write-Host "Installing (no wizard) ..." -ForegroundColor Cyan`,
-    `$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$inner)`,
-    `Remove-Item $inner -ErrorAction SilentlyContinue`,
-    ``,
-    `if ($p.ExitCode -ne 0) {`,
-    `    if (Test-Path $log) {`,
-    `        Write-Host "---- install.log tail (this run starts at the last 'installer run started' line) ----" -ForegroundColor Yellow`,
-    `        Get-Content $log -Tail 25 | ForEach-Object { Write-Host $_ }`,
-    `        Write-Host "---- full log: $log ----" -ForegroundColor Yellow`,
-    `    } else {`,
-    `        Write-Host "No installer log at $log — the elevated run may not have started." -ForegroundColor Yellow`,
-    `    }`,
-    `    throw "Installer failed with exit code $($p.ExitCode)"`,
-    `}`,
-    `Write-Host 'Installed. The device appears in the dashboard within a minute.' -ForegroundColor Green`,
-  ].join('\r\n') + '\r\n';
-}
-
-/** Public: carries no secret, and the target has no credential yet. */
 function handleEnrollSetupPs1(request: Request, env: Env): Response {
   const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   let script: string;
   try {
-    script = composeEnrollSetupScript(new URL(request.url).origin, gui);
+    script = composeEnrollSetupScript(requestUrl(request), gui);
   } catch {
     return new Response(
       'ERROR: the request origin is not a valid absolute URL (use scheme://host[:port]).\n',
@@ -3447,7 +1820,7 @@ function handleEnrollSetupPs1(request: Request, env: Env): Response {
 
 /** GET /api/enroll/setup.cmd — the same thing as a double-clickable file. */
 function handleEnrollSetupCmd(request: Request, _env: Env): Response {
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const body = [
     '@echo off',
     'setlocal',
@@ -3470,7 +1843,7 @@ function handleEnrollSetupCmd(request: Request, _env: Env): Response {
 async function handleEnrollSetupCommand(request: Request, env: Env): Promise<Response> {
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
-  const serverUrl = new URL(request.url).origin;
+  const serverUrl = requestUrl(request).origin;
   const gui = String(env.INSTALLER_GUI ?? '') === 'true';
   return jsonResponse({
     server_url: serverUrl,
@@ -3797,11 +2170,12 @@ async function handleAgentUpdate(request: Request, env: Env): Promise<Response> 
   // platform's hash. The top-level fallback keeps metadata published before
   // per-platform signing (a single build, one signature) working.
   const signature = perPlatform?.signature || release.signature || null;
-  const signatureAlg = signature
-    ? (perPlatform?.signature
-        ? perPlatform.signature_alg || 'ed25519'
-        : release.signature_alg || 'ed25519')
-    : null;
+  let signatureAlg: string | null = null;
+  if (signature) {
+    signatureAlg = perPlatform?.signature
+      ? perPlatform.signature_alg || 'ed25519'
+      : release.signature_alg || 'ed25519';
+  }
 
   return jsonResponse({
     update_available: compareVersions(currentVersion, release.latest_version) < 0,
@@ -3886,10 +2260,10 @@ async function handleLatestLocation(
   const auth = await requireRole(request, env, 'viewer');
   if (auth instanceof Response) return auth;
 
-  const locations = await listLocations(env);
-  const deviceLocs = locations
-    .filter((l) => l.device_id === deviceId)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // Same source and same key as the history route, so "latest" and "first row of the history"
+  // cannot disagree about which fix is the newest.
+  const deviceLocs = (await listLocationsForDevice(env, deviceId)).sort((a, b) =>
+    locationTime(a).localeCompare(locationTime(b)));
   const latest = deviceLocs[deviceLocs.length - 1];
 
   if (!latest) {
@@ -3899,11 +2273,7 @@ async function handleLatestLocation(
     );
   }
 
-  return jsonResponse({
-    ...latest,
-    id: `loc-${deviceId}-0`,
-    reported_at: latest.created_at,
-  });
+  return jsonResponse({ ...latest, reported_at: latest.created_at });
 }
 
 async function listHwArtifacts(env: Env): Promise<HwTestArtifact[]> {
@@ -4109,10 +2479,13 @@ async function handleLinkPbl(
     return errorResponse('pbl_device_id must be 64 hex chars (32 bytes)', 400);
   }
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
 
+  // The collision check is the one read in this handler that genuinely needs the fleet: a
+  // pbl_device_id must be unique across every device.
+  const devices = await listDevices(env);
   const collision = devices.find(
     (d) =>
       d.id !== device.id &&
@@ -4130,7 +2503,7 @@ async function handleLinkPbl(
   }
 
   device.pbl_device_id = pblId;
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'pbl_device_linked', `pbl_device_id=${pblId}`);
   return jsonResponse({ linked: true, device_id: device.id, pbl_device_id: pblId });
 }
@@ -4147,8 +2520,8 @@ async function handleUnlinkPbl(
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) return errorResponse('Device not found', 404);
   if (!device.pbl_device_id) {
     return errorResponse('Device has no PBL device_id linked', 400);
@@ -4156,7 +2529,7 @@ async function handleUnlinkPbl(
 
   const previous = device.pbl_device_id;
   device.pbl_device_id = null;
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'pbl_device_unlinked', `pbl_device_id=${previous}`);
   return jsonResponse({ unlinked: true, device_id: device.id });
 }
@@ -4204,8 +2577,8 @@ async function handleRotateKey(
   const auth = await requireRole(request, env, 'super-admin');
   if (auth instanceof Response) return auth;
 
-  const devices = await listDevices(env);
-  const device = devices.find((d) => d.id === deviceId);
+  // ADR-003: one record read, not a fleet scan to find one device.
+  const device = await getDeviceRecord(env, deviceId);
   if (!device) {
     return errorResponse(
       'Device not found. Verify the device ID is correct and the device is enrolled in the system.',
@@ -4215,7 +2588,7 @@ async function handleRotateKey(
 
   const newApiKey = generateApiKey();
   device.api_key_hash = await sha256(newApiKey);
-  await saveDevices(env, devices);
+  await putDevice(env, device);
   await addAuditEntry(env, device.id, 'api_key_rotated', '');
 
   return jsonResponse({
@@ -4272,10 +2645,9 @@ async function handleAgentBinaryDownload(request: Request, env: Env): Promise<Re
   }
 
   const platform = requestUrl(request).searchParams.get('platform') || 'linux';
-  const perPlatform = await env.LOCKDOWN_KV.get(`binary:agent:${platform}`, {
-    type: 'arrayBuffer',
-  });
-  const data = perPlatform ?? (await env.LOCKDOWN_KV.get('binary:agent', { type: 'arrayBuffer' }));
+  const data =
+    (await readBinary(env, `binary:agent:${platform}`)) ??
+    (await readBinary(env, 'binary:agent'));
   if (!data) {
     return errorResponse(
       'Agent binary not available — publish it with `wrangler kv key put ... binary:agent`',
@@ -4302,8 +2674,26 @@ async function handleAgentBinaryDownload(request: Request, env: Env): Promise<Re
  * Serves a binary file stored in KV (key: binary:installer or binary:agent).
  * Returns the raw bytes with appropriate Content-Type and Content-Disposition.
  */
+/**
+ * Bytes for a `binary:*` key: KV first, then R2 under the same key name.
+ *
+ * Cloudflare caps a KV value at 27 MiB, and the generic NSIS installer — which embeds
+ * `lockdown-agent.exe` plus `lockdown-installer.exe` — crossed it at 33 MB of payload (S291:
+ * "content size of 41203591 bytes exceeds maximum allowed size of 27MiB"). R2 has no such
+ * ceiling, so anything too large for KV is published there under the identical key and served
+ * by the same route. KV stays first so a deployment with no R2 binding behaves exactly as
+ * before, and so an artifact that still fits stays where the existing tooling puts it.
+ */
+async function readBinary(env: Env, key: string): Promise<ArrayBuffer | null> {
+  const fromKv = await env.LOCKDOWN_KV.get(key, { type: 'arrayBuffer' });
+  if (fromKv) return fromKv;
+  if (!env.BINARIES) return null;
+  const object = await env.BINARIES.get(key);
+  return object ? object.arrayBuffer() : null;
+}
+
 async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
-  const data = await env.LOCKDOWN_KV.get(`binary:${name}`, { type: 'arrayBuffer' });
+  const data = await readBinary(env, `binary:${name}`);
   if (!data) {
     return errorResponse(`${name} binary not available — upload via wrangler kv:key put`, 404);
   }
@@ -4326,7 +2716,12 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
       // stored at publish time: a separately published digest can drift from
       // the artefact, a derived one cannot.
       'x-content-sha256': await sha256HexBytes(data),
-      'Cache-Control': 'public, max-age=3600',
+      // Five minutes, not an hour. These URLs carry no version, so a republished
+      // artifact is served stale by anything that cached the old body — and an
+      // installer a week old looks exactly like a fresh one to a user clicking
+      // "download". Bounded staleness keeps the bandwidth win without letting a
+      // release take an hour to reach a browser (S298).
+      'Cache-Control': 'public, max-age=300',
     },
   });
 }
@@ -4335,500 +2730,24 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
 // PBL /v1/* routes — CBOR/COSE wire format, no agent auth
 // ---------------------------------------------------------------------------
 
-import { loadOrGenerateSigningKey, loadOrGeneratePolicySigningKey, rotateSigningKey, getKidHistory, type SigningKeyPair } from './pbl/signing';
-import { loadCertChain, storeCertChain, splitDerCerts } from './pbl/certs';
-import { handleVerdict } from './pbl/routes/verdict';
-import { handlePolicy, handleStorePolicy } from './pbl/routes/policy';
-import { handleEnrollPbl } from './pbl/routes/enroll';
-import { handleAttest } from './pbl/routes/attest';
-import { handleOverrideChallenge, handleOverrideResponse } from './pbl/routes/override';
-import { handleSigningKey } from './pbl/routes/signingKey';
-import { handleFirmwareDownload } from './pbl/routes/firmware';
-import { listDevices as listPblDevices, deleteDevice as deletePblDevice, getDevice as getPblDevice, setDeviceStatus as setPblDeviceStatus } from './pbl/devices';
-import { checkIpRateLimit, rateLimitResponse, IP_RATE_LIMITS } from './pbl/rateLimit';
 import type { Env } from './pbl/env';
+import {
+  TOKEN_API_CORS_ORIGIN, errorResponse, generateApiKey, generateId, hmacSha256, jsonResponse,
+  parseJsonBody, parseKvJson, requestUrl, sha256, sha256HexBytes, timingSafeEqualStr,
+} from './http';
+import {
+  Admin, AdminRole, LEGACY_PBKDF2_ITERATIONS, listAdmins, makeAdmin, pbkdf2Hash, requireRole,
+  saveAdmins, signAdminToken,
+} from './admin-auth';
+import { composeEnrollSetupScript } from './installer-scripts';
+import { handlePblRoute } from './pbl/routes';
+import {
+  handleAgentCheckin, handleAgentLocation, handleCommandAck, handleDeadmanReport,
+  handleEscrowKey, locationTime, verifyAgentAuth,
+} from './agent-routes';
+// Re-exported for the test harness, which resets the cache between cases.
+export { resetKeyCache } from './pbl/keys';
+import {
+  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, saveCheckinMetadata, saveHwArtifacts, saveKeysForDevice, updateCommand,
+} from './kv-store';
 
-// Cache the signing key pair across requests within the same isolate.
-let cachedKeys: SigningKeyPair | null = null;
-let cachedPolicyKeys: SigningKeyPair | null = null;
-
-/** Reset the signing key cache (D-205: used by key rotation and tests). */
-export function resetKeyCache(): void {
-  cachedKeys = null;
-  cachedPolicyKeys = null;
-}
-
-async function getSigningKeys(env: Env): Promise<SigningKeyPair> {
-  if (cachedKeys) return cachedKeys;
-  cachedKeys = await loadOrGenerateSigningKey(env.LOCKDOWN_KV, env.PBL_SIGNING_KEY);
-  return cachedKeys;
-}
-
-// D-205: Separate policy signing key (C4 §1 — different from verdict key)
-async function getPolicySigningKeys(env: Env): Promise<SigningKeyPair> {
-  if (cachedPolicyKeys) return cachedPolicyKeys;
-
-  cachedPolicyKeys = await loadOrGeneratePolicySigningKey(env.LOCKDOWN_KV, env.PBL_POLICY_SIGNING_KEY);
-
-  return cachedPolicyKeys;
-}
-
-async function handlePblRoute(
-  request: Request,
-  env: Env,
-  path: string,
-  method: string,
-): Promise<Response> {
-  try {
-    // D-210: Rate limiting
-    // - Per-device for firmware endpoints (verdict, attest, enroll) — NAT-safe
-    // - IP-based for admin endpoints (devices) — no device_id in request
-    // - No rate limiting for policy GET (edge-cached) or health (trivial)
-    // - Override challenge/response already has per-device limiting in override.ts
-
-    // IP-based rate limiting for admin device management endpoints
-    if (path.startsWith('/v1/devices') && IP_RATE_LIMITS.devices) {
-      const rl = await checkIpRateLimit(env.LOCKDOWN_KV, request, 'devices', IP_RATE_LIMITS.devices);
-      if (rl.allowed === false) {
-        return rateLimitResponse(rl.retryAfter);
-      }
-    }
-
-    if (path === '/v1/verdict' && method === 'POST') {
-      const keys = await getSigningKeys(env);
-      return handleVerdict(request, env, keys);
-    }
-
-    // GET /v1/policy/:version — return signed policy blob (C4 §6)
-    if (path.startsWith('/v1/policy/') && method === 'GET') {
-      const versionParam = path.substring('/v1/policy/'.length);
-      // D-205: Policy blobs are signed by the policy signing key (C4 §1),
-      // separate from the verdict signing key.
-      const policyKeys = await getPolicySigningKeys(env);
-      const verdictKeys = await getSigningKeys(env);
-      return handlePolicy(request, env, policyKeys, verdictKeys, versionParam);
-    }
-
-    // POST /v1/policy — store a policy blob (admin only)
-    if (path === '/v1/policy' && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const policyKeys = await getPolicySigningKeys(env);
-      const verdictKeys = await getSigningKeys(env);
-      return handleStorePolicy(request, env, policyKeys, verdictKeys);
-    }
-
-    // POST /v1/enroll — PBL TPM-based enrollment (C1 §6)
-    if (path === '/v1/enroll' && method === 'POST') {
-      return handleEnrollPbl(request, env);
-    }
-
-    // POST /v1/attest — TPM quote verification (C1 §6, D-203)
-    if (path === '/v1/attest' && method === 'POST') {
-      return handleAttest(request, env);
-    }
-
-    // POST /v1/override/challenge — REQ-14 offline override challenge (D-204)
-    if (path === '/v1/override/challenge' && method === 'POST') {
-      return handleOverrideChallenge(request, env);
-    }
-
-    // POST /v1/override/response — REQ-14 offline override response (D-204)
-    if (path === '/v1/override/response' && method === 'POST') {
-      const keys = await getSigningKeys(env);
-      return handleOverrideResponse(request, env, keys);
-    }
-
-    // GET /v1/signing-key — return server's verdict signing key info (D-205)
-    // Public endpoint — returns kid + SPKI for policy blob construction
-    if (path === '/v1/signing-key' && method === 'GET') {
-      return handleSigningKey(request, env);
-    }
-
-    // GET /v1/firmware — download PblApp.efi from KV (D-130)
-    // Public endpoint — firmware binary is not secret
-    if (path === '/v1/firmware' && method === 'GET') {
-      return handleFirmwareDownload(request, env);
-    }
-
-    // GET /v1/devices — list all PBL devices (admin only, D-206)
-    if (path === '/v1/devices' && method === 'GET') {
-      const __a = await requireRole(request, env, 'viewer');
-      if (__a instanceof Response) return __a;
-      const devices = await listPblDevices(env.LOCKDOWN_KV);
-      return new Response(
-        JSON.stringify({ devices, count: devices.length }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // GET /v1/devices/:id — get a single PBL device (admin only, D-206)
-    if (path.startsWith('/v1/devices/') && !path.includes('/lock') && !path.includes('/unlock') && !path.includes('/track') && !path.includes('/agent-mapping') && method === 'GET') {
-      const __a = await requireRole(request, env, 'viewer');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length);
-      const device = await getPblDevice(env.LOCKDOWN_KV, deviceId);
-      if (!device) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ device }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/devices/:id/lock — admin lock device (D-206)
-    if (path.startsWith('/v1/devices/') && path.endsWith('/lock') && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/lock'.length);
-      const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'locked', 'admin_lock');
-      if (!device) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ device }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/devices/:id/unlock — admin unlock device (D-206)
-    if (path.startsWith('/v1/devices/') && path.endsWith('/unlock') && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/unlock'.length);
-      const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'active');
-      if (!device) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ device }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/devices/:id/track — admin track device (C5 covert tracking, D-211)
-    if (path.startsWith('/v1/devices/') && path.endsWith('/track') && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/track'.length);
-      const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'tracking', 'reported_stolen');
-      if (!device) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ device }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/devices/:id/stop-track — admin stop tracking device (C5, D-211)
-    if (path.startsWith('/v1/devices/') && path.endsWith('/stop-track') && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/stop-track'.length);
-      const device = await setPblDeviceStatus(env.LOCKDOWN_KV, deviceId, 'active');
-      if (!device) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ device }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // GET /v1/devices/:id/agent-mapping — look up agent device by PBL device_id (D-206)
-    // Returns the agent device record linked to this PBL device, if any.
-    // The agent device data is stored in the server's PostgreSQL/SQLite DB,
-    // not in KV. The serverless Worker stores the mapping in KV as
-    // `pbl_device_mapping:{pbl_device_id}` → { agent_device_id }.
-    // NOTE: Must come before the general DELETE /v1/devices/:id route.
-    if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'GET') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
-      const mappingKey = `pbl_device_mapping:${deviceId}`;
-      const mapping = await env.LOCKDOWN_KV.get(mappingKey, 'text');
-      if (!mapping) {
-        return new Response(
-          JSON.stringify({ mapped: false, pbl_device_id: deviceId }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
-      return new Response(
-        JSON.stringify({ mapped: true, pbl_device_id: deviceId, agent_device_id: mapping }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/devices/:id/agent-mapping — link a PBL device to an agent device (D-206)
-    // Body: { agent_device_id: string } — the UUID of the agent device record.
-    if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'POST') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
-      const pblDevice = await getPblDevice(env.LOCKDOWN_KV, deviceId);
-      if (!pblDevice) {
-        return errorResponse('PBL device not found', 404);
-      }
-      let body: { agent_device_id?: string };
-      try {
-        body = await request.json();
-      } catch {
-        return errorResponse('invalid JSON body', 400);
-      }
-      if (!body.agent_device_id || typeof body.agent_device_id !== 'string') {
-        return errorResponse('agent_device_id is required', 400);
-      }
-      const mappingKey = `pbl_device_mapping:${deviceId}`;
-      await env.LOCKDOWN_KV.put(mappingKey, body.agent_device_id);
-      return new Response(
-        JSON.stringify({ mapped: true, pbl_device_id: deviceId, agent_device_id: body.agent_device_id }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // DELETE /v1/devices/:id/agent-mapping — unlink a PBL device from an agent device (D-206)
-    if (path.startsWith('/v1/devices/') && path.endsWith('/agent-mapping') && method === 'DELETE') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length, path.length - '/agent-mapping'.length);
-      const mappingKey = `pbl_device_mapping:${deviceId}`;
-      const existing = await env.LOCKDOWN_KV.get(mappingKey, 'text');
-      if (!existing) {
-        return errorResponse('No agent device mapping found', 404);
-      }
-      await env.LOCKDOWN_KV.delete(mappingKey);
-      return new Response(
-        JSON.stringify({ unmapped: true, pbl_device_id: deviceId }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // DELETE /v1/devices/:id — admin delete device (D-206)
-    if (path.startsWith('/v1/devices/') && method === 'DELETE') {
-      const __a = await requireRole(request, env, 'operator');
-      if (__a instanceof Response) return __a;
-      const deviceId = path.substring('/v1/devices/'.length);
-      const deleted = await deletePblDevice(env.LOCKDOWN_KV, deviceId);
-      if (!deleted) {
-        return errorResponse('Device not found', 404);
-      }
-      return new Response(
-        JSON.stringify({ deleted: true }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/admin/rotate-key — rotate the verdict signing key (D-205, admin only)
-    if (path === '/v1/admin/rotate-key' && method === 'POST') {
-      const __a = await requireRole(request, env, 'super-admin');
-      if (__a instanceof Response) return __a;
-      try {
-        const { keys: newKeys, kidHistory } = await rotateSigningKey(env.LOCKDOWN_KV);
-        // Invalidate the cached key so subsequent requests use the new key
-        resetKeyCache();
-        const kidHex = Array.from(newKeys.kid)
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('');
-        return new Response(
-          JSON.stringify({
-            rotated: true,
-            new_kid: kidHex,
-            kid_history_count: kidHistory.length,
-            kid_history: kidHistory.map(k =>
-              Array.from(k).map(b => b.toString(16).padStart(2, '0')).join('')
-            ),
-            spki_size: newKeys.spki.length,
-            algorithm: newKeys.algorithm,
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'rotation failed';
-        return errorResponse(msg, 500);
-      }
-    }
-
-    // GET /v1/admin/key-info — get current signing key info (D-205, admin only)
-    if (path === '/v1/admin/key-info' && method === 'GET') {
-      const __a = await requireRole(request, env, 'viewer');
-      if (__a instanceof Response) return __a;
-      const keys = await getSigningKeys(env);
-      const policyKeys = await getPolicySigningKeys(env);
-      const kidHistory = await getKidHistory(env.LOCKDOWN_KV);
-      return new Response(
-        JSON.stringify({
-          verdict_key: {
-            kid: Array.from(keys.kid).map(b => b.toString(16).padStart(2, '0')).join(''),
-            spki_size: keys.spki.length,
-            algorithm: keys.algorithm,
-          },
-          policy_key: {
-            kid: Array.from(policyKeys.kid).map(b => b.toString(16).padStart(2, '0')).join(''),
-            spki_size: policyKeys.spki.length,
-            algorithm: policyKeys.algorithm,
-          },
-          kid_history: kidHistory.map(k =>
-            Array.from(k).map(b => b.toString(16).padStart(2, '0')).join('')
-          ),
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/admin/cert-chain — store the X.509 cert chain in KV (D-205, admin only)
-    // Body: raw DER bytes (concatenated certs) or JSON { chain: "<base64>" }
-    if (path === '/v1/admin/cert-chain' && method === 'POST') {
-      const __a = await requireRole(request, env, 'super-admin');
-      if (__a instanceof Response) return __a;
-      try {
-        const contentType = request.headers.get('Content-Type') || '';
-        let chainBytes: Uint8Array;
-
-        if (contentType.includes('application/json')) {
-          const body = await request.json() as { chain?: string };
-          if (!body.chain) {
-            return errorResponse('chain (base64) required in JSON body', 400);
-          }
-          chainBytes = Uint8Array.from(Buffer.from(body.chain, 'base64'));
-        } else {
-          // Raw DER bytes
-          chainBytes = new Uint8Array(await request.arrayBuffer());
-        }
-
-        if (chainBytes.length === 0) {
-          return errorResponse('cert chain cannot be empty', 400);
-        }
-
-        // Validate: must be valid DER SEQUENCEs
-        const certs = splitDerCerts(chainBytes);
-        if (certs.length === 0) {
-          return errorResponse('no valid DER certificates found', 400);
-        }
-        if (certs.length < 2) {
-          return errorResponse('cert chain must have at least 2 certs (leaf + CA)', 400);
-        }
-
-        await storeCertChain(env.LOCKDOWN_KV, chainBytes);
-
-        return new Response(
-          JSON.stringify({
-            stored: true,
-            cert_count: certs.length,
-            total_size: chainBytes.length,
-            cert_sizes: certs.map(c => c.length),
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'store failed';
-        return errorResponse(msg, 500);
-      }
-    }
-
-    // GET /v1/admin/cert-chain — get cert chain info (D-205, admin only)
-    if (path === '/v1/admin/cert-chain' && method === 'GET') {
-      const __a = await requireRole(request, env, 'viewer');
-      if (__a instanceof Response) return __a;
-      const certs = await loadCertChain(env.LOCKDOWN_KV);
-      return new Response(
-        JSON.stringify({
-          provisioned: certs.length > 0,
-          cert_count: certs.length,
-          cert_sizes: certs.map(c => c.length),
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // DELETE /v1/admin/cert-chain — remove cert chain from KV (D-205, admin only)
-    if (path === '/v1/admin/cert-chain' && method === 'DELETE') {
-      const __a = await requireRole(request, env, 'super-admin');
-      if (__a instanceof Response) return __a;
-      await env.LOCKDOWN_KV.delete('pbl_cert_chain:current');
-      return new Response(
-        JSON.stringify({ deleted: true }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // POST /v1/admin/operator-key — store the operator override public key (D-204, admin only)
-    // Body: JSON { spki: "<base64>" } — the ES256 public key SPKI
-    if (path === '/v1/admin/operator-key' && method === 'POST') {
-      const __a = await requireRole(request, env, 'super-admin');
-      if (__a instanceof Response) return __a;
-      try {
-        const body = await request.json() as { spki?: string };
-        if (!body.spki) {
-          return errorResponse('spki (base64) required in JSON body', 400);
-        }
-        const spkiBytes = Uint8Array.from(Buffer.from(body.spki, 'base64'));
-        if (spkiBytes.length === 0) {
-          return errorResponse('spki cannot be empty', 400);
-        }
-        // Validate: try to import as ES256 public key
-        try {
-          await crypto.subtle.importKey(
-            'spki', spkiBytes,
-            { name: 'ECDSA', namedCurve: 'P-256' },
-            false, ['verify'],
-          );
-        } catch {
-          return errorResponse('spki is not a valid ES256 public key', 400);
-        }
-        await env.LOCKDOWN_KV.put('pbl_operator_key:current', body.spki);
-        return new Response(
-          JSON.stringify({ stored: true, spki_size: spkiBytes.length }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'store failed';
-        return errorResponse(msg, 500);
-      }
-    }
-
-    // GET /v1/admin/operator-key — get operator key info (D-204, admin only)
-    if (path === '/v1/admin/operator-key' && method === 'GET') {
-      const __a = await requireRole(request, env, 'viewer');
-      if (__a instanceof Response) return __a;
-      const stored = await env.LOCKDOWN_KV.get('pbl_operator_key:current', 'text');
-      return new Response(
-        JSON.stringify({
-          provisioned: !!stored,
-          spki_size: stored ? Uint8Array.from(Buffer.from(stored, 'base64')).length : 0,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // DELETE /v1/admin/operator-key — remove operator key (D-204, admin only)
-    if (path === '/v1/admin/operator-key' && method === 'DELETE') {
-      const __a = await requireRole(request, env, 'super-admin');
-      if (__a instanceof Response) return __a;
-      await env.LOCKDOWN_KV.delete('pbl_operator_key:current');
-      return new Response(
-        JSON.stringify({ deleted: true }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    if (path === '/v1/health' && method === 'GET') {
-      return new Response(
-        JSON.stringify({ status: 'ok', pbl: true }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    return new Response(
-      JSON.stringify({ error: 'not found' }),
-      { status: 404, headers: { 'Content-Type': 'application/json' } },
-    );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'internal error';
-    return new Response(
-      JSON.stringify({ error: msg }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } },
-    );
-  }
-}

@@ -1,0 +1,36 @@
+=== S280 verification sweep — 2026-11-18T05:40:00Z ===
+
+[serverless] npx vitest run
+
+ Test Files  4 passed (4)
+      Tests  480 passed (480)
+   Start at  08:40:01
+   Duration  3.81s (transform 2.37s, setup 0ms, import 1.66s, tests 5.72s, environment 1ms)
+
+
+[serverless] npx tsc --noEmit -p .
+clean
+
+[serverless] npx vitest run --coverage (widened include)
+=============================== Coverage summary ===============================
+Statements   : 86.36% ( 2369/2743 )
+Branches     : 82.99% ( 1572/1894 )
+Functions    : 95.04% ( 345/363 )
+Lines        : 88.52% ( 2215/2502 )
+================================================================================
+
+[scripts] test_cross_surface_contract.py
+.......................                                                  [100%]
+23 passed in 0.13s
+
+[graph] make graph-check
+=== Graph Invariant Sweep ===
+
+  ✓ All invariants pass.
+
+Timestamp: 2026-11-18T05:40:13.652354+00:00
+
+[sizes]
+  2727 serverless/worker.ts
+   541 serverless/agent-routes.ts
+  3268 total

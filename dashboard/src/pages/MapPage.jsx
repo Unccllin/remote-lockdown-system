@@ -1,13 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import api from '../api/client';
 import toast from 'react-hot-toast';
 import { MapPin, RefreshCw, Crosshair, ShieldOff, Wifi, Loader, WifiOff, Satellite, Map as MapIcon } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import { safeFromNow } from '../utils/time';
+
+const formatAccuracy = (m) =>
+  typeof m === 'number' && !Number.isNaN(m) ? `~${Math.round(m)}m` : 'not reported';
+
+const isIpFix = (loc) => loc?.source === 'ip';
+
+const APPROX_NOTE = 'Approximate — IP-based fix: resolves the ISP\'s city-level location, not the device.';
 
 // Google Maps tile layer URLs
 const GOOGLE_TILES = {
@@ -219,6 +225,17 @@ export default function MapPage() {
                             {[location.city, location.region, location.country].filter(Boolean).join(', ')}
                           </div>
                         )}
+                        <div style={{ fontSize: 12, color: '#475569', marginBottom: 2 }}>
+                          Source: {location.source || 'unknown'}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#475569', marginBottom: 2 }}>
+                          Accuracy: {formatAccuracy(location.accuracy_meters)}
+                        </div>
+                        {isIpFix(location) && (
+                          <div style={{ fontSize: 11, color: '#b45309', marginBottom: 4 }}>
+                            {APPROX_NOTE}
+                          </div>
+                        )}
                         <div style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>
                           {location.reported_at
                             ? safeFromNow(location.reported_at)
@@ -270,6 +287,11 @@ export default function MapPage() {
                 <span className="text-xs text-slate-500 font-mono">({count})</span>
               </div>
             ))}
+            {points.some((p) => p.location?.source === 'ip') && (
+              <span className="w-full text-xs text-slate-500">
+                IP-based fixes are city-level (ISP location); devices behind one egress can plot at the same point.
+              </span>
+            )}
           </div>
         </>
       )}

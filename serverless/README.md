@@ -14,10 +14,11 @@ CBOR/COSE (`pbl/`).
 
 | name | kind | purpose |
 |------|------|---------|
-| `LOCKDOWN_KV` | KV namespace | all durable state: devices, commands (one key each — see [Command storage](#command-storage-adr-002)), admins, audit, binaries |
+| `LOCKDOWN_KV` | KV namespace | all durable state: devices (one key each — see [Device storage](#device-storage-adr-003)), commands (one key each — see [Command storage](#command-storage-adr-002)), admins, audit, binaries |
 | `ADMIN_TOKEN` | secret | break-glass super-admin. Maps to a synthetic admin, so treat it as a root credential |
 | `JWT_SECRET` | secret | signs admin JWTs (falls back to `ADMIN_TOKEN`, then a dev string — do not rely on the fallback in production) |
 | `PBL_SIGNING_KEY` / `PBL_POLICY_SIGNING_KEY` | secret | keys for the firmware-facing `/v1/*` COSE signatures |
+| `GOOGLE_API_KEY` | secret (optional) | Google Geolocation key, provisioned into the enrolment response at install time (ADR-008); omitted when unset. A session-0 service install cannot scan BSSIDs, and an interactive one needs precise-location consent this product does not request (S316), so in practice the key changes nothing until that consent exists — see [ADR-009](../docs/adr/ADR-009-location-precision-by-install-type.md). |
 
 The KV id lives in `wrangler.toml`. Create the namespace once:
 
@@ -33,6 +34,7 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put JWT_SECRET
 npx wrangler secret put PBL_SIGNING_KEY
 npx wrangler secret put PBL_POLICY_SIGNING_KEY
+npx wrangler secret put GOOGLE_API_KEY
 ```
 
 ## Command storage (ADR-002)
@@ -49,13 +51,98 @@ Why: every mutation used to load the whole list, edit it, and write it back, so 
 overlapping requests destroyed each other's fields. Observed live in S269 — the agent ACKed
 `unlock … status=executed` and the device still reported the unlock `pending`, because a
 concurrent check-in had written an older snapshot over it. Mutation now reads and writes
-exactly one key (`updateCommand`), and `serializeMutation()` remains as belt-and-braces for the
-`devices` list, which is still one value.
+exactly one key (`updateCommand`). Every fleet-scale store is per-entity now (ADR-002 through
+ADR-006); `serializeMutation()` remains as belt-and-braces for the multi-key paths and for the two
+small lists that are still single values — `admins` and `hw_test_artifacts` — neither of which is a
+per-device collection.
 
 Residual, stated rather than hidden: `command_index` is itself one key. It is append-mostly
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
 of corrupting a record. Removing that residual means a Durable Object per device; see
 [docs/adr/ADR-002-per-entity-command-records.md](../docs/adr/ADR-002-per-entity-command-records.md).
+
+## Device storage (ADR-003)
+
+Devices follow the same shape, for the same reason — a lost field there can be `api_key_hash`
+(the device stops authenticating) or `status` (the dashboard says `active` for a machine that is
+locked):
+
+| key | value |
+|-----|-------|
+| `device:<id>` | one device record |
+| `device_index` | the ids, append-mostly |
+| `agent_key:<sha256>` | the id of the device that owns that API key |
+| `device_checkin:<id>` | check-in metadata (KV-RACE-001), merged on read |
+| `devices` | legacy whole-list key; read once for migration, then deleted |
+
+`agent_key:` exists so authentication is **one read**. Without it, `verifyAgentAuth` scanning
+per-entity records would turn one fleet read per agent request into N — a 60-device fleet
+polling every 300 s would go from ~288 reads/day to ~17,000. The pointer is derived data: the
+record stays the source of truth, `verifyAgentAuth` still compares the hash it computed against
+the hash on the record, and a pointer to a re-keyed device fails closed. See
+[docs/adr/ADR-003-per-entity-device-records.md](../docs/adr/ADR-003-per-entity-device-records.md).
+
+Reading a device back for the UI or a test goes through the API, not the KV layout:
+
+```bash
+GET /api/devices                            # the fleet, with derived lock_state
+GET /api/devices/:id                        # one device
+```
+
+## Location storage (ADR-004)
+
+Reports are per-entity too, with the index **per device** so devices do not share a window:
+
+| key | value |
+|-----|-------|
+| `location:<id>` | one report (latitude/longitude/city…, `observed_at`, `created_at`) |
+| `location_index:<deviceId>` | that device's report ids, oldest first |
+| `locations` | legacy whole-list key; migrated once, then deleted |
+
+Why: the old shape was ONE list capped at 1000 rows for the whole fleet. A tracking device polls
+every 30 s, so at 60 tracked devices each kept **16 reports — about eight minutes of trail** — the
+chattiest device starved the rest, and every single report rewrote up to 1000 rows. Each device
+now keeps `LOCATION_HISTORY_LIMIT` reports (default 500 ≈ 4 hours of continuous tracking,
+overridable with that `[vars]` entry), and any report that falls off the end is deleted rather
+than left behind. See
+[docs/adr/ADR-004-per-entity-location-reports.md](../docs/adr/ADR-004-per-entity-location-reports.md).
+
+## Audit storage (ADR-005)
+
+Audit entries are per-entity, behind **one** index that carries the device id:
+
+| key | value |
+|-----|-------|
+| `audit:<id>` | one entry (`action`, `detail`, `created_at`, `hostname`) |
+| `audit_index` | `[{id, device_id}]`, oldest first, capped |
+| `audit_log` | legacy whole-list key; migrated once, then deleted |
+
+Why: every mutation appended through a read of up to 500 entries **plus a scan of the whole
+fleet** to find one hostname — since ADR-003 that scan was one index read plus one read per
+device, on the busiest write in the system (measured: 61 gets for one `api_key_rotated` on a
+60-device fleet, 3 now). The index holds `device_id` as well as the id because the read API is
+either global or scoped to one device: per-device indexes would be a second write on every
+append, while the id in the index gives a scoped read its own ids for one write.
+`AUDIT_HISTORY_LIMIT` (default 1000) is overridable, and pruning deletes the record with its
+index entry. See
+[docs/adr/ADR-005-per-entity-audit-entries.md](../docs/adr/ADR-005-per-entity-audit-entries.md).
+
+## Secret storage (ADR-006)
+
+Encryption key material and BIOS/PBA credentials are one key **per device**, holding that
+device's rows:
+
+| key | value |
+|-----|-------|
+| `encryption_keys:<deviceId>` | that device's escrowed keys (one per command that escrowed) |
+| `bios_passwords:<deviceId>` | that device's credentials, KEK-encrypted as before |
+| `encryption_keys` / `bios_passwords` | legacy whole lists; migrated once, then deleted |
+
+Why: every access to both stores was already scoped to one device, so `device_id` *is* the
+partition — an index would add a write per escrow, and a cap would truncate secrets that must
+never be truncated (a lost encryption key is an unrecoverable device). Rows per device are single
+digits: one key per escrowing command, one credential per type of which there are four. See
+[docs/adr/ADR-006-per-device-secret-stores.md](../docs/adr/ADR-006-per-device-secret-stores.md).
 
 Reading a command back for the UI or a test goes through the API, not the KV layout:
 
@@ -109,6 +196,38 @@ scripts/sign-release-metadata.py \
   --artifact linux=agent/staging/lockdown-agent-linux-x64 \
   --out agent-release.json
 ```
+
+### Publishing is two halves, and they only work together
+
+Publishing `agent_release` makes `/api/agent/update` *offer* a version. It does not
+make any device *verify* it: a device only pins the key if its own config names
+`update_public_key`, which is a **path to `update_signing.pub`** (not PEM text — an
+inline PEM logs `Update public key not found` and the verifier refuses everything).
+So a release that publishes metadata but ships an installer without the public key
+leaves the fleet updating on `sha256-only` evidence: a digest delivered by the same
+origin as the bytes (see B-006).
+
+```bash
+# 1. sign the record (scripts/sign-release-metadata.py)
+# 2. publish it
+npx wrangler kv key put --binding=LOCKDOWN_KV agent_release --path agent-release.json
+# 3. stage the public key next to the binaries and rebuild the installer, so every
+#    install writes update_public_key into config.json
+cp update_signing.pub agent/dist/            # or STAGE=<dir> for build-generic-installer.sh
+# 4. verify on a device that its check-in flips to update_verification: signature
+npx wrangler deploy                           # only if Worker code changed
+```
+
+Two traps worth knowing, both measured:
+
+- `wrangler r2 object put` writes to the **local simulator** unless `--remote` is
+  passed, so an upload can "succeed" where nothing serves traffic.
+- A key published to R2 is **shadowed by KV** until the KV copy is deleted: the
+download route reads KV first, and KV deletes take up to a minute to propagate.
+Publish to R2, then `wrangler kv key delete … <key>`, then verify the served digest.
+- Restarting the service is not enough to pick up a config change if the old agent
+  child is still alive: stop the service, kill any lingering `lockdown-agent`
+  process, then start it, and confirm a fresh `Agent starting … build=…` line.
 
 `--artifact` takes `PLATFORM=PATH` with the platform names the agent sends in
 `X-Agent-Platform` (`win`, `linux`, `darwin`). Without `--key` the tool refuses
@@ -315,3 +434,4 @@ Authenticode-signed yet (that waits on the owner PFX — see D-130).
 - **Secrets and account bindings** — they only exist after `wrangler secret put`;
 - **Cron/scheduled handlers** — `verify-worker.sh` does not trigger them; run
   `wrangler dev --test-scheduled` and hit `/__scheduled` if you change one.
+The agent check-in response carries `settings.google_api_key` when `GOOGLE_API_KEY` is configured on the Worker, enabling runtime key rotation (ADR-010).

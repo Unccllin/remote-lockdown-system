@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Bell, RefreshCw, X, Monitor, MapPin, ShieldAlert,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import {
   getAlerts, getSeverity, dismissAlert, getDismissedAlertIds, _clearDismissed,
@@ -33,6 +32,7 @@ const SEVERITY_STYLE = {
 
 const ALERT_ICON = {
   missed_checkin: <Monitor size={18} />,
+  lock_unconfirmed: <ShieldAlert size={18} />,
   location_jump: <MapPin size={18} />,
   failed_unlock: <ShieldAlert size={18} />,
 };

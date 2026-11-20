@@ -3,3 +3,8 @@
 # for hash-pinning in a follow-up.
 cryptography==50.0.0
 requests==2.34.2
+# Windows only: the SCM host (service_host.py) imports servicemanager/win32serviceutil.
+# Without it a frozen lockdown-service.exe still BUILDS, and then fails at start with SCM
+# error 1053 and nothing in the log, because the import guard sets PYWIN32_AVAILABLE=False
+# instead of raising (measured on MOLE, S298). The marker keeps Linux installs unchanged.
+pywin32==312; sys_platform == "win32"

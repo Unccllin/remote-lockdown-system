@@ -93,6 +93,16 @@ def test_clean_history_passes():
     check("clean change exits 0", code == 0, out[:200])
 
 
+def test_an_unresolvable_base_scans_everything_instead_of_nothing():
+    """S317: a base that does not resolve made the range EMPTY, and an empty range reports "no
+    findings". The hook ran that way on a first push (origin/master did not exist yet) and passed a
+    credential-shaped commit. CI has always fallen back to the full history; the CLI now does too."""
+    repo, _base, _tip = make_repo({"src/creds.js": f"const k = '{AWS_KEY}';\n"})
+    code, out = scan(repo, "--base", "origin/master", "--head", "HEAD")
+    check("unresolvable base still finds the secret", code == 1, out[:200])
+    check("it says it fell back to the whole history", "does not resolve" in out, out[:200])
+
+
 def test_vendor_token_fails_and_is_never_echoed():
     repo, base, _ = make_repo({"src/creds.js": f"const k = '{AWS_KEY}';\n"})
     code, out = scan(repo, "--base", base, "--head", "HEAD")
@@ -193,6 +203,10 @@ if __name__ == "__main__":
     print("=== test_prepush_secrets.py ===")
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     print(f"    {len(tests)} tests discovered")
+    if not tests:
+        # S319: `if FAILED` alone reports success when discovery finds nothing.
+        print("  NO TESTS DISCOVERED — discovery is broken; refusing to report success")
+        sys.exit(1)
     print()
     for _name, _fn in tests:
         _fn()

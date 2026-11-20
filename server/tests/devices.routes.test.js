@@ -295,6 +295,44 @@ describe('POST /api/devices (enroll)', () => {
 
     expect(res.status).toBe(201);
   });
+
+  describe('google_api_key on enrol response (ruling C, S306)', () => {
+    let saved;
+    beforeEach(() => {
+      saved = process.env.GOOGLE_API_KEY;
+      mockPool.query.reset();
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = saved;
+    });
+
+    test('present when GOOGLE_API_KEY is set', async () => {
+      process.env.GOOGLE_API_KEY = 'test-google-key';
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active', api_key_hash: 'some-hash' }] });
+
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ hostname: 'DEV-NEW', owner_name: 'Charlie' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.google_api_key).toBe('test-google-key');
+    });
+
+    test('absent when GOOGLE_API_KEY is unset', async () => {
+      delete process.env.GOOGLE_API_KEY;
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-new', hostname: 'DEV-NEW', owner_name: 'Charlie', status: 'active', api_key_hash: 'some-hash' }] });
+
+      const res = await request(app)
+        .post('/api/devices')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ hostname: 'DEV-NEW', owner_name: 'Charlie' });
+
+      expect(res.status).toBe(201);
+      expect('google_api_key' in res.body).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1201,5 +1239,184 @@ describe('GET /api/devices/:id/commands', () => {
       .get('/api/devices/nope/commands')
       .set('Authorization', `Bearer ${makeToken()}`);
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lock_state (S272) — what the lock actually did, not what was queued
+// ---------------------------------------------------------------------------
+
+describe('lock_state', () => {
+  const app = createApp();
+  const { lockStateFor, LOCK_STATE_FRESH_MS } = require('../src/routes/devices').helpers;
+
+  // Injectable "now", so the freshness window is decided by the fixture and not by the clock
+  // the test happens to run on.
+  const NOW = Date.UTC(2026, 10, 18, 12, 0, 0);
+  const FRESH = new Date(NOW - 30 * 1000).toISOString();
+  const QUIET = new Date(NOW - 60 * 60 * 1000).toISOString();
+
+  function lockdown(status, createdAt = '2026-11-18T11:00:00.000Z') {
+    return { command_type: 'lockdown', status, created_at: createdAt };
+  }
+  function unlock(createdAt) {
+    return { command_type: 'unlock', status: 'executed', created_at: createdAt };
+  }
+
+  test('applied — the lockdown ACKed', () => {
+    expect(lockStateFor({ lockdown: lockdown('executed') }, { last_checkin: FRESH }, NOW)).toBe('applied');
+  });
+
+  test('applying — queued, and the device is still checking in', () => {
+    expect(lockStateFor({ lockdown: lockdown('pending') }, { last_checkin: FRESH }, NOW)).toBe('applying');
+  });
+
+  test('armed — queued, but the device has gone quiet', () => {
+    // The case an operator must not read as "locked": flagged while offline. Nothing on the
+    // machine has changed, and `status: stolen` alone cannot say so.
+    expect(lockStateFor({ lockdown: lockdown('pending') }, { last_checkin: QUIET }, NOW)).toBe('armed');
+  });
+
+  test('armed — a device that never checked in at all', () => {
+    expect(lockStateFor({ lockdown: lockdown('pending') }, { last_checkin: null }, NOW)).toBe('armed');
+  });
+
+  test('failed — the lockdown reported failure', () => {
+    expect(lockStateFor({ lockdown: lockdown('failed') }, { last_checkin: FRESH }, NOW)).toBe('failed');
+  });
+
+  test('none — no lockdown in play', () => {
+    expect(lockStateFor(undefined, { last_checkin: FRESH }, NOW)).toBe('none');
+    expect(lockStateFor({}, { last_checkin: FRESH }, NOW)).toBe('none');
+  });
+
+  test('none — a cancelled lockdown', () => {
+    expect(lockStateFor({ lockdown: lockdown('cancelled') }, { last_checkin: FRESH }, NOW)).toBe('none');
+  });
+
+  test('none — an unlock came after the lockdown', () => {
+    const parts = { lockdown: lockdown('executed'), unlock: unlock('2026-11-18T11:30:00.000Z') };
+    expect(lockStateFor(parts, { last_checkin: FRESH }, NOW)).toBe('none');
+  });
+
+  test('a lockdown after the unlock is still applied', () => {
+    const parts = { lockdown: lockdown('executed', '2026-11-18T11:30:00.000Z'), unlock: unlock('2026-11-18T11:00:00.000Z') };
+    expect(lockStateFor(parts, { last_checkin: FRESH }, NOW)).toBe('applied');
+  });
+
+  test('compares SQLite and PostgreSQL timestamp shapes between the two commands (D-258)', () => {
+    // The two rows can be written by different dialects' conventions — a zone-less
+    // `datetime('now')` value and an ISO one. A raw string compare puts ' 11:30' before 'T11:00'
+    // on the space character alone, which would report the lockdown as still in play.
+    const parts = {
+      lockdown: lockdown('executed', '2026-11-18 11:00:00'),
+      unlock: unlock('2026-11-18T11:30:00.000Z'),
+    };
+    expect(lockStateFor(parts, { last_checkin: FRESH }, NOW)).toBe('none');
+  });
+
+  test('the freshness window is 180 s', () => {
+    expect(LOCK_STATE_FRESH_MS).toBe(180 * 1000);
+    const at = (ms) => new Date(NOW - ms).toISOString();
+    expect(lockStateFor({ lockdown: lockdown('pending') }, { last_checkin: at(179000) }, NOW)).toBe('applying');
+    expect(lockStateFor({ lockdown: lockdown('pending') }, { last_checkin: at(181000) }, NOW)).toBe('armed');
+  });
+
+  test('GET /api/devices attaches it per device from the command rows', async () => {
+    // Relative to the real clock: this path calls `lockStateFor` with `Date.now()`, so a frozen
+    // fixture date would make every row "fresh" on the day the test runs.
+    const freshAt = new Date(Date.now() - 30 * 1000).toISOString();
+    const quietAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    mockPool.query.setResult('SELECT * FROM devices ORDER BY', {
+      rows: [
+        { id: 'dev-ack', hostname: 'ACK-1', owner_name: 'A', status: 'stolen', last_checkin: freshAt },
+        { id: 'dev-quiet', hostname: 'QUIET-1', owner_name: 'B', status: 'stolen', last_checkin: quietAt },
+        { id: 'dev-idle', hostname: 'IDLE-1', owner_name: 'C', status: 'active', last_checkin: freshAt },
+      ],
+    });
+    mockPool.query.setResult('FROM commands', (_sql, params) => {
+      expect(params).toEqual(['dev-ack', 'dev-quiet', 'dev-idle']);
+      return { rows: [
+        { device_id: 'dev-ack', command_type: 'lockdown', status: 'executed', created_at: '2026-11-18T11:00:00.000Z' },
+        { device_id: 'dev-quiet', command_type: 'lockdown', status: 'pending', created_at: '2026-11-18T11:00:00.000Z' },
+      ] };
+    });
+
+    const res = await request(app)
+      .get('/api/devices')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    const byId = Object.fromEntries(res.body.map((d) => [d.id, d.lock_state]));
+    // `applied`/`armed` are fixed by the row; `applying` depends on the wall clock (the frozen
+    // fixture time is in the past), so this asserts the state machine, not the current date.
+    expect(byId['dev-ack']).toBe('applied');
+    expect(byId['dev-quiet']).toBe('armed');
+    expect(byId['dev-idle']).toBe('none');    // The helper columns must not leak: only `lock_state` is part of the device shape.
+    expect(res.body[0]).not.toHaveProperty('lock_status');
+    expect(res.body[0]).not.toHaveProperty('created_at');
+  });
+
+  test('GET /api/devices/:id carries the same field', async () => {
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', {
+      rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: 'A', status: 'stolen', last_checkin: FRESH }],
+    });
+    mockPool.query.setResult('FROM commands', {
+      rows: [{ device_id: 'dev-1', command_type: 'lockdown', status: 'executed', created_at: '2026-11-18T11:00:00.000Z' }],
+    });
+
+    const res = await request(app)
+      .get('/api/devices/dev-1')
+      .set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lock_state).toBe('applied');
+  });
+
+  test('the lockdown/recover responses do NOT gain the field', async () => {
+    // `publicDevice` also shapes those responses, and they carry no command rows — deriving
+    // there would answer `none` for a lockdown queued one line earlier.
+    mockPool.query.setResult('SELECT * FROM devices WHERE id', {
+      rows: [{ id: 'dev-1', hostname: 'DEV-001', owner_name: 'A', status: 'active' }],
+    });
+    mockPool.query.setResult('INSERT INTO commands', {
+      rows: [{ id: 'cmd-1', device_id: 'dev-1', command_type: 'lockdown', status: 'pending' }],
+    });
+
+    const res = await request(app)
+      .post('/api/devices/dev-1/flag-stolen')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ hostname_confirm: 'DEV-001' });
+
+    expect(res.status).not.toBe(500);
+    expect(res.body.device).toBeDefined();
+    expect(res.body.device).not.toHaveProperty('lock_state');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Location read side — ordered by when the fix was taken (S272)
+// ---------------------------------------------------------------------------
+
+describe('location ordering honours observed_at', () => {
+  const app = createApp();
+
+  test('history orders by COALESCE(observed_at, reported_at)', async () => {
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: [] });
+    const res = await request(app)
+      .get('/api/devices/dev-1/locations')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    const call = mockPool.query.mock.calls.find(([sql]) => String(sql).includes('FROM location_reports'));
+    expect(call[0]).toContain('COALESCE(observed_at, reported_at) DESC');
+  });
+
+  test('the latest location uses the same key, so it cannot disagree with row 1 of the history', async () => {
+    mockPool.query.setResult('SELECT * FROM location_reports', { rows: [] });
+    await request(app)
+      .get('/api/devices/dev-1/location/latest')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    const call = mockPool.query.mock.calls.find(([sql]) => String(sql).includes('FROM location_reports'));
+    expect(call[0]).toContain('COALESCE(observed_at, reported_at) DESC');
   });
 });

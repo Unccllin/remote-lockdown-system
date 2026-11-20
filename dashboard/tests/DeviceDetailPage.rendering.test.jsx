@@ -104,6 +104,53 @@ describe('DeviceDetailPage', () => {
     expect(screen.getByText('AA:BB:CC:DD:EE:FF')).toBeInTheDocument();
   });
 
+  it('names the reason and the next step when a boot-lock layer could not apply (S271)', async () => {
+    // Measured on MOLE: the panel said "partial · total critical 0" and gave no next action,
+    // because the cause lived only in the agent log. The agent now puts it in the ACK.
+    const detail = {
+      lockdown_effective: false,
+      boot_lock_status: 'partial',
+      boot_lock_detail: {
+        boot_lock_attempted: true,
+        critical_applied_total: 0,
+        reason: 'existing_bios_password_without_uefi_password',
+        next_action: 'Set uefi_password in the agent config, then re-apply the lockdown.',
+        bcd: { rolled_back: true, critical_applied: 0 },
+        hp_uefi: { not_hp: false, critical_applied: 0 },
+      },
+    };
+
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: { ...baseDevice, status: 'locked' } });
+      }
+      if (url.startsWith('/audit')) {
+        return Promise.resolve({
+          data: [
+            {
+              id: 'audit-1',
+              action: 'agent_lockdown_confirmed',
+              detail: JSON.stringify(detail),
+              created_at: '2025-01-01T00:00:00Z',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByText('Boot lock did not apply')).toBeInTheDocument();
+    }, { timeout: 3000 });
+    expect(screen.getByText(/already has a BIOS Setup password/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next step:/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Set uefi_password in the agent config/),
+    ).toBeInTheDocument();
+  });
+
   it('shows N/A for missing hardware identifiers', async () => {
     api.get.mockImplementation((url) => {
       if (url.startsWith('/devices/1') && !url.includes('location')) {
@@ -257,6 +304,71 @@ describe('DeviceDetailPage', () => {
       const elements = screen.getAllByText('Latest Location');
       expect(elements.length).toBeGreaterThan(0);
     }, { timeout: 3000 });
+  });
+
+  it('labels an ip fix as approximate and reports accuracy as not reported', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      if (url.includes('/locations')) {
+        return Promise.resolve({
+          data: [{
+            id: 'loc-1',
+            latitude: 37.7749,
+            longitude: -122.4194,
+            source: 'ip',
+            accuracy_meters: null,
+            city: 'Karatina',
+            region: 'KE',
+            country: 'KE',
+            reported_at: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/not reported/).length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+    expect(screen.getAllByText(/Approximate/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ISP/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ip/).length).toBeGreaterThan(0);
+  });
+
+  it('shows metre accuracy and no approximate label for a wifi fix', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.startsWith('/devices/1') && !url.includes('location')) {
+        return Promise.resolve({ data: baseDevice });
+      }
+      if (url.includes('/locations')) {
+        return Promise.resolve({
+          data: [{
+            id: 'loc-1',
+            latitude: 37.7749,
+            longitude: -122.4194,
+            source: 'wifi',
+            accuracy_meters: 25,
+            city: 'San Francisco',
+            region: 'CA',
+            country: 'US',
+            reported_at: '2025-01-01T00:00:00Z',
+          }],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/~25m/).length).toBeGreaterThanOrEqual(2);
+    }, { timeout: 3000 });
+    expect(screen.queryByText(/Approximate/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Accuracy').length).toBeGreaterThan(0);
   });
 
   // Phase 17: Lockdown-effectiveness panel tests

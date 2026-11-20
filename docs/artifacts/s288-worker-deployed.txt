@@ -1,0 +1,63 @@
+=== S288: the Worker is deployed — and what it hands out is stale, 2026-11-18T08:30:33Z ===
+
+--- [1] login: device flow, no browser needed on this host ---
+$ npx wrangler login --device
+  https://dash.cloudflare.com/oauth2/device/verify   code UnCrzRrg   (approved by the operator)
+$ npx wrangler whoami
+  logged in with an OAuth Token, mainacollins196@gmail.com
+  Account ID eb7daee7153944d8aa34aac1c3f6d5f3
+  scopes: workers (write), workers_kv (write), ...
+NOTE: this wrangler (4.162.0) has no `deploy --temporary`, so publishing needs auth;
+      the device flow is what made it possible from an SSH/headless host.
+
+--- [2] pre-deploy verification, no account needed (scripts/verify-worker.sh) ---
+bundle built: 220K worker.js        contains /v1/verdict, /api/agent/checkin, /api/enroll, /api/download/agent
+workerd serving on 127.0.0.1:8799   /api/setup/status 200, /api/devices 401/200/401, unknown 404
+PBL /v1                             junk verdict -> 400, /v1/policy/1 -> 200
+
+--- [3] deploy ---
+Total Upload: 218.42 KiB / gzip: 44.82 KiB
+Worker Startup Time: 6 ms
+env.LOCKDOWN_KV (84b24c0c1b9e4896b6c6fa41548ac636)  KV Namespace
+Uploaded lockdown-serverless (8.40 sec) / Deployed triggers (2.90 sec)
+https://lockdown-serverless.mainacollins196.workers.dev
+Current Version ID: 6a113a90-7707-4b32-a7f0-852e205ee812
+
+--- [4] the deployed Worker, over HTTPS ---
+  GET /api/setup/status        HTTP 200  {"setupComplete":true,"needsSetup":false,"admins":1}
+  GET /api/devices (no token)  HTTP 401  {"error":"Admin authentication required"}
+  GET /api/health              HTTP 200  {"status":"ok","timestamp":"2026-11-18T08:30:35.634Z","serverless":tru
+  GET /v1/health               HTTP 200  {"status":"ok","pbl":true}
+  POST /v1/verdict (junk)      HTTP 400  {"error":"invalid CBOR request"}
+  GET /v1/policy/1             HTTP 200  bytes=1471
+  GET /unknown                 HTTP 404  {"error":"Not found"}
+
+--- [5] the finding: what that Worker HANDS OUT is stale ---
+GET /api/download/agent -> 200, 16,370,993 bytes
+  sha256 39a29b3503b41c48a5546c885c9d16f38d69d454098a07f9c3493f8124c08867
+  PE COFF TimeDateStamp 1794496576 -> 2026-11-12T15:16:16Z
+
+Known builds it is NOT:
+  2026-11-17  16,377,410 B  bb32c3d2…   (the one MOLE was running until S286)
+  2026-11-18  16,851,916 B  b17f390d…   (S284 WinRE fix, deployed to MOLE)
+  2026-11-18  16,851,916 B  d9e45902…   (S287, carries build=20261118.4bfeda526b77)
+
+So the published agent predates: the S271-era BIOS-restore reporting fixes, the S284 WinRE
+idempotency fix, and the S287 build identity. Anyone installing from the dashboard today gets
+the 2026-11-12 build — the very staleness the build id was added to make visible.
+
+Other downloads served (unchecked provenance): installer 18,628,686 B,
+agent-installer 15,310,848 B, lockscreen 7,480,470 B.
+
+--- [6] what publishing them would take ---
+  #      npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent:win   --path ./dist/lockdown-agent.exe
+  #      npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent:linux --path ./dist/lockdown-agent
+  npx wrangler kv key put --binding=LOCKDOWN_KV binary:agent --path ./dist/lockdown-agent.exe
+  plus agent_release metadata (signed — scripts/sign-release-metadata.py), which is not a
+  repair to improvise: the update path refuses metadata whose hash it cannot verify.
+
+--- [7] verdict ---
+DONE      the Worker deployment: current code, version 6a113a90-7707-4b32-a7f0-852e205ee812,
+          all routes answering over HTTPS, KV bound, 1 admin in the existing setup state.
+OPEN      the release: binaries in KV are from 2026-11-12. Publishing the current agent (and
+          companions) plus signed agent_release metadata is a release decision, not a deploy step.

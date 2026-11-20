@@ -228,9 +228,11 @@ Enroll a new device. Generates a per-device API key (returned once, never stored
 
 | Status | Body | Description |
 |--------|------|-------------|
-| 201 | `{ ...device, api_key }` | Device enrolled. `api_key` is plaintext — capture now. |
+| 201 | `{ ...device, api_key, google_api_key? }` | Device enrolled. `api_key` is plaintext — capture now. `google_api_key` is returned only when `GOOGLE_API_KEY` is configured on the server. |
 | 400 | `{ error }` | Missing fields or invalid hostname. |
 | 409 | `{ error }` | Hostname already registered. |
+
+`POST /api/enroll/claim` returns the same optional `google_api_key` on the same condition (`GOOGLE_API_KEY` configured on the server). `POST /api/enroll` on the serverless surface behaves identically.
 
 ### PATCH /api/devices/:id
 

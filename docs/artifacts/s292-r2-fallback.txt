@@ -1,0 +1,49 @@
+=== S292: the R2 route for oversized artifacts — code ready, R2 not enabled, 2026-11-18T09:41:57Z ===
+
+--- [1] R2 is not enabled on this account ---
+$ npx wrangler r2 bucket list
+  ERROR  A request to the Cloudflare API (/accounts/eb7daee7…/r2/buckets) failed.
+  Please enable R2 through the Cloudflare Dashboard. [code: 10042]
+$ npx wrangler r2 bucket create lockdown-binaries
+  same error, code 10042
+  Enabling R2 is a dashboard action (it is a separate product with its own activation and
+  billing setup), so it is not something a CLI call here can do.
+
+--- [2] the code that makes R2 usable the moment it is enabled ---
+serverless/pbl/env.ts      Env.BINARIES?: R2Bucket   (optional: absent = the old KV-only behaviour)
+serverless/worker.ts       readBinary(env, key): KV first, then R2 under the SAME key name
+                           used by handleDownloadBinary (binary:installer etc.) and by the
+                           agent-authenticated /api/agent/download (binary:agent:<platform>)
+
+--- [3] tests ---
+  1864:    it('serves an artifact from R2 when KV cannot hold it', async () => {
+  1866:      // payload, so the installer has to be published somewhere else. R2 is that place; the
+  1870:      const envWithR2 = {
+  1880:      const resp = await worker.fetch(makeRequest('GET', '/api/download/installer'), envWithR2);
+
+--- [4] runs ---
+        Tests  483 passed (483)
+     Start at  12:41:58
+     Duration  2.38s (transform 1.35s, setup 0ms, import 1.11s, tests 3.67s, environment 1ms)
+  
+  tsc: clean
+
+--- [5] deployed, and behaviour unchanged without the binding ---
+  Uploaded lockdown-serverless / Current Version ID: 07690cdd-3291-4e32-8036-a5af9b430199
+  bindings: env.LOCKDOWN_KV (84b24c0c…) only — no BINARIES, by design until R2 exists
+  installer        18628686 B  4b1be636076bc891
+  agent            16852161 B  d9e45902674537f9
+  agent-installer  15789390 B  399ad9ba8e37465d
+  lockscreen       9146350 B  6592fd87f726a4b7
+
+--- [6] what remains, precisely ---
+  1. operator: enable R2 in the Cloudflare dashboard (one action, code 10042 today)
+  2. then:  npx wrangler r2 bucket create lockdown-binaries
+            add  [[r2_buckets]] binding = "BINARIES" bucket_name = "lockdown-binaries"  to
+                 serverless/wrangler.toml
+            npx wrangler r2 object put lockdown-binaries/binary:installer \\
+                 --file /tmp/release/nsis-wrapper-41mb.exe
+            npx wrangler deploy
+  3. verify: GET /api/download/installer returns 41,203,591 B with
+             x-content-sha256 e5f0f390ae7d5729376fe7bdc0713c998d3d741d67059cf34c159b0af52b9680
+  The 41 MB wrapper is built and sitting at /tmp/release/nsis-wrapper-41mb.exe (sha256 above).

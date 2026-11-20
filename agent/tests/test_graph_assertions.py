@@ -14,15 +14,20 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add graph directory to path
 _GRAPH_DIR = Path(__file__).resolve().parent.parent.parent / ".devin" / "graph"
 sys.path.insert(0, str(_GRAPH_DIR))
 from graph_assert import (  # noqa: E402
     GraphViolationError,
     artifact_supports_claim,
+    assert_all_invariants,
     assert_artifact_quality,
+    assert_claimed_closures_are_real,
     assert_debt_close_has_evidence,
     assert_enforcement_path_status,
+    assert_open_debt_list_matches_ledger,
     assert_orchestrator_knows_all_phases,
     assert_phase_deps_met,
     assert_rule_zero_quality,
@@ -666,3 +671,112 @@ class TestI6OrchestratorPhases:
         except GraphViolationError as e:
             assert "I6" in str(e)
             assert "not found" in str(e)
+
+
+class TestVacuityGuard:
+    """S321: an empty graph satisfies every invariant by examining nothing.
+
+    The guard exists because the same defect appeared three times in one arc — S318's empty
+    scan range, S319's zero discovered tests, S320's empty gate scope. Each gate reported on
+    what it found and never on what it examined; this one asserts the counts first.
+    """
+
+    def test_an_empty_graph_is_reported_not_passed(self):
+        violations = assert_all_invariants({"nodes": [], "enforcement_paths": []})
+        vacuity = [v for v in violations if "vacuous" in v or "examines nothing" in v]
+        assert len(vacuity) == 3, f"expected three vacuity violations, got: {violations}"
+        assert any("phase nodes" in v for v in vacuity)
+        assert any("debt items" in v for v in vacuity)
+        assert any("enforcement paths" in v for v in vacuity)
+
+    def test_the_real_graph_is_not_vacuous(self):
+        """The guard must not fire on the repository's own spec — it has phases, debt and paths."""
+        violations = assert_all_invariants()
+        vacuity = [v for v in violations if "vacuous" in v or "examines nothing" in v]
+        assert vacuity == [], f"the real graph reported vacuity: {vacuity}"
+
+
+class TestOpenDebtListMatchesLedger:
+    """S326: the block's open-debt list must be derived from the ledgers.
+
+    S324 found D-210 listed as open in every block since S303 while the ledger had it CLOSED.
+    Nothing objected, because any string satisfies "Debt items still open".
+    """
+
+    @staticmethod
+    def _project(tmp_path, block_body):
+        (tmp_path / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".devin" / "graph").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs/adr/PBL-DEBT-LEDGER.md").write_text(
+            "### D-120 — BitLocker\n- **Status**: OPEN\n\n"
+            "### D-210 — route integration\n- **Status**: CLOSED (commit 9612fbb)\n"
+        )
+        trace = tmp_path / ".devin/graph/trace.md"
+        trace.write_text(
+            "## Session 999 — synthetic\n\n"
+            "### Debt items still open\n\n" + block_body + "\n\n"
+            "### Next session opening\n\nx\n"
+        )
+        return trace
+
+    def test_a_closed_item_listed_as_open_is_a_violation(self, tmp_path):
+        listed = "D-120 (BitLocker), D-210 (PBL route integration)."
+        trace = self._project(tmp_path, listed)
+        with pytest.raises(GraphViolationError) as exc:
+            assert_open_debt_list_matches_ledger(trace, tmp_path)
+        assert "D-210" in str(exc.value)
+
+    def test_the_derived_list_passes(self, tmp_path):
+        trace = self._project(tmp_path, "D-120 (BitLocker real media).")
+        assert_open_debt_list_matches_ledger(trace, tmp_path)
+
+
+class TestClaimedClosuresAreReal:
+    """S327: a closure the block claims must be one the ledger records.
+
+    Prose is deliberately not scanned — S119's block says "None. This session fixed live defects
+    (D-119/D-120-adjacent behaviour)", naming two ids and closing neither. Only the explicit form
+    `- **D-nnn — CLOSED**` is a claim.
+    """
+
+    @staticmethod
+    def _project(tmp_path, closed_body, ledger_status="OPEN", orphans=""):
+        (tmp_path / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".devin" / "graph").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs/adr/PBL-DEBT-LEDGER.md").write_text(
+            f"### D-120 — BitLocker\n- **Status**: {ledger_status}\n"
+        )
+        (tmp_path / ".devin/graph/orphaned-commit-refs.txt").write_text(orphans)
+        (tmp_path / "docs/adr/x.md").write_text("evidence\n")  # the claim cites it
+        trace = tmp_path / ".devin/graph/trace.md"
+        trace.write_text(
+            "## Session 999 — synthetic\n\n### Debt items closed\n\n"
+            + closed_body
+            + "\n\n### Next session opening\n\nx\n"
+        )
+        return trace
+
+    def test_a_closure_the_ledger_does_not_record_is_a_violation(self, tmp_path):
+        trace = self._project(tmp_path, "- **D-120 — CLOSED.** criteria met, honest.")
+        with pytest.raises(GraphViolationError) as exc:
+            assert_claimed_closures_are_real(trace, tmp_path)
+        assert "D-120" in str(exc.value)
+
+    def test_prose_that_merely_names_ids_is_not_a_claim(self, tmp_path):
+        trace = self._project(
+            tmp_path,
+            "None. Fixed live defects (D-119/D-120-adjacent behaviour) but closed none.",
+        )
+        assert_claimed_closures_are_real(trace, tmp_path)
+
+    def test_a_cited_commit_must_resolve_or_be_a_known_orphan(self, tmp_path):
+        claim = "- **D-120 — CLOSED** (`commit_ref deadbeefcafe`), artifact docs/adr/x.md."
+        trace = self._project(tmp_path, claim, ledger_status="CLOSED")
+        with pytest.raises(GraphViolationError) as exc:
+            assert_claimed_closures_are_real(trace, tmp_path)
+        message = str(exc.value)
+        assert "deadbeefcafe" in message or "does not exist" in message
+
+        # the same claim passes once the hash is a known orphan (S149 rewrite baseline)
+        trace = self._project(tmp_path, claim, ledger_status="CLOSED", orphans="deadbeefcafe\n")
+        assert_claimed_closures_are_real(trace, tmp_path)

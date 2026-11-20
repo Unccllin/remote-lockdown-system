@@ -1,0 +1,50 @@
+=== S303: why the map is wrong — it is IP-level, and WiFi is unavailable to a service (2026-11-18T12:21:07Z) ===
+
+--- [1] what the map is plotting ---
+Worker, device MOLE (14e7dafb…), GET /api/devices/:id/locations — three reports, identical:
+  latitude -0.4840639  longitude 37.1266157  source "ip"  accuracy null
+  city Karatina  region Nyeri  country KE  ip 41.90.239.213
+The dashboard plots [lat, lon] in that order (Leaflet) — the coordinates are rendered faithfully,
+and they are consistent with the named city.
+
+--- [2] where that answer comes from ---
+agent/agent.py prefers Google WiFi triangulation (geolocation/v1/geolocate) when cfg.google_api_key
+is set, and otherwise falls back to https://ipwho.is/ — a lookup that reports the EGRESS IP's location.
+Asking ipwho.is directly about 41.90.239.213 (this host's own egress):
+  Kenya / Nyeri / Karatina, Safaricom Limited (ASN 37061), -0.4840639 / 37.1266157
+So the agent reported exactly what the provider said: the ISP's booked location, not the device's.
+
+--- [3] why the better source is unavailable on this box ---
+netsh wlan show networks mode=bssid, on MOLE, as the installing admin:
+  "Network shell commands need location permission to access WLAN information.
+   Turn on Location services ... Access is denied."
+No SSIDs, no BSSIDs — so no triangulation input at all.
+
+Tried, in order, and measured:
+  1. HKLM ConsentStore\location\Value = Allow            -> still denied
+  2. HKCU ConsentStore\location\Value = Allow (created)  -> still denied
+  3. lfsvc restarted, HKLM lfsvc Status = 1              -> still denied
+  4. a SYSTEM scheduled task to rule out the SSH user     -> the task never ran (MOLE's Task
+     Scheduler is the broken one documented in service_host.py, S216-S219)
+Conclusion: on this Windows 11 build the WLAN scan needs a location-capable INTERACTIVE session,
+and our agent runs as a LocalSystem service in session 0. WiFi triangulation is therefore
+unavailable to the deployed agent regardless of the API key.
+
+--- [4] what that means for the product ---
+  • A service install's location accuracy ceiling is IP geolocation: city-level at best, and on
+    carrier-grade NAT it resolves the ISP's hub (Karatina for Safaricom) — every device behind
+    that egress plots the same dot, which is exactly what the map shows.
+  • The Worker has NO google_api_key provisioning (grep: nothing in serverless/), while the
+    Express installer injects it (server/src/routes/installer.js:562). So even where BSSIDs are
+    obtainable, a Worker-enrolled fleet cannot be given a triangulation key today.
+  • The dashboard presents the fix with no source, accuracy or age — a confident marker for a
+    city-level guess. Three identical points read as a trail.
+
+--- [5] options, cheapest first ---
+  a. UI honesty (no new data): show source (ip/wifi/gps), accuracy and age next to the map and in
+     the device card, and label ip fixes "approximate - ISP location". Stops the map lying.
+  b. Provision google_api_key on the serverless path (Worker setup script + config), so devices
+     that CAN scan (interactive installs, laptops with the agent in a user session) get real fixes.
+  c. Capture BSSIDs another way on service installs: a small in-session helper, or WlanGetNetworkBssList
+     from an interactive process — architectural, needs design.
+  d. Accept IP-level for service installs and say so in the product/README.

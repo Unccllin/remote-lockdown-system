@@ -11,6 +11,36 @@ const { sendNotification } = require('../notifications/notify');
 const { getDeviceByApiKeyHash, getDeviceByHostname, getDeviceByHardwareIdentity } = require('../db/deviceQueries');
 const { createSharedEnv } = require('../pbl/kvStore');
 const logger = require('../logger');
+const { parseDbTimestamp } = require('../db/timestamps');
+
+/**
+ * How far ahead of the server clock an agent-claimed observation time may sit.
+ *
+ * A device clock is not trusted, and S271 measured one that had stopped (`w32time` was
+ * Stopped/Manual on MOLE, so the clock only advanced from the CMOS value at boot). A claim from
+ * the future is therefore dropped rather than stored: the read side then falls back to receipt
+ * time, which is the honest answer, instead of a pin placed tomorrow.
+ */
+const OBSERVED_AT_MAX_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Normalise an agent-supplied `observed_at` for storage, or null when it cannot be used.
+ *
+ * The agent sends this only on the backfilled path: a WiFi scan taken while offline is resolved
+ * later, and `observed_at` is the SCAN time, not the upload time. Without it a backfilled trail
+ * reads as if the device were there when it reconnected (S271). Absent or unusable → null, and
+ * the column default (receipt time) is what the trail uses.
+ *
+ * @param {unknown} value
+ * @param {number} [now] milliseconds, injectable so the clamp is testable
+ * @returns {string|null} ISO-8601, or null
+ */
+function normalizeObservedAt(value, now = Date.now()) {
+  const ms = parseDbTimestamp(value);
+  if (ms === null) return null;
+  if (ms > now + OBSERVED_AT_MAX_SKEW_MS) return null;
+  return new Date(ms).toISOString();
+}
 
 const router = express.Router();
 
@@ -302,6 +332,25 @@ function calculatePollInterval(deviceStatus) {
   return ADAPTIVE_POLL[deviceStatus] || 300;
 }
 
+
+
+/**
+ * ADR-010: runtime geolocation-key override delivered via the check-in response.
+ * Present ONLY when process.env.GOOGLE_API_KEY is defined (defined-but-empty
+ * means an explicit "stop overriding"). Returns undefined when unset so the
+ * response stays byte-identical to the pre-ADR-010 shape.
+ */
+function agentRuntimeSettings() {
+  if (process.env.GOOGLE_API_KEY === undefined) return undefined;
+  const raw = process.env.GOOGLE_API_KEY;
+  const key = (raw || '').trim();
+  const google_api_key = key === '' ? null : key;
+  const crypto = require('crypto');
+  const canonical = JSON.stringify({ google_api_key: google_api_key });
+  const revision = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+  return { google_api_key, revision };
+}
+
 router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid } = req.body;
   // S1.4: agent-reported TPM restartCount (optional; absent on non-Windows
@@ -370,6 +419,7 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
   // restartCount). We flag, not block, per the DEGRADED-alarm ruling.
   const pblBoot = await correlatePblBoot(device, tpmRestartCount);
 
+  const runtimeSettings = agentRuntimeSettings();
   res.json({
     device_id: device.id,
     status: device.status,
@@ -400,6 +450,7 @@ router.post('/checkin', agentAuth, hmacVerify(), async (req, res) => {
           bitlocker_recovery_password: bitlockerRecoveryPassword,
         }
       : null,
+    ...(runtimeSettings ? { settings: runtimeSettings } : {}),
   });
 });
 
@@ -737,6 +788,12 @@ router.post('/deadman-report', agentAuth, hmacVerify(), async (req, res) => {
  * raw_data is no longer stored — the write path uses an explicit allowlist
  * of fields rather than storing the entire location object. This prevents
  * accidental storage of future fields that may contain PII.
+ *
+ * `observed_at` travels at the TOP LEVEL of the body (next to `location`), not inside the
+ * location object: it is a property of the report, and the agent's backfill path sends it that
+ * way. It stays optional — the online path sends no `observed_at` at all — and the read side
+ * orders by `COALESCE(observed_at, reported_at)` so a report without one keeps using receipt
+ * time.
  */
 router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
   const { hostname, mac_address, hardware_uuid, location } = req.body;
@@ -752,6 +809,9 @@ router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
     city, region, country, ip, wifi_count,
   } = location;
 
+  // The scan time, when the agent has one; null means "use the receipt time".
+  const observedAt = normalizeObservedAt(req.body.observed_at);
+
   // FA5: Encrypt sensitive location fields at rest
   const latEnc = latitude != null ? encryptField(String(latitude), 'LOCATION_FIELD_KEY') : {};
   const lonEnc = longitude != null ? encryptField(String(longitude), 'LOCATION_FIELD_KEY') : {};
@@ -762,18 +822,18 @@ router.post('/location', agentAuth, hmacVerify(), async (req, res) => {
   await pool.query(
     `INSERT INTO location_reports
        (device_id, latitude, longitude, accuracy_meters, source,
-        city, region, country, ip_address, wifi_count,
+        city, region, country, ip_address, wifi_count, observed_at,
         latitude_enc, lat_enc_nonce, lat_enc_tag,
         longitude_enc, lon_enc_nonce, lon_enc_tag,
         city_enc, city_enc_nonce, city_enc_tag,
         region_enc, region_enc_nonce, region_enc_tag,
         ip_address_enc, ip_enc_nonce, ip_enc_tag)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+             $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
     [
       device.id, latitude, longitude, accuracy_meters || null,
       source || 'ip', city || null, region || null, country || null,
-      ip || null, wifi_count || null,
+      ip || null, wifi_count || null, observedAt,
       // Encrypted columns
       latEnc.ciphertext || null, latEnc.nonce || null, latEnc.tag || null,
       lonEnc.ciphertext || null, lonEnc.nonce || null, lonEnc.tag || null,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import MapPage from '../src/pages/MapPage';
 import { setupUser } from './setup';
@@ -53,8 +53,8 @@ const mockDevices = [
 ];
 
 const mockLocations = {
-  'dev-1': [{ id: 'loc-1', latitude: 37.7749, longitude: -122.4194, reported_at: new Date().toISOString(), city: 'San Francisco', country: 'USA' }],
-  'dev-2': [{ id: 'loc-2', latitude: 40.7128, longitude: -74.006, reported_at: new Date().toISOString(), city: 'New York', country: 'USA' }],
+  'dev-1': [{ id: 'loc-1', latitude: 37.7749, longitude: -122.4194, reported_at: new Date().toISOString(), source: 'ip', accuracy_meters: null, city: 'Karatina', country: 'KE' }],
+  'dev-2': [{ id: 'loc-2', latitude: 40.7128, longitude: -74.006, reported_at: new Date().toISOString(), source: 'wifi', accuracy_meters: 25, city: 'New York', country: 'USA' }],
 };
 
 beforeEach(() => {
@@ -170,5 +170,48 @@ describe('MapPage', () => {
       expect(api.get).toHaveBeenCalledWith('/devices/dev-1/locations?limit=1');
       expect(api.get).toHaveBeenCalledWith('/devices/dev-2/locations?limit=1');
     });
+  });
+
+  it('labels an ip-source fix as approximate with its source and no accuracy', async () => {
+    renderWithRouter();
+    await waitFor(() => {
+      expect(screen.getByText(/Approximate/i)).toBeInTheDocument();
+    });
+    expect(screen.getAllByText(/ISP/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Source: ip/)).toBeInTheDocument();
+    expect(screen.getByText(/Accuracy: not reported/)).toBeInTheDocument();
+  });
+
+  it('shows metre accuracy for a wifi-source fix and no approximate label', async () => {
+    api.get.mockImplementation((url) => {
+      if (url === '/devices') return Promise.resolve({ data: mockDevices });
+      if (url.includes('/locations')) return Promise.resolve({ data: [{ id: 'loc-2', latitude: 40.7128, longitude: -74.006, reported_at: new Date().toISOString(), source: 'wifi', accuracy_meters: 25, city: 'New York', country: 'USA' }] });
+      return Promise.resolve({ data: [] });
+    });
+    renderWithRouter();
+    await waitFor(() => {
+      expect(screen.getAllByText(/Accuracy: ~25m/).length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/Approximate/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the IP city-level footer when any plotted fix is ip-based', async () => {
+    renderWithRouter();
+    await waitFor(() => {
+      expect(screen.getByText(/devices behind one egress/i)).toBeInTheDocument();
+    });
+  });
+
+  it('hides the IP city-level footer when no plotted fix is ip-based', async () => {
+    api.get.mockImplementation((url) => {
+      if (url === '/devices') return Promise.resolve({ data: mockDevices });
+      if (url.includes('/locations')) return Promise.resolve({ data: [{ id: 'loc-w', latitude: 40.7128, longitude: -74.006, reported_at: new Date().toISOString(), source: 'wifi', accuracy_meters: 25, city: 'New York', country: 'USA' }] });
+      return Promise.resolve({ data: [] });
+    });
+    renderWithRouter();
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-map')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/city-level/i)).not.toBeInTheDocument();
   });
 });

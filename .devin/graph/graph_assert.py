@@ -39,28 +39,22 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 # Add parent to path for graph_loader import
 sys.path.insert(0, str(Path(__file__).parent))
 from graph_loader import (  # noqa: E402
-    are_phase_deps_met,
     get_blocked_enforcement_paths,
     get_debt_items,
     get_enforcement_paths,
-    get_invariants,
-    get_open_debt_items,
     get_phase,
     get_phase_nodes,
     load_graph,
 )
-
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -182,7 +176,7 @@ def _artifact_paths(artifact_ref: str) -> list[str]:
     for path in _ARTIFACT_PATH.findall(artifact_ref):
         if any(ch in path for ch in "*{},?"):
             continue
-        if path.endswith("/") or path.endswith("-"):
+        if path.endswith(("/", "-")):
             continue
         out.append(path)
     return out
@@ -568,10 +562,14 @@ def assert_orchestrator_knows_all_phases(graph: dict, orchestrator_path: Path) -
         # Check if the phase number appears in the orchestrator
         phase_num = phase["id"].replace("P", "")
         # Look for the phase number in PHASE_DEPS or PHASE_NAMES
-        if f"[{phase_num}]=" not in content and f'"{phase_num}"' not in content:
+        if (
+            f"[{phase_num}]=" not in content
+            and f'"{phase_num}"' not in content
             # Also check if it appears in the case statement or run_all
-            if f" {phase_num})" not in content and f" {phase_num} " not in content:
-                missing.append(phase["id"])
+            and f" {phase_num})" not in content
+            and f" {phase_num} " not in content
+        ):
+            missing.append(phase["id"])
     if missing:
         raise GraphViolationError(
             "I6", "orchestrator_knows_all_phases",
@@ -803,6 +801,209 @@ def artifact_supports_claim(
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# I2 (extended, S326): the block's open-debt list must be derived, not retyped
+# ---------------------------------------------------------------------------
+
+_DEBT_HEADING_RE = re.compile(r"^### (D-\d+)\b")
+_BLOCK_DEBT_ID_RE = re.compile(r"\bD-(\d+)\b")
+
+
+def _ledger_open_ids(project_root: Path) -> set[str]:
+    """Ids whose FIRST '- **Status**:' line after their heading says OPEN.
+
+    Both ledgers are read: DEBT-LEDGER.md for the legacy D-001..D-021 range and
+    PBL-DEBT-LEDGER.md for D-100.., because a block's list covers whatever is open,
+    regardless of which file records it.
+    The first status line decides, since later ones are dated updates (D-130 has one).
+    """
+    open_ids: set[str] = set()
+    for rel in ("docs/adr/DEBT-LEDGER.md", "docs/adr/PBL-DEBT-LEDGER.md"):
+        path = project_root / rel
+        if not path.exists():
+            continue
+        current = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            heading = _DEBT_HEADING_RE.match(line)
+            if heading:
+                current = heading.group(1)
+                continue
+            if current and line.startswith("- **Status**:"):
+                if "OPEN" in line.upper():
+                    open_ids.add(current)
+                current = None
+    return open_ids
+
+
+def _latest_block_open_ids(trace_path: Path) -> set[str] | None:
+    """The ids listed under the newest session block's 'Debt items still open' heading."""
+    text = trace_path.read_text(encoding="utf-8", errors="replace")
+    starts = [m.start() for m in re.finditer(r"^## Session", text, re.MULTILINE)]
+    if not starts:
+        return None
+    block = text[starts[-1]:]
+    section = re.search(
+        r"^### Debt items still open[ \t]*$(.*?)(?=^### |\Z)",
+        block, re.MULTILINE | re.DOTALL,
+    )
+    if not section:
+        return None
+    return {f"D-{n}" for n in _BLOCK_DEBT_ID_RE.findall(section.group(1))}
+
+
+def assert_open_debt_list_matches_ledger(
+    trace_path: Path, project_root: Path | None = None
+) -> None:
+    """S326: the newest block's open-debt list must match the ledgers, not be retyped.
+
+    S324 found `D-210 (PBL route integration)` listed as open in every block since S303, while
+    PBL-DEBT-LEDGER.md had it **CLOSED** with a commit grandfathered by the S149 orphan baseline.
+    Nothing objected: the block format accepts any string under "Debt items still open", so a stale
+    line propagated for twenty sessions. This compares the list against the ledger and names the
+    symmetric difference, which is the same "derive it, don't restate it" rule the code invariants
+    follow.
+
+    Silent when the newest block has no such section (older blocks predate it) — the session-end
+    quality invariant already covers a missing section.
+    """
+    if not trace_path.exists():
+        return
+    listed = _latest_block_open_ids(trace_path)
+    if listed is None:
+        return
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+    actual = _ledger_open_ids(project_root)
+    phantom = sorted(listed - actual)
+    missing = sorted(actual - listed)
+    if phantom or missing:
+        raise GraphViolationError(
+            "I2",
+            "open_debt_list",
+            "the newest session block's open-debt list disagrees with the ledgers — "
+            f"listed but CLOSED: {', '.join(phantom) if phantom else 'none'}; "
+            f"OPEN but unlisted: {', '.join(missing) if missing else 'none'}",
+            "Read the open set out of the ledgers rather than retyping it; D-210 was reported open "
+            "for twenty sessions after it had been closed.",
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# I2 (extended, S327): a claimed closure must be a real one
+# ---------------------------------------------------------------------------
+
+# A block claims a closure in ONE explicit form: `- **D-132 — CLOSED** (commit_ref ...)`.
+# Prose is deliberately not scanned: S119's block says "None. This session fixed live defects
+# (D-119/D-120-adjacent behaviour)", which names two ids and closes neither. Requiring a form keeps
+# prose free and still makes claims checkable.
+_DEBT_CLOSED_CLAIM_RE = re.compile(
+    r"^\s*[-*]\s*\*\*(D-\d+)\s*[—:-]\s*CLOSED", re.MULTILINE | re.IGNORECASE
+)
+_HEX_REF_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+_PATH_REF_RE = re.compile(
+    r"\b((?:docs|agent|scripts|server|serverless|electron|firmware|\.devin)/[\w./-]+)"
+)
+
+
+def _latest_block_closed_claims(trace_path: Path) -> list[tuple[str, str]]:
+    """(id, the claiming line) for each explicit CLOSED claim in the newest block."""
+    text = trace_path.read_text(encoding="utf-8", errors="replace")
+    starts = [m.start() for m in re.finditer(r"^## Session", text, re.MULTILINE)]
+    if not starts:
+        return []
+    block = text[starts[-1]:]
+    section = re.search(
+        r"^### Debt items closed[ \t]*$(.*?)(?=^### |\Z)", block, re.MULTILINE | re.DOTALL
+    )
+    if not section:
+        return []
+    # The LINE, not the match: the regex stops at "CLOSED", while the commit and artifact a claim
+    # must justify are cited after it. Returning group(0) made the evidence invisible — the guard
+    # silently had nothing to verify, which its own test caught.
+    claims: list[tuple[str, str]] = []
+    for line in section.group(1).splitlines():
+        m = _DEBT_CLOSED_CLAIM_RE.match(line)
+        if m:
+            claims.append((m.group(1), line.strip()))
+    return claims
+
+
+def _orphan_baseline(project_root: Path) -> set[str]:
+    path = project_root / ".devin" / "graph" / "orphaned-commit-refs.txt"
+    if not path.exists():
+        return set()
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def assert_claimed_closures_are_real(trace_path: Path, project_root: Path | None = None) -> None:
+    """S327: every closure a block CLAIMS must be CLOSED in the ledger, with resolving evidence.
+
+    The block's "Debt items closed" section used to accept anything, so a session could record a
+    closure the ledger never made — the mirror of S326's stale-open problem. The ledger
+    already demands commit_ref + artifact_ref of itself (I2); this demands the same of the
+    block that reports it.
+    """
+    if not trace_path.exists():
+        return
+    claims = _latest_block_closed_claims(trace_path)
+    if not claims:
+        return
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+    closed = _ledger_open_ids(project_root)  # cheap parse; subtract below for the CLOSED side
+    ledger_closed: set[str] = set()
+    for rel in ("docs/adr/DEBT-LEDGER.md", "docs/adr/PBL-DEBT-LEDGER.md"):
+        path = project_root / rel
+        if not path.exists():
+            continue
+        current = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            heading = _DEBT_HEADING_RE.match(line)
+            if heading:
+                current = heading.group(1)
+                continue
+            if current and line.startswith("- **Status**:"):
+                if "CLOSED" in line.upper():
+                    ledger_closed.add(current)
+                current = None
+    orphans = _orphan_baseline(project_root)
+    problems: list[str] = []
+    for debt_id, line in claims:
+        if debt_id not in ledger_closed:
+            state = "OPEN" if debt_id in closed else "absent from both ledgers"
+            problems.append(f"{debt_id} is claimed CLOSED in the block but is {state}")
+        for hexref in _HEX_REF_RE.findall(line):
+            if hexref in orphans:
+                continue
+            resolved = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", f"{hexref}^{{commit}}"],
+                cwd=str(project_root), capture_output=True, text=True,
+            )
+            if resolved.returncode != 0:
+                problems.append(
+                    f"{debt_id}: cited commit {hexref} does not resolve and is not in the "
+                    "orphaned-refs baseline"
+                )
+        for rel_path in _PATH_REF_RE.findall(line):
+            # A sentence ends "artifact docs/adr/x.md." - the full stop is punctuation,
+            # not part of the path.
+            stripped = rel_path.rstrip(".,;:)")
+            if stripped and not (project_root / stripped).exists():
+                problems.append(f"{debt_id}: cited artifact {stripped} does not exist")
+    if problems:
+        raise GraphViolationError(
+            "I2", "claimed_closures", "; ".join(problems),
+            "A closure the ledger does not record is a claim, not a close. Cite the commit and the "
+            "artifact, and only after the ledger records them.",
+        )
+
+
 def assert_all_invariants(graph: dict | None = None) -> list[str]:
     """Run all invariant checks and return a list of violation messages.
 
@@ -815,19 +1016,59 @@ def assert_all_invariants(graph: dict | None = None) -> list[str]:
     violations = []
     project_root = Path(__file__).parent.parent.parent
 
+    # S321 — vacuity guard. Every invariant below is satisfied by an EMPTY graph: I1 and I2 iterate
+    # over node lists, and I3-I7 only run when the files they read exist. A spec with no nodes would
+    # therefore print "All invariants pass" without examining anything. That is the same defect as
+    # S318 (empty scan range), S319 (zero discovered tests) and S320 (empty gate scope):
+    # a check must
+    # report on what it EXAMINED, not only on what it found. So the counts are asserted first, and
+    # they are asserted here rather than in each invariant so no future invariant can forget.
+    phases = get_phase_nodes(graph)
+    debt_items = get_debt_items(graph)
+    try:
+        enforcement_paths = get_enforcement_paths(graph)
+    except Exception:  # a malformed spec is I3's business, not the vacuity guard's
+        enforcement_paths = None
+    for label, items in (
+        ("phase nodes (I1)", phases),
+        ("debt items (I2)", debt_items),
+    ):
+        if not items:
+            violations.append(
+                f"{label}: the graph declares none, so every invariant over them is satisfied "
+                f"vacuously — an empty graph is not a passing graph"
+            )
+    if enforcement_paths is not None and not enforcement_paths:
+        violations.append(
+            "enforcement paths (I3): the graph declares none, so the status check examines nothing"
+        )
+
     # I1: Check all phase dependencies
-    for phase in get_phase_nodes(graph):
+    for phase in phases:
         try:
             assert_phase_deps_met(graph, phase["id"])
         except GraphViolationError as e:
             violations.append(str(e))
 
     # I2: Check all closed debt items have evidence
-    for debt in get_debt_items(graph):
+    for debt in debt_items:
         try:
             assert_debt_close_has_evidence(debt)
         except GraphViolationError as e:
             violations.append(str(e))
+
+    # I2 (extended): the block's open-debt list must match the ledgers (S326)
+    trace_path = project_root / ".devin" / "graph" / "trace.md"
+    try:
+        assert_open_debt_list_matches_ledger(trace_path)
+    except GraphViolationError as e:
+        violations.append(str(e))
+
+    # I2 (extended): every closure the block CLAIMS must be real (S327)
+    try:
+        assert_claimed_closures_are_real(trace_path, project_root)
+    except GraphViolationError as e:
+        violations.append(str(e))
 
     # I3: Check enforcement path statuses are valid and consistent
     try:
@@ -993,9 +1234,11 @@ def print_convergence_report() -> None:
         print("  ✗ Project NOT CONVERGED — remaining gaps:")
         print()
         if report["phases"]["complete"] < report["phases"]["total"]:
-            print(f"     • {report['phases']['total'] - report['phases']['complete']} phase(s) not COMPLETE")
+            pending = report["phases"]["total"] - report["phases"]["complete"]
+            print(f"     • {pending} phase(s) not COMPLETE")
         if report["debt"]["closed"] < report["debt"]["total"]:
-            print(f"     • {report['debt']['total'] - report['debt']['closed']} debt item(s) not CLOSED")
+            open_debt = report["debt"]["total"] - report["debt"]["closed"]
+            print(f"     • {open_debt} debt item(s) not CLOSED")
         if report["enforcement"]["on_hardware"] < report["enforcement"]["total"]:
             gap = report["enforcement"]["total"] - report["enforcement"]["on_hardware"]
             print(f"     • {gap} enforcement path(s) need hardware verification:")
@@ -1004,7 +1247,7 @@ def print_convergence_report() -> None:
                 if e["risk_notes"]:
                     print(f"           notes: {e['risk_notes'][:80]}")
     print()
-    print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Timestamp: {datetime.now(UTC).isoformat()}")
 
 
 # ---------------------------------------------------------------------------
@@ -1018,7 +1261,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--assert-phase-deps",
         metavar="PHASE_ID",
-        help="Assert that a single phase's dependencies are met (e.g., P3). Exits 0 if OK, 1 if violated.",
+        help=(
+            "Assert that a single phase's dependencies are met (e.g., P3). "
+            "Exits 0 if OK, 1 if violated."
+        ),
     )
     parser.add_argument(
         "--full-sweep",
@@ -1059,10 +1305,10 @@ if __name__ == "__main__":
             print(f"  ✗ {len(violations)} violation(s) found:")
             print()
             for v in violations:
-                print(f"  ---")
+                print("  ---")
                 print(f"  {v}")
                 print()
 
         print()
-        print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+        print(f"Timestamp: {datetime.now(UTC).isoformat()}")
         sys.exit(0 if not violations else 1)

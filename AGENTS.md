@@ -114,6 +114,35 @@ The block must include:
 - Blockers named and status
 - Next session opening — one sentence, specific, no ambiguity
 
+**Two sections of that block are now machine-checked against the ledgers (S326, S327).** "Debt items
+still open" must list exactly the ids the ledgers mark `OPEN` — the check fails on the symmetric
+difference, because a block that restates state instead of reading it drifts (D-210 was reported open for
+twenty sessions after it closed). "Debt items closed" is checked only for an explicit claim form,
+`- **D-nnn — CLOSED**` followed by the commit and the artifact; prose is free, because a block that says
+"None. This fixed D-119/D-120-adjacent behaviour" names ids without closing anything, and an id-scan
+would flag it. A claim must have its ledger status CLOSED, its cited hash resolving (or in
+`orphaned-commit-refs.txt`) and its cited path existing.
+
+**Never paste a credential value into a session block, not even truncated.** S311 pushed 23 local
+commits for the first time and the CI secret scan failed on an `assigned-secret` finding inside
+commit `4c43b58` (S301): the block quoted a full token response body —
+`{"token":"<8 chars>…", …}` — and the generator copies the latest block into `current-state.md`,
+so the fragment reached two files at once. The token was single-use with a 900 s TTL and long dead,
+but a scanner cannot tell, and neither could a reader. Quote the *shape* (`{"token":"<redacted>", …}`)
+and the TTL, never the value's first characters. The forbid-list escape hatch
+(`scripts/prepush_secrets.py`) exists for genuine false positives, not for this.
+
+**And gate the push on the scan, not next to it.** S313 repeated that mistake *and* pushed anyway:
+`python3 scripts/prepush_secrets.py … ; git push` chains with `;`, so a FAIL was printed and the push
+ran regardless — the two files it named were already on the remote by the time anyone read the output.
+Write it as `… && git push`. A verification whose failure does not stop the action is a log line, not
+a check.
+
+**Install the hook, once per clone.** `scripts/pre-push-check.sh --install` writes `.git/hooks/pre-push`,
+which runs the publish-range scan and the fast-forward check on every push; a hook lives in `.git/` and
+is never committed, so a fresh clone has none — which is exactly how S314's `;`-chained push got through.
+S317 installed it on this clone.
+
 `current-state.md` is a GENERATED artifact — do NOT edit it by hand. It is
 derived from `trace.md` + `GRAPH-SPEC.yaml` by `scripts/graph_session.py`.
 
@@ -259,7 +288,7 @@ npm test
 # Per-component
 cd server   && npm test                       # 843 Jest tests (51 suites)
 scripts/run-agent-tests.sh -q                 # 866 pytest tests (uses agent/.venv)
-cd dashboard && npx vitest run                # 260 Vitest tests (29 files)
+cd dashboard && npx vitest run                # 272 Vitest tests (30 files)
 cd electron  && npm test                      # 30 Jest tests
 cd serverless && npm test                     # 429 Vitest tests
 
@@ -275,6 +304,13 @@ cd dashboard && ../scripts/audit-with-exceptions.sh
 # Static analysis (Semgrep p/default). Every finding must be fixed or listed in
 # scripts/sast-exceptions.json with a disposition + reason; ERROR is never
 # exceptionable, and an entry that no longer matches the code fails the gate.
+#   Measured 2026-11-19 (S312) with semgrep 1.182.1: 48 findings, 0 ERROR, all
+#   dispositioned — the first local run in weeks, because `semgrep` was not on PATH and
+#   the gate is a no-op without it (make sast exits 2). Install it before believing a
+#   green story about this repo: python3 -m venv /tmp/sgvenv && /tmp/sgvenv/bin/pip
+#   install semgrep==1.182.1, then PATH=/tmp/sgvenv/bin:$PATH make sast. CI runs it on
+#   every push, which is how the 3 unclassified findings and 1 stale exception were found
+#   sitting red since 2026-11-18.
 make sast
 
 # Docker: both images run as the unprivileged `node` user. SQLite mode needs a
@@ -294,9 +330,15 @@ make load-smoke
 
 # Lint
 cd server    && npx eslint .                  # exit 0 = clean
-cd dashboard && npx eslint .                  # exit 0 = clean
-cd agent     && python3 -m ruff check .       # exit 0 = clean
-cd agent     && python3 -m ruff format --check .
+cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0   # exit 0 = clean
+# eslint v8 with .eslintrc.json lints .js only unless --ext is passed, so a directory-taking lint gate must be judged by the count of files it read, not by its exit code.
+scripts/lint-agent.sh                         # ruff 0.17.5 check + format, resolved interpreter
+#   NOT `python3 -m ruff`: this host has no system ruff, and that command is how
+#   `make full-verify` used to abort one target in (S271). The script finds the venv,
+#   then PATH, then python3, and fails with the install line when none has it.
+#   The version matters too: agent/requirements-dev.txt pins 0.17.5, which is what CI
+#   installs (`pip install -r requirements-dev.txt`). The old 0.5.0 pin reported 6
+#   findings that 0.17.5 does not — a pin that disagrees with CI is worse than none.
 
 # Workflow lint — must match CI. CI runs actionlint v1.7.12 through
 # raven-actions/actionlint, which BUNDLES shellcheck, so CI also lints the shell
@@ -306,6 +348,10 @@ cd agent     && python3 -m ruff format --check .
 # locally (2026-10-28). `make lint-workflows` therefore fails when either tool
 # is missing instead of silently linting less than CI does.
 make lint-workflows                           # actionlint + shellcheck, exit 0 = clean
+#   Both must be installed or the target fails by design (it will not lint less than CI):
+#     curl -sSL .../actionlint_1.7.12_linux_amd64.tar.gz | tar xz actionlint  -> ~/.local/bin
+#     curl -sSL .../shellcheck-v0.10.0.linux.x86_64.tar.xz | tar xJ            -> ~/.local/bin
+#   Installed on this host 2026-11-17 (S271); no root needed.
 
 ### pyright / ast-grep: advisory, and there is a large baseline
 
@@ -376,6 +422,19 @@ find server/src electron -name '*.js' -o -name '*.cjs' | grep -v node_modules | 
 # Shell scripts
 bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 
+# Whole-tree sweep: graph invariants + lint + all five suites + API E2E + env + artifacts.
+# On this host its only red is scripts/test_tls_floor.py, which needs a readable
+# /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
+# unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
+# has not passed. Measured 2026-11-19 (S330): server 885 (52 suites), agent 990,
+# dashboard 272 (30 files), worker 495, electron 30, API E2E 14, verify-env 56 PASS /
+# 0 FAIL / 5 SKIP, 16 script suites (15 green, tls-floor 1 failed/1 passed, worker-update
+# 5 skipped), and lint now includes lint-graph. The chain STOPS at test-scripts on the
+# tls-floor red — `make` exits 2 and `test-e2e`, `verify-env` and `check-artifacts` never
+# run — so those three were executed separately and passed. Use `make -k full-verify` when
+# you want one run to report everything instead of stopping at the known red.
+make full-verify
+
 # Full environment + artifact verification (63 checks)
 make verify-env
 make check-structure      # non-fatal; electron/dist-electron is expected missing locally
@@ -439,21 +498,36 @@ make build
   check. The convention prepares for future failures without backfilling a
   failure log with no data.
 
-## Diagnostic Sweep Results (2026-08-04, updated 2026-11-13)
+## Diagnostic Sweep Results (2026-08-04, re-measured 2026-11-19 in S307)
 
-All green, re-measured 2026-11-13 (every number below was produced by running the
-command that owns it — the count is cheaper to re-take than to trust): 843 server
-tests (51 suites), 866 agent tests, 260 dashboard tests (29 files), 30 electron
-tests, 429 serverless tests, 14 API E2E tests, 255 script-harness checks (236
-pytest tests across 14 suites + 19 checks in the hand-rolled secret-scanner suite;
-5 worker-update cases skip without a built worker), eslint clean on server +
-dashboard, ruff clean + formatted on agent, vite build OK, all shell scripts
-`bash -n` OK, all YAML configs valid, all local imports resolve, git tree clean.
-Also green: `make pg-smoke` 65/65 on real PostgreSQL 16, `actionlint` 1.7.12 clean
-on all 5 workflows, Playwright dashboard E2E 11/11, `make graph-check` all
-invariants pass, `make test-coverage` all 5 components above floor, `make sast`
-45 findings / 0 ERROR all dispositioned, `make firmware-host-tests` 195 checks /
-35 cases, `make verify-env` 63 PASS / 0 FAIL / 2 SKIP.
+Re-measured 2026-11-19 (every number below was produced by running the command that
+owns it — the count is cheaper to re-take than to trust): 882 server tests (52
+suites), 976 agent tests, 272 dashboard tests (30 files), 30 electron tests, 490
+serverless tests, 14 API E2E tests, 308 script-harness pytest tests across 13 suites
+plus the hand-rolled secret scanner (all checks passed), and the 5 worker-update
+cases skip without a built worker. eslint clean on server + dashboard (the dashboard
+now with `--ext .js,.jsx`), ruff clean + formatted on agent, `tsc --noEmit` clean on the
+worker, vite build OK, all shell scripts `bash -n` OK, all YAML configs valid,
+`make graph-check` all invariants pass, Playwright dashboard E2E 11/11, `make verify-env`
+56 PASS / 0 FAIL / 5 SKIP.
+
+**One gate cannot pass on this host, and it is not softened to a SKIP.**
+`scripts/test_tls_floor.py` needs a readable `/var/run/docker.sock`; the socket is
+`root:docker 0660`, this login session is in zero `docker` groups, and `sudo -n` needs a
+password — so `make full-verify` stops at `test-scripts` with **1 failed / 1 passed** and
+never reaches `test-e2e`, `verify-env` or `check-artifacts`. Those three were run by hand
+in S307 and passed (14/14, 56 PASS / 0 FAIL / 5 SKIP, all artifacts present).
+
+**Re-measured in S332:** `make sast` 48 findings / 0 ERROR, all dispositioned (semgrep 1.182.1 from a
+throwaway venv) and `make firmware-host-tests` 195 checks / 35 cases, 0 failures (CBOR 97/19, TPM 86/8,
+COSE 12/8). **`make test-coverage` re-measured in S333, all five components above their floors:** server
+74.86/71.63/80.28/75.70 vs 66/62/70/67 · dashboard 70.62/66.59/**62.59**/71.40 vs 68/61/62/70 ·
+worker 86.46/83.00/95.06/88.60 vs 82/75/86/83 · electron 39.40/47.36/**30.95**/39.30 vs 37/45/29/37 ·
+agent 66.01 vs `fail_under` 59. The tightest margins are dashboard **functions** (+0.59) and electron
+**functions** (+1.95) — a small deletion trips either.
+**Still not re-measured:** `make pg-smoke` — this host has no PostgreSQL on :5432
+(`pg_isready` → no response) and no usable docker (exit 1)
+against 68 / 61 / 62 / 70.
 
 **`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The
 suite holds 14 tests (not the 10 long claimed here) and passes on its own, but it twice died
@@ -493,7 +567,13 @@ Run the suite:
 
 ```bash
 cd dashboard && E2E_BACKEND_PORT=3101 LD_LIBRARY_PATH="$HOME/.local/lib/nspr" npx playwright test
-# 11 passed — measured 2026-11-11
+# 11 passed — re-measured 2026-11-19 (S307), 15-16 s
+# Port 5173 must be free. `reuseExistingServer` used to be `!CI`, so a dev server left running
+# by an earlier session was silently reused: the browser then drove a server whose /api proxy had
+# been resolved WITHOUT this run's E2E_BACKEND_PORT, and the suite reported 7 test failures that
+# read as "login is broken" (S307: S303's server, a day old, with nothing in the output naming the
+# reuse). It is now opt-in only (`PLAYWRIGHT_REUSE_DEV_SERVER=1`), so a busy 5173 fails once,
+# loudly, in about a second.
 ```
 
 Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `electron@42`'s
@@ -505,7 +585,8 @@ Electron runs too (`npx electron .` from `electron/`, same `LD_LIBRARY_PATH`); `
 dashboard, worker, electron) plus the script-level harness tests, E2E, env and
 artifact checks — it previously ran only three of the five while its own comment
 claimed "all 5 test suites". Current measured totals (2026-11-13): server 843 (51 suites),
-agent 866, dashboard 260, worker 429, electron 30, API E2E 14, script harness 255.
+agent 866, dashboard 272 (re-measured 2026-11-19, S305), worker 429, electron 30, API E2E 14,
+script harness 255.
 
 The script-level harness tests are **auto-discovered** (`scripts/test_*.py`, run
 by `make test-scripts` and the CI `script-tests` job). Counts measured 2026-11-05
@@ -527,7 +608,7 @@ if a new suite forgets it.
 
 Invariant coverage is now complete: I1 (phase deps), I2 (no debt closed without
 commit + artifact), I4, I5, I6 (orchestrator knows every phase) and I7 all have
-tests in `agent/tests/test_graph_assertions.py`; I3 gained 15 earlier.
+tests in `agent/tests/test_graph_assertions.py`; I3 gained 15 earlier. **None of them can pass vacuously (S321):** `assert_all_invariants()` asserts that the graph declares phase nodes, debt items and enforcement paths before it runs any invariant, because an empty spec satisfies all seven by examining nothing — the same defect as S318/S319/S320 at a different layer.
 
 Two harness bugs found while completing this (both fixed):
 1. `scripts/test_memory.py` had 44 pytest tests and **no `__main__` block**, so
@@ -546,6 +627,13 @@ intentional `installer-windows-execpolicy` by-design skip).
 
 Hardware test harness (D-003): `make hw-test-dry` runs the harness in dry-run mode.
 `make hw-test` runs real enforcement path tests on Windows/HP hardware.
+
+**`scripts/audit_test_teeth.py` fails on rows it could not run (S322).** It reintroduces one semantic
+defect at a time and asks whether the suite notices. A row whose anchor no longer matches used to be
+dropped from every list while the summary still counted *table rows* as kills; S280's split moved the
+ACK path to `agent-routes.ts` and twelve rows had been matching nothing ever since. They now report
+`UNVERIFIED` and the audit exits 1 — an unverified behaviour is unknown, not passed — and all twelve are
+re-anchored to current code (55/55 killed).
 
 The two edges the harness cannot see are covered by `scripts/hw-window-preflight.py`
 (documented in `docs/D-129-HARDWARE-RUNBOOK.md` §2a):
@@ -701,6 +789,26 @@ build always shows a parent bootloader plus its child, so `tasklist` reporting t
 `lockdown-agent.exe` entries is **one** agent — measured on 2026-11-05 (pid 9872 →
 11332), not a duplicate-instance bug. The agent is reachable only over the LAN through a Windows port-proxy
 (`0.0.0.0:3001 → <WSL address>:3001`), which must be re-created after a WSL restart.
+
+**A Windows service install reports `source: 'ip'` by platform design, not by bug (ADR-009).**
+Windows restricts the BSSID-returning calls (`WlanGetNetworkBssList`, `WlanScan`,
+`WlanGetAvailableNetworkList`) to processes holding precise-location consent, and shows the consent
+prompt only to processes "within the user's context and outside of `C:\Windows\System32`" — a
+`LocalSystem` service in session 0 is neither, so it can never prompt. **The three-call probe was run on MOLE in S315 and all three were refused**
+(`docs/artifacts/s315-bssid-probe-hardware.txt`, consent `Allow`, an active console session):
+elevated admin in session 0 → `WlanGetNetworkBssList` **rc=5**; `LocalSystem` via a temporary service
+→ **rc=5**; and `LocalSystem` `Geolocator` → **0x80070005**. `WlanOpenHandle` and
+`WlanEnumInterfaces` return 0 in every case, so the interface is visible and the BSSIDs are not.
+Microsoft's recommended replacement is therefore dead on Windows services too — do not re-propose
+it. **The in-session helper was measured in S316 and is denied too** (`docs/artifacts/s316-in-session-helper-probe.txt`):
+a child launched into the active console session via `CreateProcessAsUser` reported `session: 1`,
+`interactive: True`, and still got **rc=5** — from PowerShell inside System32 *and* from
+`C:\Python314\python.exe` outside it. The missing precondition is per-app precise-location consent,
+granted only through an explicit `RequestAccessAsync` prompt that a human accepts; nothing in this
+product calls it. Do not describe an interactive install as precise without that consent.
+**The product does not request it (ruling A, S316)** — asking would mean a modal dialog per device for a
+capability only interactive installs use, and its value depends on unverified per-executable keying. The
+docs state the measured truth instead; do not re-open this without first verifying that keying.
 
 ### Hardware testing status — 2026-11-05 (window: 4 enforcement paths moved)
 

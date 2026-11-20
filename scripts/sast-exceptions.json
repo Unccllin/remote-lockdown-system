@@ -1,7 +1,7 @@
 {
   "_comment": "Reviewed Semgrep exceptions for scripts/sast-gate.py. Every finding the p/default ruleset reports must either be fixed or appear here with a disposition ('false-positive' or 'accepted-risk') and a reason a reviewer can check against the code. The gate fails when a finding has no entry, and also when an entry matches nothing (so a fixed finding gets its entry deleted instead of lingering). ERROR-severity findings cannot be excepted. 'match' is the stripped source line at the finding's location: editing that line invalidates the entry on purpose, because the exception was a review of that code.",
   "semgrep_version": "1.182.1",
-  "reviewed": "S251",
+  "reviewed": "S312",
   "exceptions": [
     {
       "rule": "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
@@ -182,15 +182,6 @@
       "disposition": "accepted-risk",
       "reason": "Hardware test harness only (agent/hw_test_harness.py) \u2014 never shipped to a device. Every URL in it is a literal http://localhost:3000 lab server, and the harness is run by an operator against the machine under test (D-003/D-129).",
       "reviewed": "S251"
-    },
-    {
-      "rule": "python.lang.security.audit.insecure-transport.urllib.insecure-request-object.insecure-request-object",
-      "path": "agent/hw_test_harness.py",
-      "match": "request = urllib.request.Request(  # noqa: S310 - scheme allowlisted above",
-      "occurrence": 1,
-      "disposition": "accepted-risk",
-      "reason": "Artifact upload to the server the operator names with --upload. Harness-only code, run by an operator, never shipped to a device. The request is built only after urllib.parse.urlsplit() proves the scheme is http(s) (upload_artifact(), S268), so file:/custom schemes are refused before this line.",
-      "reviewed": "S268"
     },
     {
       "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
@@ -416,6 +407,33 @@
       "disposition": "accepted-risk",
       "reason": "The body is a generated PowerShell bootstrap. It cannot be JSON-wrapped (the device writes the response text to disk and runs it) and it is served as text/plain with X-Content-Type-Options: nosniff added in S251, so a browser cannot render it as HTML. The hostname interpolated into it has already been through the escapePs1/generateInstallPs1 quoting.",
       "reviewed": "S251"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "agent/service_host.py",
+      "match": "with urllib.request.urlopen(  # noqa: S310 - scheme checked above",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "The scheme is checked five lines above this call: `base = str(cfg.get('server_url')).rstrip('/')` is returned from early unless it starts with http:// or https://, and the URL passed here is that validated base plus the literal path '/api/health'. https also gets an explicit ssl context when verify_tls is false, so the call cannot reach a file: or custom scheme.",
+      "reviewed": "S312"
+    },
+    {
+      "rule": "python.lang.security.audit.insecure-file-permissions.insecure-file-permissions",
+      "path": "agent/service_host.py",
+      "match": "os.chmod(str(target), 0o755)  # noqa: S103 \u2014 an executable must be executable",
+      "occurrence": 1,
+      "disposition": "accepted-risk",
+      "reason": "Deliberate: `target` is the agent/update executable that was just moved into its install path, and 0o755 is what makes it runnable on POSIX. It is gated to `sys.platform != 'win32'`, inside the swap that already restored the .bak on failure. The permission is the requirement, not an oversight \u2014 a 0o600 binary here would be a broken install.",
+      "reviewed": "S312"
+    },
+    {
+      "rule": "python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected",
+      "path": "scripts/acceptance_lifecycle.py",
+      "match": "with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310",
+      "occurrence": 1,
+      "disposition": "false-positive",
+      "reason": "Operator acceptance-test client, never shipped to a device, and the scheme is allowlisted at construction: __init__ rejects a base_url that is not http:// or https://, so a file:/custom scheme cannot reach this line (the comment above the call states the same).",
+      "reviewed": "S312"
     }
   ]
 }

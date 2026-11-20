@@ -1169,10 +1169,18 @@ def _verify_setting(name: str, expected_value: str) -> bool:
     return True
 
 
-def _set_and_verify(name: str, value: str, password: str) -> bool:
-    """Set a BIOS setting and verify it took effect (Phase 4.5).
+def _set_and_verify(name: str, value: str, password: str) -> str:
+    """Set a BIOS setting and classify the outcome: applied | pending_reboot | failed.
 
-    Returns True if the setting was applied AND verified, False otherwise.
+    HP commits many BIOS settings at the NEXT boot, so a read-back in the same session can
+    still return the old value after a write the firmware accepted. Treating that as failure
+    made MOLE roll back writes that had landed — and the rollback's own writes were equally
+    unverifiable, so it reported "restored with errors" and the machine's firmware no longer
+    matched the record (S271). Measured: no write was refused (no `failed:` warning appears in
+    the log for the three "failed" settings) while the firmware read back the lockdown values.
+
+    Only a REFUSED write is a failure. An accepted write whose read-back still disagrees is
+    `pending_reboot`: the caller must not claim success, and must not undo it either.
     """
     rc = _set_setting(name, value, password)
     if rc != 0:
@@ -1182,8 +1190,16 @@ def _set_and_verify(name: str, value: str, password: str) -> bool:
             value,
             SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
         )
-        return False
-    return _verify_setting(name, value)
+        return "failed"
+    if _verify_setting(name, value):
+        return "applied"
+    log.info(
+        "BIOS setting '%s' accepted (-> '%s') but reads back '%s' — HP commits at the next boot",
+        name,
+        value,
+        _read_setting(name),
+    )
+    return "pending_reboot"
 
 
 def _is_setup_password_set() -> bool:
@@ -1369,13 +1385,22 @@ def _rollback_bios_settings(saved_settings: dict, bios_password: str) -> bool:
             )
             all_ok = False
 
-    # Remove the boot state file (rollback complete)
-    clear_boot_state()
-
     if all_ok:
+        # Only now is the record of the original values redundant.
+        clear_boot_state()
         log.info("BIOS rollback complete — settings restored (password NOT cleared per CC18)")
     else:
-        log.error("BIOS rollback completed with errors — some settings may need manual restoration")
+        # KEEP the boot state file. Deleting it here destroyed the only record of the values
+        # the firmware held before the lockdown, on a path that had just failed to restore
+        # them — measured on MOLE (S271): the rollback's writes were refused, the lockdown's
+        # writes committed at the next boot, and the machine came back with USB/PXE boot
+        # disabled while the record said "rolled back". A later attempt (or an operator) needs
+        # those values.
+        log.error(
+            "BIOS rollback completed with errors — boot state KEPT at %s so the original values "
+            "can still be restored",
+            BOOT_STATE_FILE,
+        )
     return all_ok
 
 
@@ -1515,6 +1540,7 @@ def apply_boot_lockdown(
     # Phase 4.1: Admin check — fail-fast before any state writes
     if not _is_admin():
         log.error("UEFI lockdown requires admin privileges — aborting (fail-fast)")
+        result["reason"] = "requires_admin"
         return result
 
     # T5: Check BitLocker status before BIOS changes. If BitLocker is enabled,
@@ -1544,6 +1570,15 @@ def apply_boot_lockdown(
             "Cannot apply BIOS lockdown without the existing password. "
             "Set UEFI_PASSWORD in the agent config to the current BIOS password."
         )
+        # The record must carry the reason, not just zeroes. Measured on MOLE (S271): the
+        # ACK said boot_lock_status=partial with every layer at 0 and no field saying why, so
+        # the operator could see "boot lock did not apply" and had no next action. The log line
+        # above is not where an operator looks.
+        result["reason"] = "existing_bios_password_without_uefi_password"
+        result["next_action"] = (
+            "Set uefi_password in the agent config to the BIOS Setup password this machine "
+            "already has, then re-apply the lockdown."
+        )
         return result
 
     # Declared explicitly so the type is `str` at every use site below without
@@ -1565,6 +1600,7 @@ def apply_boot_lockdown(
             log.error(
                 "Failed to set Setup password: %s", SET_BIOS_RETURN_CODES.get(rc, f"code {rc}")
             )
+            result["reason"] = "setup_password_write_failed"
             return result
         # Return password even on verification failure (for operator manual BIOS clear)
         result["bios_password"] = bios_password
@@ -1589,8 +1625,14 @@ def apply_boot_lockdown(
         bios_password = cast(str, existing_password)
         log.info("Using existing BIOS Setup password for lockdown changes")
 
-    # Always return the password, even on critical failure (CC18)
-    result["bios_password"] = bios_password
+    # CC18 is about a password THIS RUN generated: it must travel back even on critical
+    # failure, because the operator has no other copy. A pre-existing password is different —
+    # the operator supplied it, and echoing it back records it as an escrowed credential the
+    # server can serve up, whether or not it works. Measured on MOLE (S271): the operator's
+    # `1234` came back through GET /api/devices/:id/pba-credentials as this device's Setup
+    # password, while every BIOS write with it was refused.
+    if not password_already_set:
+        result["bios_password"] = bios_password
 
     # T7: Set Power-On Password for Tier 1 PBA (Q1=A — opt-in).
     # The Power-On Password must be set AFTER the Setup Password (HP BIOS
@@ -1680,6 +1722,7 @@ def apply_boot_lockdown(
     # --- Apply critical settings (with verification re-reads) ---
     critical_applied = 0
     critical_failed = 0
+    critical_pending = 0
     for setting_name, lockdown_value in critical_settings:
         current = _read_setting(setting_name)
         if current is None:
@@ -1690,8 +1733,11 @@ def apply_boot_lockdown(
             # Already in desired state — count as applied
             critical_applied += 1
             continue
-        if _set_and_verify(setting_name, lockdown_value, bios_password):
+        outcome = _set_and_verify(setting_name, lockdown_value, bios_password)
+        if outcome == "applied":
             critical_applied += 1
+        elif outcome == "pending_reboot":
+            critical_pending += 1
         else:
             critical_failed += 1
 
@@ -1725,15 +1771,18 @@ def apply_boot_lockdown(
         if current == lockdown_value:
             best_effort_applied += 1
             continue
-        if _set_and_verify(setting_name, lockdown_value, bios_password):
-            best_effort_applied += 1
-        else:
+        if _set_and_verify(setting_name, lockdown_value, bios_password) == "failed":
             best_effort_failed += 1
             log.warning("BEST-EFFORT: '%s' failed — continuing (not critical)", setting_name)
+        else:
+            # applied, or accepted and waiting for the boot that commits it
+            best_effort_applied += 1
 
     log.info(
-        "UEFI lockdown applied: %d critical, %d best-effort succeeded, %d best-effort failed",
+        "UEFI lockdown applied: %d critical (%d pending the next boot), "
+        "%d best-effort succeeded, %d best-effort failed",
         critical_applied,
+        critical_pending,
         best_effort_applied,
         best_effort_failed,
     )
@@ -1741,6 +1790,12 @@ def apply_boot_lockdown(
     result["success"] = True
     result["partial"] = best_effort_failed > 0
     result["critical_applied"] = critical_applied
+    result["critical_pending"] = critical_pending
+    # Accepted-but-unsettled is its own state: the caller reports `pending_reboot` instead of
+    # claiming the boot lock applied, and the boot-state file is deliberately KEPT (it is only
+    # cleared by a rollback or by remove_boot_lockdown), so the original values stay recoverable
+    # until a boot proves where the firmware landed.
+    result["pending_reboot"] = critical_pending > 0
     result["best_effort_applied"] = best_effort_applied
     result["best_effort_failed"] = best_effort_failed
     # T7: Re-enable Sure Start BSP (lock-then-seal step 2 — seal the lockdown)
@@ -1820,6 +1875,7 @@ def remove_boot_lockdown(
             safe_defaults[setting_name] = "Disable"
 
     restored = 0
+    attempted = 0
     for setting_name, _ in resolved_settings:
         original = restore_settings.get(setting_name)
         if original is None:
@@ -1828,6 +1884,7 @@ def remove_boot_lockdown(
         if original is None:
             continue
 
+        attempted += 1
         rc = _set_setting(setting_name, original, bios_password)
         if rc == 0:
             # D-013: Verify restore actually took effect
@@ -1848,7 +1905,27 @@ def remove_boot_lockdown(
                 SET_BIOS_RETURN_CODES.get(rc, f"code {rc}"),
             )
 
-    log.info("Restored %d BIOS settings to pre-lockdown state", restored)
+    # Say what actually happened. This line used to read "Restored 0 BIOS settings" followed by
+    # the caller claiming "BIOS restored to pre-lockdown state" — on MOLE the boot settings were
+    # still the lockdown values and every restore write had been refused (S271).
+    if attempted == 0:
+        log.warning(
+            "Nothing restorable: no boot state and no known defaults — the BIOS is unchanged and "
+            "may still hold the lockdown values"
+        )
+    elif restored == 0:
+        log.error(
+            "Restored 0 of %d BIOS settings — every write was refused; the boot settings may "
+            "still hold the lockdown values and must be restored in BIOS Setup",
+            attempted,
+        )
+    elif restored < attempted:
+        log.warning(
+            "Restored %d of %d BIOS settings — check the rest in BIOS Setup", restored, attempted
+        )
+    else:
+        log.info("Restored %d BIOS settings to pre-lockdown state", restored)
+    restore_ok = attempted > 0 and restored == attempted
 
     # T7: Clear Power-On Password if PBA was active (power_on_password provided).
     # This must be done BEFORE clearing the Setup Password, because clearing
@@ -1910,4 +1987,4 @@ def remove_boot_lockdown(
     # SAFETY: Delete the password backup file now that unlock is complete
     delete_password_backup()
 
-    return True
+    return restore_ok

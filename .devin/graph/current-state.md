@@ -25,9 +25,9 @@
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
 | Debt items | 60 | 64 | ✗ |
-| Enforcement paths (on hardware) | 10 | 13 | ✗ |
+| Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged.** All phases are complete and 60 of 64 debt items are closed, but **1 of 13 enforcement paths are only `verified-in-unit-test`**, not `verified-on-hardware`. Graph invariant I3 blocks marking them `verified-on-hardware` without a real hardware artifact.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 64 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -36,18 +36,13 @@
 | E-BCD | bcd-lockdown | NOT hardware-verified by decision (S264). A failed run rewrites this machine's boot con... |
 | E-HP-UEFI | hp-uefi-lockdown | NOT hardware-verified by decision (S264). The test sets a FIRMWARE Setup Password that ... |
 
-**The 1 enforcement paths that still need hardware verification:**
-
-| ID | Name | Status | Blocker |
-|----|------|--------|---------|
-| E-LOCK-SCREEN | workstation-lock | verified-in-unit-test | S270: lock no longer merely disconnects — it disables the interactive account... |
-
-**The 10 already verified on hardware:**
+**The 11 already verified on hardware:**
 
 | ID | Name | Artifact |
 |----|------|----------|
 | E-ENCRYPT | file-encryption | agent/hw_test_artifact_azure.json |
 | E-DECRYPT | file-decryption | agent/hw_test_artifact_frankenstein_win2.json#E-DECRYPT-01 |
+| E-LOCK-SCREEN | workstation-lock | docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01 |
 | E-GUARDIAN | lock-guardian | agent/hw_test_artifact_azure.json |
 | E-ACK | command-ack | agent/hw_test_artifact_frankenstein_win2.json#E-ACK-01 |
 | E-RECOVERY | unlock-recovery | agent/hw_test_artifact_frankenstein_win2.json#E-RECOVERY-01 |
@@ -58,89 +53,66 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 271 — 2026-11-17 (a lock that does not lock, and a notification that stops the agent)
+## Latest session: 334 — 2026-11-19 (the stale engine fork is gone)
 
 ### Fog cleared
 
-- **A locked device is now sign-in-proof, and says so.** `lock` holds the interactive
-  account disabled, verified by reading the account back (`net user /active:no` can exit 0
-  and change nothing). `lockdown_effective` requires it, so an encrypted-but-signable
-  machine reports false instead of looking locked. `recover` re-enables first, before it
-  looks at the key, so a `failed` ACK cannot strand the account.
-- **The notification can no longer stop the agent.** Fire-and-forget daemon thread.
-- **The service host supervises on evidence, not existence.** `.last_checkin_ok` (written
-  only when the server ANSWERS) replaces the pid check; a stalled agent is restarted only
-  when `/api/health` also answers, so an offline machine is left alone. Proven live:
-  `agent stalled — no answered check-in for 921s; terminating it` → fresh agent →
-  `UNLOCK command received` → `BIOS password backup deleted (unlock successful)` →
-  `sentinel: False`.
-- **One owner for the account.** `lock` and `track` used independent files and reversed
-  each other's disable; a reason set `.logon_holds = {"user", "reasons"}` now decides, and
-  the account is re-enabled only when the set is empty.
-- **E-LOCK-SCREEN demoted** to `verified-in-unit-test` with the reason in GRAPH-SPEC: its
-  Azure artifact recorded that `tsdiscon` was *issued*, not that a sign-in was *refused*.
-  `make graph-check` passes.
-- **The acceptance harness runs the whole non-destructive half on the real machine** and
-  reports `[PASS] enroll`, `[FAIL] lock` for exactly the reasons above. Four harness
-  defects fixed en route: `hostname_confirm` (400), the recover wait predicate, the
-  `__INSECURE__` quoting (PowerShell parse error), and `tracking_state.json` read from the
-  wrong directory.
+- **`harness-template/` is deleted** (owner's decision, my recommendation): three files that nothing
+  references, carrying a fork of the engine that predates every check added since S326. Git history keeps
+  it recoverable, so the cost of being wrong is one `git revert`.
+- **Nothing broke**: `make graph-check` → `✓ All invariants pass`; `scripts/test_graph_session.py` →
+  40 passed, 0 failed. The deletion removed no import, no path, no target.
+- **The record is preserved where it belongs**: the S329 trace entries state the fork's line counts and why
+  it was left as a decision, so a reader can reconstruct what was removed and why.
 
 ### Fog remaining
 
-- **The tracking half has still not run live** (`track` → `stop-track`). It EFS-encrypts
-  the console user's profile and disables them; the interlock is in place, but the cycle
-  needs a window and the console user's cooperation.
-- **E-LOCK-SCREEN is re-promotable only by a hardware run** that shows a console sign-in
-  REFUSED. The harness now asserts it; no artifact exists yet.
-- **The 14 h wedge mechanism is now explained for locks** (blocking notification) but the
-  earlier S269 instance had no pending unlock to disprove other causes; the supervision
-  fix makes the mechanism moot for availability, not for root cause.
-- **The timezone question is unanswered**: the operator reports a time mismatch; the clocks
-  agree with this host to the second, so either their wall clock is not +03:00 (a timezone
-  setting) or they are comparing UTC (`Z`) records with local (`+03:00`) logs.
-- Deferred by decision: per-entity KV keys / Durable Object per device (whole-record writes
-  still race across isolates), and cross-surface installer-flag contract tests.
+- **Two gates remain blocked on docker** (`test_tls_floor.py`, `pg-smoke`): `sudo usermod -aG docker $USER`
+  plus a new login session is the operator action; `sudo -n` needs a password, so nothing in-session can
+  do it.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` — a repository
+  setting.
+- **The weekly audit's `cron` path is still unexercised**; the pyright `reportMissingImports` pair remains
+  an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
 
 ### Debt items closed
 
-- None. D-119/D-120-adjacent behaviour changed; no graph-tracked item met its close
-  criteria.
+None.
 
 ### Debt items still open
 
-- D-120, D-129, D-130, D-134 — unchanged.
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
 
 ### Blockers
 
-- None. The build for `ae415f0` is running; MOLE is unlocked, supervised, and checking in.
+- **Docker socket and Dependabot write access** — both outside the repository, both named above.
+
+### Session artifacts
+
+- Deletion of `harness-template/` (3 files: `graph_assert.py`, `graph_loader.py`, `GRAPH-SPEC.yaml` and the
+  S329 README).
 
 ### Failure attribution
 
-- **Layer 4 — verification feedback (primary).** E-LOCK-SCREEN carried `verified-on-hardware`
-  on an artifact that proved a command was issued. The harness that produced it asserted the
-  action, not the post-condition — the same acceptance criterion this session spent on
-  everything else. New check: "logon prevented (interactive account disabled)".
-- **Layer 2 — context provision.** Nothing recorded that `lock` only means "disconnected +
-  encrypted", so the product's name implied enforcement the code did not do. GRAPH-SPEC now
-  says what each layer does and does not do.
+- **Layer 5 (state management)**: a fork created before this arc drifted for a hundred sessions without
+  anything noticing, and once noticed it took a second session to resolve because the right answer
+  (deletion) was the owner's call rather than mine. The durable rule: a copy of the invariant engine that
+  is not the engine should not exist, and if it must, it should carry its provenance in its first line.
 
 ### VERIFY
 
-- Live: `[PASS] enroll` (service Running, config parses, checked in 68 s, device id matches);
-  `lock` ACK `executed effective=False boot_lock_status=partial`; supervision restart at 921 s
-  → `UNLOCK command received` → `sentinel: False`.
-- Suites: agent 922, worker 447, server 773 (44 suites), acceptance harness 48,
-  `tsc --noEmit` clean, ruff clean on every touched file, `make graph-check` all invariants
-  pass.
-- Published to local KV from CI: `binary:installer/agent/service/agent-installer`, each
-  verified against the served `x-content-sha256`.
+- `grep -rn harness-template` → no consumer remains (only this repo's trace history).
+- `make graph-check` → `✓ All invariants pass`.
+- `python3 scripts/test_graph_session.py` → 40 passed, 0 failed.
+- `git status` clean afterwards; push passes the pre-push hook.
 
 ### Next session opening
 
-Publish the `ae415f0` build, install it on MOLE, then run `lock` and confirm from the
-console that `newark user` is disabled and a sign-in is refused, followed by `recover`; only
-then re-promote E-LOCK-SCREEN.
+Ask the operator for docker group membership (then re-login) so `test_tls_floor.py` and `pg-smoke` can run
+— the only two gates in this repository still blocked on the environment rather than on code.
 
 ---
 

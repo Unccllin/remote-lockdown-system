@@ -961,3 +961,93 @@ class TestServiceBinaryIsInstalledWithTheAgent:
         assert attempts == [1, 1], "the agent copy must be retried after the service stops"
         assert stops == [1]
         assert dest.read_text(encoding="utf-8") == "new-agent"
+
+
+# ---------------------------------------------------------------------------
+# The firmware password the machine already has (S271)
+# ---------------------------------------------------------------------------
+
+
+def test_build_config_omits_uefi_password_by_default():
+    """Absent, not empty: the agent generates a password only when none is configured."""
+    cfg = installer.build_config("https://x", "k", "h", "d")
+    assert "uefi_password" not in cfg
+
+
+def test_build_config_carries_the_uefi_password_when_supplied():
+    """Without it the HP boot-lock layer cannot authenticate and the whole lock rolls back.
+
+    Measured on MOLE: the firmware has a Setup password, the config had none, so the layer
+    aborted, BCD rolled back, and `lockdown_effective` was false with no way to supply the
+    value — the installers had no flag for it (S271).
+    """
+    cfg = installer.build_config("https://x", "k", "h", "d", uefi_password="firmware-pw")
+    assert cfg["uefi_password"] == "firmware-pw"
+
+
+def test_build_config_includes_google_api_key_when_passed():
+    cfg = installer.build_config("https://s", "k", "h", "d", google_api_key="g-key")
+    assert cfg["google_api_key"] == "g-key"
+
+
+def test_build_config_omits_google_api_key_when_empty():
+    cfg = installer.build_config("https://s", "k", "h", "d")
+    assert "google_api_key" not in cfg
+
+
+def test_write_config_includes_google_api_key_when_passed(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    installer.write_config("https://s", "k", "h", "d", google_api_key="g-key")
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g-key"
+
+
+def test_write_config_omits_google_api_key_when_empty(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    installer.write_config("https://s", "k", "h", "d")
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written
+
+
+def test_claim_response_to_config_includes_google_api_key(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k", "google_api_key": "g"}
+    installer.write_config(
+        "https://s",
+        "k",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["google_api_key"] == "g"
+
+
+def test_claim_response_to_config_omits_google_api_key_when_absent(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(installer, "INSTALL_DIR", tmp_path)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "config.json")
+
+    data = {"device": {"id": "dev-1"}, "api_key": "k"}
+    installer.write_config(
+        "https://s",
+        "k",
+        "TEST-PC",
+        "dev-1",
+        google_api_key=str(data.get("google_api_key") or ""),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "google_api_key" not in written

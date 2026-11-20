@@ -632,3 +632,97 @@ class TestArtifactUpload:
 # ---------------------------------------------------------------------------
 # S265: Defender exclusion detection reads both lists
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# S293: E-LOCK-SCREEN records the REFUSAL, not the command
+# ---------------------------------------------------------------------------
+# S270 demoted the path because its artifact recorded that tsdiscon was ISSUED at session 0, not
+# that a sign-in was refused. The refusal is what Windows writes to the Security log (4625 with
+# SubStatus 0xc0000072), and it needs a human at the console — so the harness makes observing it
+# opt-in and says plainly when it did not observe it.
+class TestLockScreenRefusal:
+    def _test(self):
+        return hw_test_harness.TestLockScreen()
+
+    def test_without_the_wait_it_says_the_refusal_was_not_observed(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop(hw_test_harness.LOCK_SIGNIN_WAIT_ENV, None)
+            passed, detail = self._test().verify({}, "simulate", "Lock issued via tsdiscon")
+
+        assert passed is True
+        # The distinction that matters: passing on the weaker evidence is allowed, claiming the
+        # refusal was observed is not.
+        assert "NOT observed" in detail
+        assert hw_test_harness.LOCK_SIGNIN_WAIT_ENV in detail
+
+    def test_a_refusal_event_in_the_window_is_reported_with_its_substatus(self):
+        event = {
+            "TargetUserName": "Newark User",
+            "LogonType": "2",
+            "SubStatus": "0xc0000072",
+            "TimeCreated": "2026-11-18T11:40:07.2188130+03:00",
+        }
+        t = self._test()
+        with (
+            patch.dict("os.environ", {hw_test_harness.LOCK_SIGNIN_WAIT_ENV: "6"}),
+            patch.object(hw_test_harness, "_account_disabled_refusals", return_value=[event]),
+        ):
+            passed, detail = t.verify({}, "simulate", "Lock issued via tsdiscon")
+
+        assert passed is True
+        assert "REFUSED" in detail
+        assert "0xc0000072" in detail
+        assert "Newark User" in detail
+
+    def test_the_window_closing_without_a_refusal_fails_and_names_the_knob(self):
+        t = self._test()
+        with (
+            patch.dict("os.environ", {hw_test_harness.LOCK_SIGNIN_WAIT_ENV: "1"}),
+            patch.object(hw_test_harness, "_account_disabled_refusals", return_value=[]),
+        ):
+            passed, detail = t.verify({}, "simulate", "Lock issued via tsdiscon")
+
+        assert passed is False
+        assert "No Security 4625" in detail
+        assert hw_test_harness.LOCK_SIGNIN_WAIT_ENV in detail
+
+    def test_cleanup_releases_the_logon_hold_it_took(self):
+        """A failed run must not leave the operator locked out of their own machine."""
+        t = self._test()
+        t._held_user = "Newark User"
+        with patch("agent.re_enable_console_account") as release:
+            t.cleanup({}, "simulate")
+
+        release.assert_called_once()
+        assert t._held_user is None
+
+    def test_refusals_filter_on_substatus_and_user(self):
+        """Only the disabled-account refusal counts: a wrong password is a different event."""
+
+        def _event(user, substatus):
+            return json.dumps({"TargetUserName": user, "SubStatus": substatus, "LogonType": "2"})
+
+        lines = [
+            _event("Newark User", "0xc0000072"),  # the refusal this test is about
+            _event("Newark User", "0xc000006a"),  # a wrong password: a different event
+            _event("someone-else", "0xc0000072"),  # another account
+            "not json at all",
+        ]
+
+        class _Proc:
+            stdout = "\n".join(lines)
+
+        with (
+            patch.object(hw_test_harness.platform, "system", return_value="Windows"),
+            patch.object(hw_test_harness.subprocess, "run", return_value=_Proc()),
+        ):
+            refusals = hw_test_harness._account_disabled_refusals(
+                hw_test_harness.datetime.now(hw_test_harness.UTC), "Newark User"
+            )
+
+        assert len(refusals) == 1
+        assert refusals[0]["SubStatus"] == "0xc0000072"
+        assert refusals[0]["TargetUserName"] == "Newark User"

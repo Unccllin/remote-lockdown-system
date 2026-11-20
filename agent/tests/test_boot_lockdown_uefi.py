@@ -253,6 +253,43 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
     @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
     @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
+    @patch("hp_uefi_lockdown._check_secure_boot", return_value={"enabled": False, "warning": None})
+    @patch(
+        "hp_uefi_lockdown._check_sure_admin",
+        return_value={
+            "sure_admin_detected": False,
+            "any_sure_feature": False,
+            "warning": None,
+        },
+    )
+    def test_missing_uefi_password_records_the_reason(self, *_):
+        """A dead end must name the next action, not just report zero layers.
+
+        Measured on MOLE (S271): the ACK carried boot_lock_status=partial with every layer at
+        0 and no field explaining why, so "boot lock did not apply" was unactionable. The
+        cause — the firmware already has a Setup password and the agent has none configured —
+        was only in the log.
+        """
+        result = hp_uefi_lockdown.apply_boot_lockdown()
+
+        assert result["reason"] == "existing_bios_password_without_uefi_password"
+        assert "uefi_password" in result["next_action"]
+        assert result["critical_applied"] == 0
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=False)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._check_secure_boot", return_value={"enabled": False, "warning": None})
+    @patch(
+        "hp_uefi_lockdown._check_sure_admin",
+        return_value={"sure_admin_detected": False, "any_sure_feature": False, "warning": None},
+    )
+    def test_missing_admin_records_the_reason(self, *_):
+        result = hp_uefi_lockdown.apply_boot_lockdown()
+        assert result["reason"] == "requires_admin"
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", return_value=True)
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_with_existing_password(
@@ -285,7 +322,9 @@ class TestHpUefiLockdown:
         result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="existingpw")
 
         assert result["success"] is True
-        assert result["bios_password"] == "existingpw"
+        # A pre-existing password is NOT echoed back (S271): the operator supplied it, and
+        # reporting it made the backend serve an unverified credential as this device's own.
+        assert result.get("bios_password") is None
         # First call should NOT be setting the Setup password (password already set)
         first_call = mock_set.call_args_list[0]
         assert first_call.args[0] != "Setup Password"
@@ -358,13 +397,16 @@ class TestHpUefiLockdown:
     def test_apply_boot_lockdown_critical_failure_triggers_rollback(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
-        """CC18: Critical failure triggers rollback of all BIOS changes."""
+        """CC18: a REFUSED critical write triggers rollback of all BIOS changes.
 
-        # Setup Password succeeds (returns 0)
-        # Critical settings: _set_setting returns 0 but _read_setting returns
-        # the OLD value (verification fails) → critical failure
+        A write the firmware accepts but has not committed yet is `pending_reboot`, not a
+        failure — see test_apply_boot_lockdown_pending_reboot_is_not_a_rollback (S271).
+        """
+        critical_names = {name for name, _ in hp_uefi_lockdown.HP_CRITICAL_SETTINGS}
+
         def set_side_effect(name, value, password):
-            return 0  # set always "succeeds" at the WMI level
+            # Refused by the firmware for the critical settings; password write is fine.
+            return 6 if name in critical_names else 0
 
         mock_set.side_effect = set_side_effect
 
@@ -393,16 +435,61 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._is_admin", return_value=True)
     @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
     @patch("hp_uefi_lockdown._is_setup_password_set", side_effect=[False, True])
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)
+    @patch("hp_uefi_lockdown._read_setting")
+    def test_apply_boot_lockdown_pending_reboot_is_not_a_rollback(
+        self, mock_read, _set, _pw_set, __, ___, tmp_state_file, mock_resolve_settings
+    ):
+        """Accepted writes that have not committed yet must not be undone.
+
+        Measured on MOLE (S271): five settings were written and accepted (no `failed:` warning
+        for any), the read-back showed the old values because HP commits at the next boot, and
+        the agent rolled back — producing "rollback completed with errors" plus a firmware state
+        nobody had recorded. Now the result says `pending_reboot`, keeps the boot-state file and
+        does not roll back.
+        """
+        critical_names = {name for name, _ in hp_uefi_lockdown.HP_CRITICAL_SETTINGS}
+        best_effort_names = {name for name, _ in hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS}
+
+        def read_side_effect(name):
+            if name == "Setup Password":
+                return None
+            if name in critical_names:
+                for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS:
+                    if name == sname:
+                        return "Enable" if sval == "Disable" else "Disable"  # pre-boot value
+            if name in best_effort_names:
+                for sname, sval in hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
+                    if name == sname:
+                        return sval
+            return None
+
+        mock_read.side_effect = read_side_effect
+
+        result = hp_uefi_lockdown.apply_boot_lockdown(existing_password=None)
+
+        assert result["pending_reboot"] is True
+        assert result["rolled_back"] is False
+        assert result["success"] is True
+        assert result["critical_pending"] > 0
+        assert result["critical_applied"] == 0
+        # The original values must stay recoverable until a boot proves where the firmware
+        # landed, so the state file is NOT deleted on this path.
+        assert hp_uefi_lockdown.BOOT_STATE_FILE.exists()
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown._is_setup_password_set", side_effect=[False, True])
     @patch("hp_uefi_lockdown._set_setting")
     @patch("hp_uefi_lockdown._read_setting")
     def test_apply_boot_lockdown_rollback_does_not_clear_password(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
         """CC18: Rollback must NOT clear the freshly-set Setup Password."""
+        critical_names = {name for name, _ in hp_uefi_lockdown.HP_CRITICAL_SETTINGS}
 
-        # Make all critical settings fail verification
         def set_side_effect(name, value, password):
-            return 0
+            return 6 if name in critical_names else 0
 
         mock_set.side_effect = set_side_effect
 
@@ -434,8 +521,9 @@ class TestHpUefiLockdown:
     def test_apply_boot_lockdown_best_effort_failure_no_rollback(
         self, mock_read, mock_set, mock_pw_set, _, __, tmp_state_file, mock_resolve_settings
     ):
-        """Best-effort failure does NOT trigger rollback."""
-        mock_set.return_value = 0
+        """A REFUSED best-effort write does NOT trigger rollback."""
+        best_effort_names = {name for name, _ in hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS}
+        mock_set.side_effect = lambda name, value, password: 6 if name in best_effort_names else 0
 
         def read_side_effect(name):
             if name == "Setup Password":
@@ -444,7 +532,6 @@ class TestHpUefiLockdown:
             for sname, sval in hp_uefi_lockdown.HP_CRITICAL_SETTINGS:
                 if name == sname:
                     return sval
-            # Best-effort settings fail verification
             for sname, sval in hp_uefi_lockdown.HP_BEST_EFFORT_SETTINGS:
                 if name == sname:
                     return "Enable" if sval == "Disable" else "Disable"
@@ -464,24 +551,28 @@ class TestHpUefiLockdown:
     @patch("hp_uefi_lockdown._set_setting", return_value=0)
     @patch("hp_uefi_lockdown._read_setting")
     def test_set_and_verify_success(self, mock_read, _):
-        """Phase 4.5: _set_and_verify returns True when verification matches."""
+        """Verification matching means applied."""
         mock_read.return_value = "Disable"
-        result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
-        assert result is True
+        assert hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password") == "applied"
 
     @patch("hp_uefi_lockdown._set_setting", return_value=0)
     @patch("hp_uefi_lockdown._read_setting")
-    def test_set_and_verify_failure(self, mock_read, _):
-        """Phase 4.5: _set_and_verify returns False when verification fails."""
-        mock_read.return_value = "Enable"  # didn't change
-        result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
-        assert result is False
+    def test_set_and_verify_is_pending_when_the_read_back_lags(self, mock_read, _):
+        """An accepted write whose read-back still shows the old value is NOT a failure.
+
+        Measured on MOLE (S271): HP accepts the write and commits it at the next boot, so an
+        in-session read returns the previous value. Calling that failure made the agent roll
+        back writes that had landed.
+        """
+        mock_read.return_value = "Enable"  # unchanged in this session
+        assert (
+            hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password") == "pending_reboot"
+        )
 
     @patch("hp_uefi_lockdown._set_setting", return_value=6)
     def test_set_and_verify_set_fails(self, _):
-        """Phase 4.5: _set_and_verify returns False when _set_setting fails."""
-        result = hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password")
-        assert result is False
+        """A refused write is the only failure."""
+        assert hp_uefi_lockdown._set_and_verify("USB Boot", "Disable", "password") == "failed"
 
     # --- Phase 4: Rollback is non-fatal ---
 
@@ -547,7 +638,10 @@ class TestHpUefiLockdown:
         }
         mock_set.return_value = 0
 
-        result = hp_uefi_lockdown.remove_boot_lockdown("mypassword")
+        # The verdict is now "every restore verified", so the verification has to agree —
+        # otherwise this asserts True for a restore that changed nothing (S271).
+        with patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True):
+            result = hp_uefi_lockdown.remove_boot_lockdown("mypassword")
 
         assert result is True
         # Last call should be clearing the Setup password (was set by agent)
@@ -804,14 +898,22 @@ class TestHpUefiLockdown:
     def test_d009_remove_uses_model_aware_resolution(self, _, __, ___, tmp_state_file):
         """D-009: remove_boot_lockdown uses _resolve_setting_names for restoration."""
         custom_settings = [("Custom PXE", "Disable"), ("Custom USB", "Disable")]
-        with patch.object(
-            hp_uefi_lockdown,
-            "_resolve_setting_names",
-            return_value=(custom_settings, []),
+        with (
+            patch.object(
+                hp_uefi_lockdown,
+                "_resolve_setting_names",
+                return_value=(custom_settings, []),
+            ),
+            patch("hp_uefi_lockdown.load_boot_state", return_value=None),
+            patch.object(hp_uefi_lockdown, "_set_setting", return_value=0) as mock_set,
+            patch.object(hp_uefi_lockdown, "_verify_setting", return_value=True),
         ):
-            with patch("hp_uefi_lockdown.load_boot_state", return_value=None):
-                result = hp_uefi_lockdown.remove_boot_lockdown(bios_password="testpw")
+            result = hp_uefi_lockdown.remove_boot_lockdown(bios_password="testpw")
+
         assert result is True
+        # D-009 is about WHICH names are used, so assert that rather than the verdict alone.
+        names = [c.args[0] for c in mock_set.call_args_list]
+        assert "Custom PXE" in names and "Custom USB" in names
 
     # --- D-010: HP Sure Admin / Sure Run / Sure Start awareness ---
 
@@ -1035,3 +1137,100 @@ class TestHpUefiLockdown:
         assert result["sure_admin_status"]["sure_admin_detected"] is True
         assert result["sure_admin_status"]["sure_start_detected"] is True
         assert result["sure_admin_status"]["any_sure_feature"] is True
+
+
+class TestFailedRollbackKeepsTheBootState:
+    """A rollback that could not restore must not delete the record of what to restore.
+
+    Measured on MOLE (S271): the lockdown's writes committed at the next boot, the rollback's
+    writes were refused, and `clear_boot_state()` deleted the only copy of the original values —
+    so the machine came back with USB/PXE/Legacy boot disabled and nothing left that knew the
+    values they had before.
+    """
+
+    def test_a_failed_restore_keeps_the_state_file(self, tmp_path, monkeypatch):
+        state_file = tmp_path / ".boot_state"
+        state_file.write_text('{"USB Storage Boot": "Enable"}')
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", state_file)
+        monkeypatch.setattr(hp_uefi_lockdown, "_set_setting", lambda *a, **k: 6)  # refused
+        monkeypatch.setattr(hp_uefi_lockdown, "_verify_setting", lambda *a, **k: False)
+
+        ok = hp_uefi_lockdown._rollback_bios_settings({"USB Storage Boot": "Enable"}, "pw")
+
+        assert ok is False
+        assert state_file.exists(), "the original values must stay recoverable"
+
+    def test_a_successful_restore_clears_the_state_file(self, tmp_path, monkeypatch):
+        state_file = tmp_path / ".boot_state"
+        state_file.write_text('{"USB Storage Boot": "Enable"}')
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", state_file)
+        monkeypatch.setattr(hp_uefi_lockdown, "_set_setting", lambda *a, **k: 0)
+        monkeypatch.setattr(hp_uefi_lockdown, "_verify_setting", lambda *a, **k: True)
+
+        ok = hp_uefi_lockdown._rollback_bios_settings({"USB Storage Boot": "Enable"}, "pw")
+
+        assert ok is True
+        assert not state_file.exists()
+
+
+class TestRemovalVerdict:
+    """`remove_boot_lockdown` must not claim a restore it did not verify.
+
+    Measured on MOLE (S271): with the boot state deleted by a failed rollback, the removal
+    logged "Restored 0 BIOS settings" and the caller then logged "BIOS restored to
+    pre-lockdown state" — while the four boot settings still held the lockdown values and every
+    restore write was refused (Return=4 Failed).
+    """
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state", return_value=None)
+    @patch("hp_uefi_lockdown._set_setting", return_value=4)  # Failed: every write refused
+    def test_refused_writes_are_reported_as_failure(self, _set, _state, _hp, _admin):
+        assert hp_uefi_lockdown.remove_boot_lockdown(bios_password="pw") is False
+
+    @patch("hp_uefi_lockdown._is_admin", return_value=True)
+    @patch("hp_uefi_lockdown.is_hp_machine", return_value=True)
+    @patch("hp_uefi_lockdown.load_boot_state", return_value=None)
+    @patch("hp_uefi_lockdown._verify_setting", return_value=False)
+    @patch("hp_uefi_lockdown._set_setting", return_value=0)  # accepted, never verified
+    def test_accepted_but_unverified_is_not_a_restore(self, _set, _verify, _state, _hp, _admin):
+        assert hp_uefi_lockdown.remove_boot_lockdown(bios_password="pw") is False
+
+
+class TestOnlyAGeneratedPasswordIsReported:
+    """CC18 returns a password THIS RUN set. A pre-existing one is the operator's, not ours.
+
+    Measured on MOLE (S271): the caller's `uefi_password` value came back through the ACK and
+    was served by `GET /api/devices/:id/pba-credentials` as the device's Setup password, while
+    every BIOS write with it was refused — a credential the backend vouched for and the machine
+    did not accept.
+    """
+
+    def test_a_preexisting_password_is_not_reported_back(self, tmp_path, monkeypatch):
+        # Keep the boot-state file out of the working tree: this path writes one.
+        monkeypatch.setattr(hp_uefi_lockdown, "BOOT_STATE_FILE", tmp_path / ".boot_state")
+        with (
+            patch.object(hp_uefi_lockdown, "_is_admin", return_value=True),
+            patch.object(hp_uefi_lockdown, "is_hp_machine", return_value=True),
+            patch.object(hp_uefi_lockdown, "_is_setup_password_set", return_value=True),
+            patch.object(hp_uefi_lockdown, "_set_setting", return_value=6),  # writes refused
+            patch.object(hp_uefi_lockdown, "_read_setting", return_value="Enable"),
+            patch.object(
+                hp_uefi_lockdown,
+                "_check_secure_boot",
+                return_value={"enabled": False, "warning": None},
+            ),
+            patch.object(
+                hp_uefi_lockdown,
+                "_check_sure_admin",
+                return_value={
+                    "sure_admin_detected": False,
+                    "any_sure_feature": False,
+                    "warning": None,
+                },
+            ),
+        ):
+            result = hp_uefi_lockdown.apply_boot_lockdown(existing_password="1234")
+
+        assert result.get("bios_password") is None

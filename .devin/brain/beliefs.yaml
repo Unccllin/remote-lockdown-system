@@ -3069,3 +3069,1022 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-138
+  statement: Both surfaces derive lock_state (applied/applying/armed/failed/none) from the newest lockdown
+    plus newest unlock per device, with a 180 s freshness window; Express attaches it in the two device
+    GET routes, never in publicDevice, because that helper also shapes command-less POST responses
+  domain: api/devices
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S272: server/src/routes/devices.js attaches it in both device GET routes; scripts/test_cross_surface_contract.py
+    pins the five values and the 180 s window on both surfaces'
+  source: server/src/routes/devices.js; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 1f6d399
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Verified against real SQLite through the real Express routes: none -> armed -> applying -> applied
+    -> none. Contract pinned in scripts/test_cross_surface_contract.py.'
+- id: B-139
+  statement: 'In SQLite, location_reports.reported_at is ''YYYY-MM-DD HH:MM:SS'' while an agent-supplied
+    observed_at is ISO-8601, so a bare ORDER BY COALESCE(observed_at, reported_at) compares characters:
+    ''T'' (0x54) sorts above '' '' (0x20) and an earlier fix outranks a later one. datetime(COALESCE(...))
+    normalises both shapes; PostgreSQL''s TIMESTAMPTZ columns need no normalisation'
+  domain: db/sqlite
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'S272: measured on a real SQLite database through the real Express routes — artifact step
+    15 showed Middle>Earlier>Newer before the normalisation and Newer>Middle>Earlier after; pinned by
+    server/tests/locationOrdering.test.js (mutation-checked)'
+  source: server/src/db/timestamps.js
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: 1f6d399
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'The dialect switch must read pool.driver, not process.env.USE_SQLITE: callers that require sqlitePool
+    directly never set that env var.'
+- id: B-140
+  statement: The Worker stores devices as per-entity records (device:<id>), indexed by device_index, with
+    an agent_key:<sha256> -> device-id pointer; saveDevices no longer exists, so a whole-list devices
+    write is a compile error
+  domain: api/devices
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'S273: 15 write sites converted, saveDevices removed (tsc proves nothing calls it); artifact
+    docs/artifacts/s272-device-per-entity-keys.json asserts the key layout on the real Worker'
+  source: serverless/worker.ts; docs/adr/ADR-003-per-entity-device-records.md
+  asserted: '2026-11-17'
+  last_verified: '2026-11-17'
+  commit_ref: dfa7462
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: locations/audit_log/bios_passwords/encryption_keys remain whole-list writes, named in the ADR
+    and README.
+- id: B-141
+  statement: The Worker stores location reports as per-report records (location:<id>) indexed per device
+    (location_index:<deviceId>), capped per device by LOCATION_HISTORY_LIMIT (default 500, env-overridable),
+    and pruning deletes the evicted records as well as the index entries
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S274 commit 30f44a1 + ADR-004; docs/artifacts/s274-location-per-entity-keys.json (11 assertions
+    on the real Worker, cap crossed)
+  source: serverless/worker.ts; docs/adr/ADR-004-per-entity-location-reports.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: audit_log, bios_passwords and encryption_keys remain whole-list writes.
+- id: B-142
+  statement: The Worker stores audit entries as per-entry records (audit:<id>) behind one capped index
+    (audit_index) of {id, device_id}, and no worker code path scans the fleet to find a single device
+    any more (handleLinkPbl is the only remaining listDevices read for uniqueness)
+  domain: api/audit
+  status: proposed
+  evidence_level: assumed
+  provenance: S275 commit 5a0c52a + ADR-005; docs/artifacts/s275-audit-per-entity-keys.json measures 3
+    device-record reads for one mutation with 6 devices enrolled
+  source: serverless/worker.ts; docs/adr/ADR-005-per-entity-audit-entries.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: bios_passwords and encryption_keys remain whole-list writes.
+- id: B-143
+  statement: 'Every fleet-scale KV store in the Worker is per-entity now: commands (ADR-002), devices
+    (device:<id> + index + agent_key pointer, ADR-003), locations (per-report + per-device index, ADR-004),
+    audit (per-entry + one index carrying device_id, ADR-005), encryption keys and BIOS credentials (one
+    key per device, no index, no cap, ADR-006). The only remaining single-value lists are admins and hw_test_artifacts'
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: S272-S276 commits 2f79c12/dfa7462/30f44a1/5a0c52a/f4765e6 + ADRs 002-006; each artifact
+    asserts the key layout on the real Worker
+  source: serverless/worker.ts; docs/adr/ADR-00{2,3,4,5,6}-*.md
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Residual: device_index/audit_index/location_index are whole-value writes, capped or append-mostly.'
+- id: B-144
+  statement: serverless/worker.ts is 4925 lines after extracting http.ts, admin-auth.ts and installer-scripts.ts
+    in dependency order, so the harness LSP analyses it again (too_large=0); the remaining big cohesive
+    blocks are the storage layer (ADR-002..006, ~900 lines) and the /v1 PBL routes (~460)
+  domain: api/devices
+  status: refuted
+  evidence_level: assumed
+  provenance: S277 commit 9212930; lens_diagnostics full probe reports too_large=0 and no errors across
+    the four modules
+  source: serverless/worker.ts; serverless/http.ts; serverless/admin-auth.ts; serverless/installer-scripts.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-148
+  dependents: []
+  notes: 'Ship to MOLE is still blocked: lab server HTTP 000 and wrangler not authenticated.'
+  refuted_on: '2026-11-18'
+  refute_evidence: wc -l serverless/worker.ts serverless/agent-routes.ts serverless/kv-store.ts = 2727
+    / 541 / 1203; 480 worker tests, tsc clean, 2026-11-18
+- id: B-145
+  statement: The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations,
+    ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1203
+    lines), which imports only pbl/env and http.ts; worker.ts is 3751 lines after the S277/S278 splits
+  domain: api/devices
+  status: refuted
+  evidence_level: assumed
+  provenance: S278 commit 8881171; 480 worker tests unchanged across a pure move, tsc clean, cross-surface
+    23 passed
+  source: serverless/kv-store.ts; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-149
+  dependents: []
+  notes: 'Remaining cuts: /v1 PBL routes (~460 lines) and the agent handlers. Ship to MOLE still blocked
+    on operator access.'
+  refuted_on: '2026-11-18'
+  refute_evidence: wc -l serverless/kv-store.ts serverless/worker.ts = 1203 / 2727, 2026-11-18
+- id: B-146
+  statement: The /v1 firmware route dispatcher lives in serverless/pbl/routes/index.ts (458 lines) and
+    the isolate signing-key cache in serverless/pbl/keys.ts, so the whole PBL surface imports nothing
+    from worker.ts except Env, errorResponse and requireRole; worker.ts is 3259 lines after the S277-S279
+    splits
+  domain: api/pbl
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S279 commit f401164: 480 worker tests unchanged across a pure move, tsc clean, cross-surface
+    23 passed'
+  source: serverless/pbl/routes/index.ts; serverless/pbl/keys.ts; serverless/worker.ts
+  asserted: '2026-11-17'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'resetKeyCache is re-exported from worker.ts for the test harness. Remaining big blocks: agent
+    handlers, device admin handlers, uninstall auth, installer endpoints.'
+- id: B-147
+  statement: 'The serverless coverage gate (serverless/vitest.config.mts) measures every source module
+    (''*.ts'' + ''pbl/**/*.ts''), not just worker.ts: the include was widened in S280 after S277-S279''s
+    extractions silently escaped it, and the then-current floors (82/75/86/83) still passed on the honest
+    86.36/82.99/95.04/88.52 measured over the whole module set.'
+  domain: harness/coverage
+  status: proposed
+  evidence_level: assumed
+  provenance: code-read
+  source: serverless/vitest.config.mts + npx vitest run --coverage, 2026-11-18
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Named weak spots: pbl/routes/signingKey.ts 0%, pbl/routes/firmware.ts 16.66%.'
+- id: B-148
+  statement: serverless/worker.ts is 2,727 lines after the S277-S280 splits; the agent protocol (verifyAgentAuth
+    plus the check-in, deadman, location, command-ACK and escrow handlers) lives in serverless/agent-routes.ts
+    (541 lines), and the storage layer in kv-store.ts (1,203). The remaining big cohesive blocks are the
+    device admin handlers (~700) and uninstall auth (~200).
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: wc -l serverless/worker.ts serverless/agent-routes.ts serverless/kv-store.ts = 2727 / 541
+    / 1203; 480 worker tests, tsc clean, 2026-11-18
+  source: refutes B-144
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-144
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-149
+  statement: The Worker's per-entity storage (ADR-002 devices/commands, ADR-003 devices, ADR-004 locations,
+    ADR-005 audit, ADR-006 secrets) and the ten types they speak live in serverless/kv-store.ts (1,203
+    lines), which imports only pbl/env and http.ts. serverless/worker.ts is 2,727 lines after the S277-S280
+    splits (not 3,751).
+  domain: api/devices
+  status: proposed
+  evidence_level: assumed
+  provenance: wc -l serverless/kv-store.ts serverless/worker.ts = 1203 / 2727, 2026-11-18
+  source: refutes B-145
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-145
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-150
+  statement: 'MOLE (192.168.1.249; OpenSSH as labadmin, key ~/.ssh/lockdown_lab_ed25519, hostname MOLE,
+    Win10.0.26300) can ping this host but cannot open TCP 3001, and the gate is THIS host''s ufw — not
+    a proxy on MOLE and not WSL. This host is a native Arch/Omarchy install holding 192.168.1.43 on wlp0s20f3
+    (kernel 7.2.15-1-omarchy, no Windows interop); the server listens on *:3001; MOLE''s ''netsh interface
+    portproxy show v4tov4'' is empty and none is needed. ufw is ENABLED with DEFAULT_INPUT_POLICY=DROP
+    and allows tcp 53317/8000/8787 only, so 3001 is dropped. Fix needs root: sudo ufw allow 3001/tcp.'
+  domain: deployment/lab
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'Probes run on both machines this session: SSH as labadmin@192.168.1.249 (hostname MOLE),
+    ping 2ms/TTL64, curl HTTP 000, Test-NetConnection False; local curl 200 with ss confirming *:3001;
+    netsh portproxy empty on MOLE; /etc/ufw/ufw.conf ENABLED=yes, /etc/default/ufw DROP, user.rules allow
+    53317/8000/8787 only. Full transcript: docs/artifacts/s281-mole-reachability.txt'
+  source: ssh labadmin@192.168.1.249; curl/Test-NetConnection; ss -ltn; /etc/ufw/user.rules
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-151
+  statement: 'The lab link to MOLE never needed port 3001: MOLE''s agent config targets http://192.168.1.43:8787,
+    which ufw already allows (53317/8000/8787). On 2026-11-18 the device was enrolled through POST /api/devices
+    (id d166e8f7a348d3543eefe1902dc6519c), config.json was patched on MOLE (backup config.json.bak-s282)
+    and Restart-Service LockdownAgent produced a check-in within 8s: last_checkin set, hardware_uuid BE10009B-5867-337C-5024-E390E760DA74,
+    agent_version 1.0.0, firmware_audit HP EliteBook 830 G6 / R70 Ver 01.36.00 / secure_boot=false, lock_state
+    none. B-150''s finding that 3001 is ufw-blocked remains true but was never the agent''s path. MOLE
+    has no usable TPM (seal key creation fails -> DPAPI fallback).'
+  domain: deployment/lab
+  status: confirmed
+  evidence_level: hardware
+  provenance: MOLE agent.log + config.json read over SSH; server-side GET /api/devices returning the MOLE
+    row with last_checkin; docs/artifacts/s282-mole-link-live.txt
+  source: MOLE config.json + agent.log over SSH; GET /api/devices on 192.168.1.43:8787
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-152
+  statement: 'agent/bcd_lockdown.py::_disable_winre returns False for any non-zero ''reagentc /disable'',
+    and apply_bcd_lockdown treats that as a CRITICAL failure that rolls back every BCD change — but reagentc
+    exits non-zero when WinRE is ALREADY disabled (the function''s own comment says so). Measured on MOLE
+    2026-11-18: ''reagentc /info'' reported ''Windows RE status: Disabled'', so the lockdown rolled back
+    and reported boot_lock_status=partial / lockdown_effective=0 on a device whose BCD was already at
+    the lockdown values. A device that has been locked once can therefore never report BCD lockdown success
+    again until ''already disabled'' counts as success.'
+  domain: agent/bcd
+  status: refuted
+  evidence_level: hardware
+  provenance: 'MOLE: ''CRITICAL: WinRE disable failed'' in agent.log at 10:21:11, then reagentc /info
+    returned ''Windows RE status: Disabled''; server recorded boot_lock_status=partial and lockdown_effective=0.
+    Transcript: docs/artifacts/s283-lock-recover-acceptance.txt'
+  source: agent/bcd_lockdown.py; MOLE over SSH
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-153
+  dependents: []
+  notes: ''
+  refuted_on: '2026-11-18'
+  refute_evidence: scripts/run-agent-tests.sh -> 950 passed; bcd file 51 passed; ruff clean; docs/artifacts/s284-winre-idempotency-fix.txt
+- id: B-153
+  statement: 'agent/bcd_lockdown.py fixes the WinRE idempotency defect (S284): _winre_status() maps ''reagentc
+    /info'' to enabled/disabled/None, _disable_winre treats an already-disabled WinRE as success and _enable_winre
+    an already-enabled one, and an unreadable state (None) is still a failure so a broken reagentc cannot
+    look like a lockdown. Pinned by 6 unit tests plus an apply-level regression test asserting no rollback
+    and a sentinel when WinRE is already off. Unit-tested only: E-BCD stays not-hardware-verified until
+    a rebuilt agent runs on MOLE.'
+  domain: agent/bcd
+  status: confirmed
+  evidence_level: code-read
+  provenance: agent/bcd_lockdown.py::_winre_status/_disable_winre/_enable_winre + agent/tests/test_boot_lockdown_bcd.py;
+    51 targeted and 950 suite tests pass, ruff clean; docs/artifacts/s284-winre-idempotency-fix.txt
+  source: refutes B-152
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: B-152
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-154
+  statement: 'MOLE''s HP UEFI lockdown layer cannot succeed because the unit has a BIOS Setup password
+    the agent never set (HP_BIOSPassword IsSet=1; agent.log: ''Setup password was pre-existing — not clearing'')
+    while the agent signs every SetBIOSSetting with a 4-character uefi_password from its config; HP returns
+    code 4 ''Failed'' for all three critical writes (Network (PXE) Boot, USB Storage Boot, Legacy Boot
+    Options), so the layer rolls back and the ACK reports boot_lock_status=partial. It is an operator
+    secret, not a code bug: the real Setup password must be supplied as UEFI_PASSWORD or cleared in BIOS
+    Setup. Sure Start BIOS Settings Protection is Disable, so it is not the blocker. apply_boot_lockdown
+    refuses when a Setup password exists and none is configured, but never validates that a configured
+    one is correct.'
+  domain: agent/uefi
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE read-only probes: HP_BIOSPassword Setup Password IsSet=1, Power-On Password IsSet=0,
+    Sure Start BSP Disable; agent.log shows ''Using existing BIOS Setup password'' followed by three ''failed:
+    Failed'' and a rollback on 2026-11-18, same shape on 2026-11-17. Transcript: docs/artifacts/s285-mole-bios-write-refusal.txt'
+  source: probe-bios-state.ps1, probe-bsp.ps1, agent/hp_uefi_lockdown.py
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: ca818ca
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-155
+  statement: 'A Windows agent rebuild is reproducible from this repo on MOLE itself: Python 3.14.8 (matching
+    the dev interpreter) installed silently to C:\Python314, deps from agent/requirements.txt, PyInstaller
+    6.22.3, then ''PyInstaller agent.spec''. The deployed exe sha256 becomes b17f390d6330d92bcf0e09490bc35b80c4c3cdbdde89221836ec421ba591984d.
+    Replacing it requires stopping the service AND killing any lingering lockdown-agent child first —
+    a copy over a running image fails silently while reporting ''copy ok'', leaving the old hash in place.'
+  domain: agent/build
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE build of the current tree: python 3.14.8 + PyInstaller 6.22.3 -> dist/lockdown-agent.exe
+    16.1 MB sha256 b17f390d…; ''../Data'' swap needed Stop-Service + Stop-Process of pid 10272 before
+    the hash changed; docs/artifacts/s286-current-tree-acceptance.txt'
+  source: ssh labadmin@192.168.1.249; agent/build.ps1; agent/agent.spec
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-156
+  statement: 'The agent now carries a build identity separate from AGENT_VERSION: AGENT_BUILD = ''<UTC
+    build date>.<12-hex source hash>'' comes from the tracked agent/_buildinfo.py (committed defaults
+    ''unknown''), build.ps1 stamps it before PyInstaller (hash over agent/*.py, so a host without git
+    still works), and version_string() prints it in --version, the startup log and the crash log. AGENT_VERSION
+    stays numeric because server/src/routes/agent.js compareVersions maps each dot-segment through Number(),
+    where a suffix becomes NaN and would silently disable update comparisons. A test fails if a stamped
+    _buildinfo.py is committed. Proven on MOLE: build=20261118.4bfeda526b77 in both --version and ''Agent
+    starting''.'
+  domain: agent/build
+  status: confirmed
+  evidence_level: hardware
+  provenance: 'MOLE stamped build: BUILD_DATE=20261118 BUILD_COMMIT=4bfeda526b77; ''lockdown-agent 1.0.0
+    (frozen=True, build=20261118.4bfeda526b77)''; log ''Agent starting ... build=20261118.4bfeda526b77'';
+    installed sha256 d9e45902... equal to the built artifact. Tests: 4 new, 954 total, ruff clean. docs/artifacts/s287-build-identity.txt'
+  source: agent/agent.py, agent/_buildinfo.py, agent/build.ps1, agent/tests/test_version_identity.py
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-157
+  statement: 'The Worker is deployed: lockdown-serverless at https://lockdown-serverless.mainacollins196.workers.dev,
+    version 6a113a90-7707-4b32-a7f0-852e205ee812, uploaded 218.42 KiB (gzip 44.82), KV 84b24c0c1b9e4896b6c6fa41548ac636,
+    OAuth login as mainacollins196@gmail.com via the DEVICE flow (this wrangler has no deploy --temporary).
+    Live over HTTPS: /api/setup/status 200 (1 admin), /api/devices 401 without a token, /api/health 200
+    serverless:true, /v1/health 200, junk /v1/verdict 400 ''invalid CBOR request'', /v1/policy/1 200 1471
+    B, unknown route 404. But the binaries in KV are stale: /api/download/agent serves a 16,370,993-byte
+    PE with COFF TimeDateStamp 2026-11-12T15:16:16Z (sha256 39a29b35…), which predates the S271, S284
+    and S287 agent fixes.'
+  domain: deployment/worker
+  status: confirmed
+  evidence_level: real-media
+  provenance: wrangler deploy output (version 6a113a90…), live HTTPS smoke against https://lockdown-serverless.mainacollins196.workers.dev,
+    and a PE header parse of the served agent giving TimeDateStamp 2026-11-12T15:16:16Z. docs/artifacts/s288-worker-deployed.txt
+  source: serverless/wrangler.toml, wrangler deploy output, curl against the deployed URL
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-158
+  statement: 'E-LOCK-SCREEN is verified-on-hardware (S289): an interactive console sign-in on a locked
+    MOLE is REFUSED because the interactive account is disabled. Evidence is Windows'' own Security log:
+    8 x event 4625 with TargetUserName=''Newark User'', LogonType=2, Status=0xc000006e, SubStatus=0xc0000072
+    (STATUS_ACCOUNT_DISABLED), WorkstationName=MOLE, ProcessName=svchost.exe, from 11:38 to 11:43 local
+    on 2026-11-18 - the operator''s 5 attempts among them, refused with ''The account is currently disabled''.
+    The lock-screen overlay still cannot be created in session 0 (CreateWindowEx failed: 2), so the disabled
+    account plus the guardian, not the visual overlay, is the enforcement. Cited as docs/artifacts/s289-lock-screen-signin-refused.json#E-LOCK-SCREEN-01;
+    I3 accepts it.'
+  domain: enforcement/lock
+  status: confirmed
+  evidence_level: hardware
+  provenance: Windows Security 4625 x8 with SubStatus 0xc0000072 on MOLE, captured minutes after the operator's
+    refused sign-in; device recovered to active/lock_state=none; make graph-check all invariants pass
+    with E-LOCK-SCREEN verified-on-hardware
+  source: docs/artifacts/s289-lock-screen-signin-refused.json; .devin/graph/GRAPH-SPEC.yaml
+  asserted: '2026-11-18'
+  last_verified: '2026-11-18'
+  commit_ref: ca818ca
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-159
+  statement: 'The Worker''s published artifacts were refreshed in S290: binary:agent (16,852,161 B, sha256
+    d9e45902…, build=20261118.4bfeda526b77), binary:agent-installer (15,789,390 B, 399ad9ba…) and binary:lockscreen
+    (9,146,350 B, 6592fd87…) are current, verified by downloading each back and comparing to the local
+    build, and the response''s x-content-sha256 equals the local artifact hash. Two gaps remain by kind:
+    binary:installer (18,628,686 B) is still the 2026-11-12 NSIS wrapper because it embeds the agent at
+    build time and makensis is absent on both hosts; agent_release has never been published, so the update
+    path answers ''no release published'' and agents only get new builds by reinstall.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler kv key put --remote ×3 + byte-for-byte re-download verification against the MOLE
+    build; docs/artifacts/s290-release-published.txt
+  source: serverless/README.md, serverless/worker.ts, scripts/build-generic-installer.sh
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-160
+  statement: 'The generic NSIS installer builds without root on this Arch host (unpack nsis_3.12-1_amd64.deb
+    + nsis-common_3.12-1_all.deb with ar+tar, NSISDIR=/tmp/nsis-root/usr/share/nsis — nsis-common is mandatory
+    for the stubs), producing a 41,203,591-byte wrapper. It cannot be published to the Worker''s KV: Cloudflare
+    rejects anything over 27 MiB (code 10024), and the wrapper''s two mandatory payloads (agent 16,852,161
+    B + CLI installer 15,789,390 B = 32,641,551 B) already exceed that. So binary:installer stays the
+    2026-11-12 wrapper until the installer is hosted on R2, merged into one binary, or moved to an external
+    host.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: 'build + upload attempt on 2026-11-18: makensis v3.12-1 build succeeded, KV put rejected
+    with ''content size of 41203591 bytes exceeds maximum allowed size of 27MiB [code: 10024]''; docs/artifacts/s291-installer-exceeds-kv.txt'
+  source: scripts/build-generic-installer.sh, installer/generic/lockdown-installer.nsi, wrangler kv key
+    put output
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-161
+  statement: 'The Worker can serve oversized binaries from R2 when it is enabled: serverless/pbl/env.ts
+    declares optional Env.BINARIES (R2Bucket) and serverless/worker.ts''s readBinary() tries KV first
+    then R2 under the same key name, used by both handleDownloadBinary and the agent-authenticated /api/agent/download.
+    KV precedence is pinned by tests so nothing that fits moves. R2 itself is NOT enabled on this account
+    (wrangler r2 bucket list/create both answer ''Please enable R2 through the Cloudflare Dashboard.''
+    code 10042), so binary:installer (41,203,591 B, sha256 e5f0f390…) still cannot be published and remains
+    the 2026-11-12 wrapper. Deployed as version 07690cdd-3291-4e32-8036-a5af9b430199 with only the KV
+    binding, and all four downloads still serve from KV with unchanged digests.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler r2 refusals, 483/483 vitest, clean tsc, live download table after deploy; docs/artifacts/s292-r2-fallback.txt
+  source: serverless/worker.ts, serverless/pbl/env.ts, serverless/worker.test.ts, wrangler r2 output
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-162
+  statement: 'The release is complete on the Worker (S294): every download path serves a build from 2026-11-18,
+    verified from the URL — binary:installer 41,203,591 B sha256 e5f0f390… (NSIS wrapper, served from
+    R2), binary:agent 16,852,161 B d9e45902…, binary:agent-installer 15,789,390 B 399ad9ba…, binary:lockscreen
+    9,146,350 B 6592fd87…. Worker version 3cb8baf5-92cb-4469-8b4e-6618bd137b34 with bindings LOCKDOWN_KV
+    + BINARIES (bucket lockdown-binaries). Migrating a key from KV to R2 needs BOTH steps: ''wrangler
+    r2 object put … --remote'' (without --remote it writes the local simulator) AND deleting the KV key,
+    because KV-first precedence shadows the R2 object; KV deletes propagate in under a minute. agent_release
+    still does not exist, so no agent is offered an update.'
+  domain: deployment/release
+  status: proposed
+  evidence_level: assumed
+  provenance: wrangler r2 bucket/object/deploy output, r2 object get comparison, and a live four-URL download
+    table with sizes+sha256; docs/artifacts/s294-installer-on-r2.txt
+  source: serverless/wrangler.toml, serverless/worker.ts (readBinary), live /api/download/* responses
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-163
+  statement: 'The update trust root is staged but not published (S295): scripts/generate-update-keys.sh
+    wrote ~/.lockdown-secrets/update_signing.{key,pub} (private mode 600, outside the working copy), and
+    scripts/sign-release-metadata.py produced /tmp/agent-release.json for version 1.0.0 / win / sha256
+    d9e45902…, signed over ''v1:1.0.0:<sha256>''. Validation: openssl pkeyutl -verify says Signature Verified
+    Successfully; agent.verify_update_signature returns True genuine, False for tampered hash or version,
+    mode ''signature''; make test-worker-e2e 5 passed. update_public_key is a PATH to the .pub, not PEM
+    text (inline PEM yields ''Update public key not found''). Publishing agent_release and staging update_signing.pub
+    into the installer are ONE decision: metadata alone makes the endpoint offer a version, but a device
+    verifies it only after its config names the key. Nothing is published, so the fleet remains sha256-only.'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: openssl verify, agent verifier positive/negative cases, worker e2e, all on 2026-11-18; docs/artifacts/s295-update-trust-root-staged.txt
+  source: scripts/generate-update-keys.sh, scripts/sign-release-metadata.py, agent/agent.py, serverless/README.md
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-164
+  statement: 'Update signing is live (S296): agent_release is published to KV and the installer was rebuilt
+    with update_signing.pub staged (41,203,003 B, sha256 f9633ecb…), republished to R2 and served byte-identically
+    by /api/download/installer. MOLE now reports update_verification ''signature'' instead of ''sha256-only''
+    at last_checkin 2026-11-18 10:21:36, after the pub key (sha256 207d7cc2…) was placed at C:\ProgramData\LockdownAgent\update_signing.pub
+    and config.json''s update_public_key was set to that path. The pin was applied by hand (what the installer
+    writes), not by reinstalling with the new wrapper. No agent has performed a real self-update yet:
+    metadata offers 1.0.0 and the device is already 1.0.0. Private key custody is still single-host (two
+    copies, same disk).'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: KV put + R2 put + served-digest comparison + MOLE check-in flip after a clean stop/kill/start;
+    serverless/README.md release section updated
+  source: serverless/README.md, agent/installer.py, agent/agent.py, live MOLE check-in
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-165
+  statement: 'Auto-update is proven on hardware through verification but not through application (S297).
+    MOLE (Express backend with AGENT_LATEST_VERSION=1.0.1, AGENT_BINARIES_DIR=/tmp/rel101, UPDATE_SIGNING_KEY=the
+    release key) logged ''Update available: 1.0.0 -> 1.0.1'', ''Update signature verified (ed25519, pinned
+    key)'' and ''Update downloaded and verified (16852626 bytes, SHA-256 OK)'', writing .update_pending
+    and .update_downloaded. Nothing consumed them: only agent/watchdog.py reads .update_pending and this
+    service-based install has no watchdog, so the swap had to be done by hand (stop, kill, copy .update_downloaded
+    over lockdown-agent.exe, start). After that the device reports agent_version 1.0.1 and build=20261118.fe295d19ad91
+    (sha 63747758...), update_verification signature. The log line ''watchdog will apply on next check''
+    is therefore a promise nothing keeps on a service install.'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: MOLE agent.log sequence, before/after --version and hashes, server row after the swap; docs/artifacts/s297-self-update-proof.txt
+  source: agent/agent.py, agent/watchdog.py, agent/installer.py, server/src/routes/agent.js
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-166
+  statement: 'Auto-update applies itself on a service install (S298): agent/service_host.py gained apply_pending_update
+    (re-checks the SHA-256 named in the signal, backs up, swaps, clears the signal), restore_backup, and
+    _apply_update_if_pending, wired INSIDE the wait-for-child loop because the outer loop only runs after
+    the agent exits. Proven twice on MOLE with no manual step: 1.0.1->1.0.2 at service start, and 1.0.2->1.0.3
+    mid-flight (''update pending - stopping the agent to apply it'' -> ''pending update: applied'' ->
+    new agent build=20261118.5c31f3eaa364). Also: the frozen lockdown-service.exe needs pywin32, which
+    agent/requirements.txt omits - without it the SCM start fails with 1053 and no log; a cached PyInstaller
+    build kept the old hash until --clean. And /api/download/* now answers max-age=300 instead of 3600
+    (deployed f2840f6a...).'
+  domain: agent/update
+  status: proposed
+  evidence_level: assumed
+  provenance: two hardware cycles on MOLE with log lines and build ids, 7 new unit tests (28 in file),
+    484 worker tests, live header check; docs/artifacts/s298-auto-apply-proven.txt
+  source: agent/service_host.py, agent/watchdog.py, scripts/build-windows-artifacts.ps1, serverless/worker.ts
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-167
+  statement: 'The Windows service build can no longer produce an unstartable artefact (S299): agent/requirements.txt
+    pins pywin32==312 with a sys_platform==''win32'' marker, and scripts/build-windows-artifacts.ps1 checks
+    ''python -c "import servicemanager, win32serviceutil"'' when the service target is selected, failing
+    with the fix before PyInstaller runs. Two tests pin it (the check exists and runs before PyInstaller;
+    the dependency carries a Windows-only marker), the suite is 8 passed, and the PowerShell script stays
+    ASCII-only. The guard is verified at source level only: there is no PowerShell on this host and the
+    build needs Windows, so the failure path itself has not been executed.'
+  domain: agent/build
+  status: proposed
+  evidence_level: assumed
+  provenance: source-level tests 8 passed, requirements pin with marker, ASCII-only check; S298's hardware
+    evidence for the underlying SCM 1053 failure
+  source: agent/requirements.txt, scripts/build-windows-artifacts.ps1, scripts/test_build_windows_artifacts.py
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-168
+  statement: 'The dashboard has no code defect from this work; its two failures were environmental and
+    structural (S300). Measured: 266 unit tests passed, but E2E failed 11/11 with ''browserType.launch:
+    Executable doesn''t exist ... chromium_headless_shell-1234''; after ''npx playwright install chromium-headless-shell''
+    the suite is 11/11 green. dashboard/dist was stale by three source files and was rebuilt (assets/index-BiqBoQfX.js,
+    640.20 kB). And server/dev-start-sqlite.js — the entry every hardware session used — never served
+    dashboard/dist, while server/src/index.js has since the prod-stack bug; the scaffold now mounts it
+    with the same cache rules and SPA fallback, verified live (/ 200, /devices 200, deep device link 200,
+    hashed asset 640,200 B). The client defaults to baseURL ''/api'' (same-origin); a Worker-pointed dashboard
+    needs VITE_API_URL at build time and there is no dashboard/.env.'
+  domain: dashboard
+  status: proposed
+  evidence_level: assumed
+  provenance: vitest 266, playwright 11/11 after installing the browser, vite build output, four live
+    URLs on :8787; docs/artifacts/s300-dashboard-state.txt
+  source: dashboard/src/api/client.js, server/src/index.js, server/dev-start-sqlite.js, dashboard/playwright.config.js
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-169
+  statement: 'The ''cannot generate an enrollment token on serverless'' 401 was a missing admin session,
+    not a broken route or a missing JWT secret (S301): POST /api/enroll/token answers 401 ''Admin authentication
+    required'' without a valid admin bearer, the Worker''s only admin is uncletom (super-admin, base64
+    PBKDF2-SHA256 record), and the Worker needs no JWT_SECRET because signAdminToken/verifyAdminToken
+    fall back to env.ADMIN_TOKEN. The fix was a credential reset, not a code change: back up the admins
+    KV value, recompute uncletom''s hash (PBKDF2-SHA256, 100000 iterations, fresh 16-byte salt, keeping
+    id/role/created_at), write it back — after which login returns 200 with a JWT and /api/enroll/token
+    returns 200 with a 900-second token. Also: Cloudflare answers 403 code 1010 to a Python urllib client
+    (browser-integrity/WAF on the UA) while curl passes, which looks identical to an auth failure if the
+    body is not read.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: live HTTP probes against the deployed Worker, wrangler secret list, KV admins backup+patch,
+    and a login->token round trip, 2026-11-18
+  source: serverless/admin-auth.ts, serverless/worker.ts (handleAuthLogin), wrangler kv, curl probes
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-170
+  statement: 'The dashboard''s device-registration one-liner was broken twice and both are fixed (S302).
+    (1) It downloads /api/download/{installer,agent,service} with ErrorActionPreference=Stop, and binary:service
+    was missing (404), so it aborted before installing; published 9,494,157 B sha256 130238f4… (same binary
+    MOLE runs). (2) The generated script contained 13 UTF-8 em dashes, which PowerShell 5.1 decodes as
+    ANSI, turning — into ''â€"'' whose last byte closes the string early: [Parser]::ParseFile on PS 5.1.26100.9818
+    reported 3 errors, ''The string is missing the terminator''. Template strings in serverless/installer-scripts.ts
+    are now ASCII-only, pinned by a test that composes the script and rejects any non-ASCII char (485
+    worker tests pass), deployed 6b635f9b-7c37-479d-bffc-cad066f0325d; the re-fetched script parses with
+    0 errors on the target. The command is: iex (irm ''<origin>/api/enroll/setup.ps1''), which prompts
+    for a 15-minute single-use token or reads $env:LOCKDOWN_ENROLL_TOKEN, then self-elevates via -Verb
+    RunAs. MOLE is now enrolled on the Worker through that same token flow.'
+  domain: deployment/worker
+  status: proposed
+  evidence_level: assumed
+  provenance: live fetches + PowerShell 5.1 parser on MOLE, download digests matching local builds, Worker
+    device list, 485 vitest; docs/artifacts none (evidence in the S302 trace block)
+  source: serverless/installer-scripts.ts, serverless/worker.ts, .devin/brain/BELIEFS.md (B-083)
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-171
+  statement: 'The wrong map position is not a plumbing bug (S303): MOLE''s location rows are source ''ip''
+    with identical coordinates -0.4840639/37.1266157 for every report, and ipwho.is returns exactly that
+    for the egress IP 41.90.239.213 (Kenya/Nyeri/Karatina, Safaricom ASN 37061). The dashboard plots [lat,
+    lon] faithfully for Leaflet; what is coarse is the source. WiFi triangulation is unavailable to a
+    service install: netsh wlan show networks mode=bssid on Windows 11 answers ''Network shell commands
+    need location permission to access WLAN information ... Access is denied'' (0 SSIDs, 0 BSSIDs) even
+    after HKLM and HKCU consent Allow plus an lfsvc restart, because the scan needs a location-capable
+    interactive session and the agent runs as LocalSystem in session 0. Separately, the Worker has no
+    google_api_key provisioning (only server/src/routes/installer.js:562 does it), so a Worker-enrolled
+    fleet cannot be given a triangulation key at all. The dashboard also drops the source/accuracy/age
+    fields that would tell an operator the fix is city-level.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: live Worker location rows, ipwho.is query for the egress IP, netsh refusal on MOLE with
+    four settings attempts, and a grep of both backends' key provisioning; docs/artifacts/s303-location-diagnosis.txt
+  source: agent/agent.py, dashboard/src/pages/DeviceDetailPage.jsx, server/src/routes/installer.js, serverless/*.ts
+  asserted: '2026-11-18'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-172
+  statement: 'The dashboard lint gate measures nothing: eslint v8 with .eslintrc.json lints 0 of 72 .jsx
+    files unless --ext .js,.jsx is passed, so npx eslint . (and the Makefile:290 / lint.yml:46,75 / release.yml:69
+    form ''src/ tests/ --max-warnings=0'') exits 0 while 30 errors sit in 16 .jsx files — 22 no-unused-vars,
+    7 react/no-unescaped-entities, 1 no-undef (the global afterEach in tests/EnrollDevicePage.test.jsx:42,
+    a config gap because vitest.config.js sets globals:true).'
+  domain: dashboard/tooling
+  status: refuted
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: .github/workflows/lint.yml:46,75; .github/workflows/release.yml:69; Makefile:290; docs/artifacts/s304-dashboard-location-honesty.txt
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-173
+  dependents: []
+  notes: 'Measured S304 with eslint v8.57.1: ''npx eslint .'' -> 21 files/0 jsx; ''npx eslint src/ tests/
+    --max-warnings=0'' -> 13 files/0 jsx; ''npx eslint . --ext .js,.jsx'' -> 72 files/30 errors.'
+  refuted_on: '2026-11-19'
+  refute_evidence: 'code-read: measured 2026-11-19, docs/artifacts/s305-dashboard-lint-gate.txt'
+- id: B-173
+  statement: 'The dashboard lint gate is real as of S305: Makefile:290, lint.yml:75 and release.yml:69
+    pass --ext .js,.jsx, dashboard/.eslintrc.json declares the nine vitest globals for tests/**, and the
+    gate now reads 72 files of which 51 are .jsx at 0 errors / 0 warnings. The same command before S305
+    read 21 files, none of them .jsx, so it exited 0 while 30 errors sat in 16 .jsx files.'
+  domain: dashboard/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: 'code-read: measured 2026-11-19, docs/artifacts/s305-dashboard-lint-gate.txt'
+  source: refutes B-172
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-172
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-174
+  statement: 'The Google geolocation key now reaches a token-flow install on BOTH surfaces (S306, ruling
+    C, ADR-008): Express POST /api/devices and POST /api/enroll/claim, and the Worker handleEnroll/handleEnrollClaim,
+    add a top-level google_api_key only when process.env.GOOGLE_API_KEY / env.GOOGLE_API_KEY is non-empty;
+    agent/installer.py::build_config and installer_gui.py::write_config write it only when non-empty,
+    and installer-scripts.ts never mentions it (B-070). It is a shared operator credential baked into
+    each device config, so rotation requires reinstalling the fleet — check-in refresh is the recorded
+    follow-up, deliberately not a debt-ledger item because the ledger feeds the graph convergence count.'
+  domain: agent/location
+  status: confirmed
+  evidence_level: code-read
+  provenance: docs/artifacts/s306-geolocation-key-delivery.txt; server 882/52, worker 490/4, agent 976,
+    cross-surface 24
+  source: docs/adr/ADR-008-geolocation-key-delivery.md; docs/artifacts/s306-geolocation-key-delivery.txt;
+    serverless/worker.ts; server/src/routes/devices.js; server/src/routes/enroll.js; agent/installer.py
+  asserted: '2026-11-19'
+  last_verified: '2026-11-19'
+  commit_ref: e844fd5
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S306: server 882/52, worker 490/4, agent 976, cross-surface contract 24, eslint/ruff/tsc
+    clean. No-key path byte-identical, asserted by property-absence tests.'
+- id: B-175
+  statement: 'Playwright dashboard E2E is green only when port 5173 is free (S307): 11 passed in 15-16
+    s on 36defcb. Its 7-failure red was a dev server S303 left running since the day before being silently
+    reused by playwright.config.js''s reuseExistingServer: !CI, so the browser drove a server whose /api
+    proxy had been resolved without this run''s E2E_BACKEND_PORT (a foreign backend on 3001) while the
+    fixture''s own axios login reached 3101 — surfacing as ''login is broken'', never as ''reused a server''.
+    Reuse is now opt-in via PLAYWRIGHT_REUSE_DEV_SERVER=1 and a busy 5173 fails once, loudly, in about
+    a second (measured).'
+  domain: verification/e2e
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s307-full-verify.txt; dashboard/playwright.config.js; AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S307: ps showed vite --port 5173 started Wed Nov 18 14:29 (S303). After kill: 11 passed.
+    Dummy listener on 5173 -> ''http://localhost:5173 is already used'' exit 1 in ~1s.'
+- id: B-176
+  statement: 'A Windows service install reports location source ''ip'' by platform design, not by bug
+    (S308, ADR-009): Windows returns ERROR_ACCESS_DENIED from the BSSID-returning WLAN calls without precise-location
+    consent, and shows the consent prompt only to processes ''within the user''s context and outside of
+    C:\Windows\System32'' — a LocalSystem service in session 0 is neither, so it can never prompt and
+    holds no app-level consent. Device-level consent is the only foothold and S303 measured the scan still
+    refused with HKLM ConsentStore location = Allow. The documented product behaviour is therefore IP-level
+    for service installs; an in-session helper and Geolocator-from-the-service remain UNPROVEN (spec-checked,
+    never measured), with the three-call probe in docs/artifacts/s308-session0-bssid-feasibility.txt §5
+    as the way to settle them.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/adr/ADR-009-location-precision-by-install-type.md; docs/artifacts/s308-session0-bssid-feasibility.txt;
+    learn.microsoft.com/windows/win32/nativewifi/wi-fi-access-location-changes (fetched 2026-11-19); docs/artifacts/s303-location-diagnosis.txt
+    §3
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Evidence level: spec-checked for the platform rule, hardware for the S303 refusals. No source
+    file changed in S308.'
+- id: B-177
+  statement: 'The Google geolocation key rotates without reinstalling the fleet as of S309 (ADR-010, commit
+    23e70f8): the authenticated POST /api/agent/checkin response carries settings {google_api_key: string|null,
+    revision} only when the surface''s GOOGLE_API_KEY is DEFINED (defined-but-empty -> null = stop overriding;
+    undefined -> no field, response byte-identical to before), revision is a sha256-16 prefix that gates
+    writes, and the agent reconciles it into _STATE_DIR/.runtime_settings (not config.json, which the
+    installer ACLs) with precedence env > override > cfg through one helper. Limits stated in the ADR:
+    null falls back to the installed key so erasing it still needs a reinstall; keys remain shared per
+    fleet, not per device; the key now transits every check-in.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/adr/ADR-010-geolocation-key-rotation.md; docs/artifacts/s309-key-rotation.txt; server/src/routes/agent.js;
+    serverless/agent-routes.ts; agent/agent.py
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'Measured S309: server 885/52, worker 495/4, agent 983, contract 25. No-key path pinned by tests
+    asserting the exact top-level key set.'
+- id: B-178
+  statement: 'ADR-010''s geolocation-key rotation is verified end to end on this host (S310): the real
+    Express server (throwaway SQLite via USE_SQLITE=true, real admin enrolment, real per-device api_key)
+    plus the real agent checkin()/_reconcile_runtime_settings() drive all four contract states in 13/13
+    assertions — key A arrives and is persisted, the same revision is not rewritten, key B rotates the
+    value with no restart, defined-but-empty delivers null and clears the override so the install-time
+    key applies again, and an unset env yields a response with no settings object that leaves the override
+    untouched. Still unproven: a real Windows device (host path = emulated), and the deployed Worker,
+    which holds only ADMIN_TOKEN so the channel is inert in production.'
+  domain: agent/location
+  status: refuted
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s310-rotation-live-probe.txt; /tmp/probe_rotation.py output
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: B-179
+  dependents: []
+  notes: Probe needs USE_SQLITE=true; without it the server dials Postgres, health still answers 200,
+    and /api/setup/status reports 'Database not initialized'.
+  refuted_on: '2026-11-19'
+  refute_evidence: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+- id: B-179
+  statement: 'ADR-010''s geolocation-key rotation is verified on REAL HARDWARE (S311, MOLE, agent 1.0.4
+    build 20261119.32849efe4235, Worker version 0ad0ff6a): the Windows service wrote .runtime_settings
+    at its first check-in (key_len 39, revision 3f11ee4980d2a049), rotated to a throwaway value six minutes
+    into the same process''s life (key_len 19, revision d8bf5ae6ff123fc3 — no restart), and restored via
+    wrangler rollback to the identical revision; after a service restart at 13:03:22 a successful check-in
+    at 13:04:43 left the file''s mtime at 13:01:18, proving the LocalSystem agent read back what the previous
+    process wrote in the ACL''d state directory. Two environment facts: LockdownAgent is IGNORES_SHUTDOWN
+    so replacing the binary needs Stop-Process, not Stop-Service; and a  is a Secret Change VERSION, not
+    a code deploy, so the Worker had to be deployed separately.'
+  domain: agent/location
+  status: refuted
+  evidence_level: assumed
+  provenance: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+  source: refutes B-178
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-178
+  superseded_by: B-180
+  dependents: []
+  notes: ''
+  refuted_on: '2026-11-19'
+  refute_evidence: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+- id: B-180
+  statement: 'ADR-010''s geolocation-key rotation is verified on REAL HARDWARE (S311, MOLE, agent 1.0.4
+    build 20261119.32849efe4235, Worker version 0ad0ff6a): the Windows service wrote .runtime_settings
+    at its first check-in (key_len 39, revision 3f11ee4980d2a049), rotated to a throwaway value six minutes
+    into the same process''s life (key_len 19, revision d8bf5ae6ff123fc3, no restart), and restored via
+    wrangler rollback to the identical revision; after a service restart at 13:03:22 a successful check-in
+    at 13:04:43 left the file''s mtime at 13:01:18, proving the LocalSystem agent read back what the previous
+    process wrote in the ACL''d state directory. Two environment facts: LockdownAgent is IGNORES_SHUTDOWN
+    so replacing the binary needs Stop-Process, not Stop-Service; and a ''wrangler secret put'' produces
+    a Source: Secret Change VERSION, which is not a code deploy, so the Worker had to be deployed separately.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: 'hardware: measured 2026-11-19 on MOLE over SSH; docs/artifacts/s311-rotation-hardware.txt'
+  source: refutes B-179
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: B-179
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-181
+  statement: 'A static-analysis gate that cannot run on the developer''s host is not a gate: AGENTS.md
+    claimed ''make sast 45 findings / 0 ERROR'' while the Lint workflow had been failing on master since
+    2026-11-18 with 3 unclassified findings (agent/service_host.py:223, :339, scripts/acceptance_lifecycle.py:650)
+    and 1 stale exception (agent/hw_test_harness.py). `make sast` exits 2 when semgrep is absent, so the
+    local claim was never a measurement. Verified in S312 by installing semgrep 1.182.1 in a throwaway
+    venv and running the real gate: 48 findings, 0 ERROR, all dispositioned, and the same push turned
+    CI''s Lint workflow green (f96f7ef).'
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s312-ci-green.txt; .github/workflows/lint.yml; scripts/sast-gate.py; AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'CI evidence: lint run 44505246648 (all 8 jobs success), 2026-11-19.'
+- id: B-182
+  statement: A verification that does not gate the action it protects is a log line, not a check. S313
+    pushed a commit whose publish-range secret scan had already FAILED on it, because the scan and `git
+    push` were chained with `;` instead of `&&` and the FAIL output was then read as clean; the two files
+    it named (trace.md and the s312 artifact, both quoting the first eight characters of a dead single-use
+    token) reached the remote. Redacted forward in d93fb32 with the scan gating the push, and the same
+    shape recurred twice before in this arc — the S305 lint gate that linted no .jsx, and the S307 Playwright
+    reuse of a stale dev server. All three are checks that watched without blocking.
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: AGENTS.md (session-end block paragraph); .github/workflows/lint.yml Secret scan job; docs/artifacts/s312-ci-green.txt
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: 'CI evidence: lint run 44506991536 all 8 jobs success on d93fb32; lint run for 91a17ea failed
+    only Secret scan.'
+- id: B-183
+  statement: 'The BSSID question is settled on hardware (S315, MOLE, consent Allow, console session 1
+    active): from session 0, WlanGetNetworkBssList returns ERROR_ACCESS_DENIED (rc=5) for BOTH an elevated
+    admin and a LocalSystem service started via sc create, while WlanOpenHandle and WlanEnumInterfaces
+    return 0; and Geolocator.GetGeopositionAsync from LocalSystem faults with 0x80070005 E_ACCESSDENIED,
+    so Microsoft''s recommended replacement fails for services too. ADR-009''s ''a service install is
+    IP-level by platform design'' is therefore measured rather than read, option (c2) is rejected on hardware
+    evidence, and the only untested route is an in-session helper in the console session (needs CreateProcessAsUser
+    + WTSQueryUserToken because MOLE''s Task Scheduler is broken, B-073).'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s315-bssid-probe-hardware.txt; docs/adr/ADR-009-location-precision-by-install-type.md;
+    AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hardware evidence, 2026-11-19, over SSH to labadmin@192.168.1.249.
+- id: B-184
+  statement: 'Option (c1) of ADR-009 is measured and denied (S316, MOLE): a child process created in the
+    active console session by WTSQueryUserToken + DuplicateTokenEx + CreateProcessAsUser on winsta0\default
+    reported session 1, interactive True, and WlanGetNetworkBssList still returned rc=5 (ERROR_ACCESS_DENIED)
+    — both from powershell.exe inside C:\Windows\System32 and from C:\Python314\python.exe outside it,
+    with device-level location consent set to Allow. The missing precondition is per-app precise-location
+    consent, which Windows grants only through an explicit RequestAccessAsync prompt a human accepts;
+    no LockdownAgent process calls it, so no install type obtains BSSIDs today. The prompt itself is untested
+    because it needs a person at the machine.'
+  domain: agent/location
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: docs/artifacts/s316-in-session-helper-probe.txt; docs/adr/ADR-009-location-precision-by-install-type.md;
+    AGENTS.md
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hardware evidence 2026-11-19 over SSH; launcher ran as SYSTEM, child ran as Newark User in session
+    1.
+- id: B-185
+  statement: 'Two of the repo''s fifteen script test suites could report success while running nothing:
+    test_graph_session.py and test_prepush_secrets.py exit on ''no failures'' alone, so a discovery bug
+    that yields zero tests printed ''0 failed'' and exited 0. The other twelve go through scripts/script_test_runner.py
+    and are protected by pytest''s NO_TESTS_COLLECTED exit code 5 (test_memory.py calls pytest.main directly
+    and inherits the same). S319 added an explicit ''NO TESTS DISCOVERED — refusing to report success''
+    exit-1 guard to the two hand-rolled suites, proved it by copying each with its ''def test_'' renamed
+    (both exit 1), and made it a rule: test_check_firmware_todos.py::test_every_hand_rolled_suite_refuses_a_zero_discovery_run
+    fails if a future hand-rolled suite lacks the guard.'
+  domain: verification/tooling
+  status: proposed
+  evidence_level: assumed
+  provenance: scripts/brain.py
+  source: scripts/test_graph_session.py; scripts/test_prepush_secrets.py; scripts/test_check_firmware_todos.py;
+    commit 2dcd211
+  asserted: '2026-11-19'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: Hand-rolled = uses neither script_test_runner nor pytest.main; the meta-test enumerates them.

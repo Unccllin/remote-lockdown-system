@@ -1,0 +1,173 @@
+{
+  "artifact_version": "s289",
+  "generated": "2026-11-18T08:47:00Z",
+  "device": {
+    "hostname": "MOLE",
+    "hardware_uuid": "BE10009B-5867-337C-5024-E390E760DA74",
+    "os": "Windows 11 Pro 10.0.26300",
+    "agent_build": "20261118.4bfeda526b77",
+    "agent_sha256": "d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3"
+  },
+  "surfaces": {
+    "server": "http://192.168.1.43:8787 (Express, dev-start-sqlite.js)",
+    "device_row": "d166e8f7a348d3543eefe1902dc6519c",
+    "lockdown_command": "410c65d70ee117adc4b7874da6c89bfe",
+    "unlock_command": "b9e9d3512ab469d6f0dda83282895454"
+  },
+  "results": {
+    "tool": "windows-security-log + operator attestation",
+    "tests": [
+      {
+        "name": "E-LOCK-SCREEN-01",
+        "status": "passed",
+        "description": "An interactive console sign-in attempt on a locked device is REFUSED because the account is disabled",
+        "method": "operator typed their real password at MOLE's logon screen while locked; Windows wrote Security 4625 itself",
+        "observed": "8 x 4625, LogonType=2 (interactive), SubStatus=0xc0000072 (STATUS_ACCOUNT_DISABLED), Status=0xc000006e (STATUS_ACCOUNT_RESTRICTION), workstation=MOLE, process=svchost.exe",
+        "operator_report": "account disabled contact system admin",
+        "lockdown_effective": 1,
+        "boot_lock_status": "partial",
+        "bcd_layer": "success: true, critical_applied: 3, best_effort_applied: 5 (the S284 WinRE fix held on a re-lock)"
+      }
+    ]
+  },
+  "raw_events": [
+    {
+      "time_local": "2026-11-18T11:38:33.5071762+03:00",
+      "source": "agent_relock",
+      "note": "immediately after lockdown; the agent's own tsdiscon-driven relock",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:38:45.6067826+03:00",
+      "source": "agent_relock",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:39:30.6885499+03:00",
+      "source": "agent_relock",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:40:07.2188130+03:00",
+      "source": "human_console_attempt",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:40:08.5251054+03:00",
+      "source": "human_console_attempt",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:40:09.4919516+03:00",
+      "source": "human_console_attempt",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:42:45.4624870+03:00",
+      "source": "human_console_attempt",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    },
+    {
+      "time_local": "2026-11-18T11:43:22.7104754+03:00",
+      "source": "human_console_attempt",
+      "event_id": 4625,
+      "TargetUserName": "Newark User",
+      "LogonType": 2,
+      "Status": "0xc000006e",
+      "SubStatus": "0xc0000072",
+      "FailureReason": "%%2310",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "WorkstationName": "MOLE",
+      "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+      "IpAddress": "127.0.0.1"
+    }
+  ],
+  "post_recovery": {
+    "account_active": "Yes",
+    "sentinel": "absent",
+    "recovery_key": "absent",
+    "lockdown_folder": "README.txt readable in plaintext",
+    "bcd": "restored 5 of 5",
+    "winre": "left disabled, as it was before the lockdown",
+    "bios": "Restored 0 of 5 - every write refused (the S285 password finding, unchanged)",
+    "device_status": "active",
+    "lock_state": "none"
+  },
+  "why_this_meets_the_bar": "S270 demoted this path because the cited artifact recorded that tsdiscon was ISSUED at session 0, not that a sign-in was refused. This artifact records refusals: the security log entries are written by Windows, LogonType=2 is the console logon path exercised by LogonUI, and SubStatus 0xc0000072 is STATUS_ACCOUNT_DISABLED. The operator's own attempt appears in the same log.",
+  "limitations": [
+    "The lock-screen overlay still cannot be created from session 0 (CreateWindowEx failed: 2), so the visual lock screen is not what refuses the sign-in - the disabled account is.",
+    "One unit only (MOLE, HP EliteBook 830 G6, no usable TPM).",
+    "The 3 earliest 4625 events are the agent's own relock attempts, not the operator's; all 8 are the same refusal mechanism."
+  ]
+}

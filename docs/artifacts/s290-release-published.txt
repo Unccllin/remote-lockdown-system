@@ -1,0 +1,42 @@
+=== S290: release published — the Worker now serves the current agent, 2026-11-18T09:10:20Z ===
+
+--- [1] the gap this closes (S288) ---
+before: /api/download/agent -> 16,370,993 B, sha256 39a29b35…, PE timestamp 2026-11-12T15:16:16Z
+        (predates the S271 BIOS-restore reporting fixes, the S284 WinRE fix and the S287 build id)
+
+--- [2] what was built, and where ---
+on MOLE (C:\Python314 + PyInstaller 6.22.3), from the S287 source tree:
+  PyInstaller agent.spec        -> lockdown-agent.exe       16,852,161 B  d9e45902…  (build=20261118.4bfeda526b77)
+  PyInstaller installer.spec    -> lockdown-installer.exe   15,789,390 B  399ad9ba…
+  PyInstaller lock_screen.spec  -> lockdown-lockscreen.exe   9,146,350 B  6592fd87…
+  (watchdog.spec / offline_recovery.spec were not built: no dist artifacts fetched, no publisher needs them)
+
+--- [3] published to KV (namespace 84b24c0c1b9e4896b6c6fa41548ac636) ---
+  npx wrangler kv key put --binding=LOCKDOWN_KV --remote binary:agent            --path lockdown-agent.exe
+  npx wrangler kv key put --binding=LOCKDOWN_KV --remote binary:agent-installer  --path lockdown-installer.exe
+  npx wrangler kv key put --binding=LOCKDOWN_KV --remote binary:lockscreen       --path lockdown-lockscreen.exe
+
+--- [4] verified by downloading them back ---
+  agent            HTTP 200 bytes=16852161  served=d9e45902674537f9 local=d9e45902674537f9
+  agent-installer  HTTP 200 bytes=15789390  served=399ad9ba8e37465d local=399ad9ba8e37465d
+  lockscreen       HTTP 200 bytes=9146350  served=6592fd87f726a4b7 local=6592fd87f726a4b7
+
+--- [5] the integrity header the agent verifies against ---
+  content-length: 16852161
+  x-content-sha256: d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3
+  local sha256: d9e45902674537f91e23858126fe564c19a8519f20eed9ca6e9020a24cf66bd3
+
+--- [6] what was NOT published, and why ---
+  binary:installer  still 18,628,686 B (the 2026-11-12 NSIS wrapper).
+      The wrapper EMBEDS lockdown-agent.exe and lockdown-installer.exe at build time, so it
+      still carries the old agent. Rebuilding needs makensis, which is absent on this host
+      (no root to install it) and on MOLE (no winget/choco). Until then, the "installer"
+      download is the one path that still ships the old build — the agent, agent-installer
+      and lockscreen downloads are current.
+
+  agent_release     not published at all (never has been): the update path answers
+      "no_release_published". Publishing it needs a signed record from
+      scripts/sign-release-metadata.py, i.e. an Ed25519 update keypair — generating one
+      establishes a trust root for every future update, which is an operator decision, not
+      a repair. Consequence today: agents are not offered updates; they get the current
+      build by reinstalling, which now downloads it.

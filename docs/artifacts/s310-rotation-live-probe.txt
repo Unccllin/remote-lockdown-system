@@ -1,0 +1,66 @@
+=== S310: ADR-010 rotation exercised end to end on this host (2026-11-19) ===
+
+S309 shipped the rotation with unit and route tests only, and said so. This runs the real Express
+server and the real agent functions against a throwaway SQLite database and drives all four states
+of the contract. No hardware, no credentials, no Cloudflare.
+
+--- [1] what it runs ---
+  /tmp/probe_rotation.py (throwaway, not added to the repo):
+    - starts `node src/index.js` on port 3311 with USE_SQLITE=true, a fresh SQLITE_PATH, and a
+      GOOGLE_API_KEY value that changes between phases (NODE_ENV=test, ALLOW_NON_PROD=1 and
+      non-placeholder secrets, because the boot validator rejects placeholders outside prod too)
+    - creates the first admin via POST /api/setup/create-admin, logs in via POST /api/auth/login,
+      and enrols device PROBE-ROT-1 via POST /api/devices to obtain a real per-device api_key
+    - imports agent/agent.py, points RUNTIME_SETTINGS_FILE at a temp directory, and calls the real
+      `checkin(cfg)` then the real `_reconcile_runtime_settings(data)`
+    - cfg carries google_api_key = "INSTALL-TIME-KEY" so the `null` case has something to fall back
+      to, and GOOGLE_API_KEY is unset in the parent's environment throughout
+
+--- [2] the output, verbatim ---
+  bootstrapped: device PROBE-ROT-1, api_key length 44
+  baseline cfg google_api_key = INSTALL-TIME-KEY, no env var, no override file
+  PASS  effective key with no override is the install-time key
+  PASS  check-in response carries key A (got 'ROT-KEY-AAA')
+  PASS  revision is a 16-char digest (fc120d1da0bda0ed)
+  PASS  .runtime_settings written with key A
+  PASS  effective key is now key A (override beats the install-time key)
+  PASS  same revision does not rewrite the override file
+  PASS  .runtime_settings rotated to key B
+  PASS  revision changed (fc120d1da0bda0ed -> d753f1456768d49f)
+  PASS  effective key is key B without a restart
+  PASS  defined-but-empty delivers google_api_key: null (got None)
+  PASS  null removes the override, effective key falls back to the install-time key
+  PASS  with GOOGLE_API_KEY undefined the response carries no settings object
+  PASS  a response with no settings leaves .runtime_settings untouched
+  RESULT: PASS (0 failure(s))
+
+  Final on-disk override after the `null` phase (the file is kept, the value is cleared):
+    {"google_api_key": null, "revision": "5e4fdbd5ebc2a0be"}
+
+--- [3] what this proves, and what it still does not ---
+  Proven on this host, with real code on both sides:
+    - the key arrives in the authenticated check-in and is persisted where the agent can write it
+    - a revision change rotates the value, and the same revision is not rewritten (no 30 s churn)
+    - defined-but-empty is a distinct instruction that clears the override, and the effective key
+      then falls back to the install-time key — the semantic ADR-010 documented
+    - an unset GOOGLE_API_KEY yields a response with no `settings` at all, and an existing override
+      survives untouched (the backward-compatible direction that would fail silently)
+
+  Still NOT proven:
+    - a real Windows device: MOLE has not run this. The probe exercises the Linux host path with the
+      real server and agent modules, which is `emulated`, not `hardware`, on the evidence ladder.
+    - the Cloudflare Worker path: `wrangler secret list` shows the deployed `lockdown-serverless`
+      Worker holds exactly one secret (ADMIN_TOKEN), so the rotation channel is inert in production
+      until an operator sets GOOGLE_API_KEY. Exercising it needs an admin token and a key value, both
+      operator-held; the Worker's own tests cover the response shape on both check-in branches.
+    - process restart: the probe reuses one agent process, so it proves "no restart needed for the
+      in-memory value", which is the claim; it does not prove survival across an agent restart —
+      that is what writing the file to disk is for, and a restart read path test would need a
+      separate case.
+
+--- [4] a defect this probe surfaced (not in the product) ---
+  Nothing in the repo told a caller that SQLite mode needs USE_SQLITE=true; the health endpoint
+  answers 200 and /api/setup/status reports "Database not initialized" while the server is actually
+  trying Postgres on :5432. The first two attempts of this probe failed exactly that way, and the
+  only place the rule is written is `server/src/db/pool.js:24`. Not fixed here (it is a test-harness
+  ergonomics issue, not a product defect), recorded so the next person does not lose the same hour.
