@@ -277,7 +277,7 @@ ones found the hard way (S340). Verify with the commands, not by memory:
 
 | setting | correct value | symptom when wrong |
 |---|---|---|
-| Settings → Actions → General → Workflow permissions | **Read and write** | `Dependabot Updates` fails with **"write access to the repository is required"**, so dependency PRs are opened once and then go stale (PRs #1/#2) |
+| Settings → Actions → General → Workflow permissions | **Read and write** | Dependabot cannot push its update branch, so dependency PRs are opened once and then go stale (PRs #1/#2). Do **not** read the phrase "write access to the repository is required" as this setting: it is also GitHub's boilerplate text for the link to the private *updates* log, and it appears verbatim in runs that fail for an unrelated reason (see below) |
 | Settings → General → Pull Requests → Allow auto-merge | **on** | `gh pr merge --auto` is rejected (`Auto merge is not allowed for this repository`) |
 | Settings → General → Pull Requests → Automatically delete head branches | **on** | merged Dependabot branches linger as stale tracking refs |
 
@@ -292,6 +292,32 @@ The `EFFORT` branch ruleset is separate and intentional: linear history, signatu
 thresholds and coverage. It blocks *PR merges* from the CLI, not the owner's direct pushes; `--admin`
 bypasses it per-merge without altering it (verify afterwards with
 `gh api repos/Unccllin/remote-lockdown-system/rulesets --jq '.[] | "\(.name) \(.enforcement)"'`).
+
+### `Dependabot Updates` fails for a dependency-resolution reason, not this one (S341)
+
+Measured 2026-11-20: workflow permissions are already `write` and the scheduled job still failed — twice,
+on `npm_and_yarn in /electron for glob, minimatch`. The step log's real error is the updater refusing an
+update path:
+
+> A patched version exists for glob, but the available update path would downgrade jest from 30.5.2 to
+> 29.7.0 … either 1. Update jest to versions that support the patched glob, or 2. Add an
+> override/resolution to pin glob to a non-vulnerable version
+
+`glob` is patched only at **14.0.2+** (GHSA-3g3m-2fjr-6pw4 covers `>=9.0.0 <=14.0.1`) and jest 30 pins
+`glob@^13.0.6`, so no in-range patched version exists; the updater correctly refuses the major downgrade.
+`minimatch` is patched at **11.0.1+** (GHSA-g3hv-75wg-m249 covers `>=7.0.0 <11.0.1`). Both live only in
+dev/build tooling — the packaged app ships `files`/`extraResources` and none of jest or electron-builder.
+
+Fixed with **version-scoped** overrides in `electron/package.json`: 23 moderate → **0**, `npm ci`
+reproduces the identical tree from the lockfile, 30 tests pass with coverage unchanged from the recorded
+floors, and `@electron/asar` still packs a byte-identical archive.
+
+**They must stay scoped by version range.** `@electron/asar`'s `crawlfs` calls
+`util.promisify(glob.glob)`, and glob v9+ dropped the callback form: a blanket `"glob": "^14.0.6"` (the
+form `server/package.json` uses, where no such consumer exists) makes that promise never settle. Measured
+on 2026-11-20 — it **hangs** the asar crawl forever instead of failing, so `electron-builder` would stall
+with no error. The scoped form leaves `glob@7.2.3` and `minimatch@3.1.5/5.1.9` untouched because those
+versions sit outside the vulnerable ranges.
 
 ## Environment
 
@@ -323,6 +349,10 @@ make test-coverage
 # dashboard/serverless configs to be ESM (serverless uses vitest.config.mts).
 cd server && npm audit --audit-level=high      # must exit 0
 cd dashboard && ../scripts/audit-with-exceptions.sh
+# electron is NOT in the CI gate, which is how 23 moderate findings accumulated there
+# unnoticed; it is 0 since S341 and worth a local look. Keep the overrides scoped —
+# a blanket glob override hangs @electron/asar (see the Dependabot section above).
+cd electron && npm audit --audit-level=moderate   # must exit 0
 
 # Static analysis (Semgrep p/default). Every finding must be fixed or listed in
 # scripts/sast-exceptions.json with a disposition + reason; ERROR is never
