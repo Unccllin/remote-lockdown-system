@@ -53,32 +53,30 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 331 — 2026-11-19 (`make -k full-verify` confirmed in practice: one pass, one red)
+## Latest session: 332 — 2026-11-19 (two "not re-measured" gates closed; one shown to be unrunnable here)
 
 ### Fog cleared
 
-- **`make -k full-verify` completes in one pass** (log `/tmp/full-verify-k-s331.log`): every target ran and
-  reported — graph-check `✓ All invariants pass` · lint `All checks passed!` (both the agent and the new
-  graph lint) · server **885** · electron **30** (3 suites) · `test-e2e` **RESULT: PASS** · `verify-env`
-  **56 PASS / 0 FAIL / 5 SKIP** · check-artifacts `All artifacts present`.
-- **The only failure is the documented one**: `test-scripts` → `scripts/test_tls_floor.py`
-  (`1 failed, 1 passed`), followed by `make: Target 'full-verify' not remade because of errors` and exit 2.
-  So `-k` does what the documentation now says, and the exit code still reports the failure honestly rather
-  than being swallowed.
-- **The two-run story is retired**: previously a sweep meant one aborted run plus three hand-run targets;
-  now it is one command whose single red is the environment, and the numbers match S330's measurement.
+- **`make sast` re-measured** (`/tmp/sast-s332.log`): **48 findings, 0 ERROR**, `[OK] every finding is
+  either fixed or carries a reviewed reason`, exit 0 — the S312 figure holds, with the S312 exceptions in
+  place.
+- **`make firmware-host-tests` re-measured** (`/tmp/fw-s332.log`): **195 checks, 0 failures, 35 cases**
+  (CBOR 97 checks/19 cases, TPM 86/8, COSE 12/8), exit 0 — the recorded figure exactly.
+- **`make pg-smoke` shown to be unrunnable on this host, with evidence rather than recollection**: no
+  PostgreSQL on `localhost:5432` (`pg_isready` → "no response") and no usable docker (`docker ps` → exit
+  1), which is the same socket condition as the sweep's one red.
+- **AGENTS.md updated**: the "not re-measured" sentence now records sast and firmware as re-measured in
+  S332 and names the concrete reason pg-smoke cannot run, instead of listing all four as merely stale.
 
 ### Fog remaining
 
-- **The red itself is unchanged and is an operator action**: `/var/run/docker.sock` is `root:docker 0660`,
-  this login session is in no docker group, and `sudo -n` needs a password. Adding the user to `docker`
-  and starting a new login session is the only way to make this sweep fully green here.
-- **Four gates were still not re-measured**: `make pg-smoke`, `make sast` (semgrep absent locally),
-  `make firmware-host-tests`, and the five-component `make test-coverage`.
-- **`Dependabot Updates`** still fails with `write access to the repository is required` (same text as
-  2026-11-12) — a repository setting, not code.
-- **The weekly audit's `cron` path is still unexercised**; the pyright `reportMissingImports` pair remains
-  an advisory; `harness-template/` remains documented drift awaiting the owner's decision (S329).
+- **`make test-coverage` across all five components was not re-run** (the longest gate, and the context
+  budget for this session); only the dashboard floor has a recent number.
+- **The docker socket remains the single environmental blocker** — it costs both `test_tls_floor.py` and
+  `pg-smoke`, and needs an operator (add to the `docker` group, re-login).
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
+  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair stands as advisory;
+  `harness-template/` remains documented drift awaiting the owner's decision (S329).
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
   `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
 
@@ -93,34 +91,36 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- **`/var/run/docker.sock` unreadable from this login session** — the sweep's only red, and not a code defect.
+- **No PostgreSQL and no usable docker on this host** — `pg-smoke` and `test_tls_floor` are the two gates
+  that cannot run here, and both for the same reason (no docker socket, no local PG).
 
 ### Session artifacts
 
-- `/tmp/full-verify-k-s331.log` — one-pass sweep with every target's output and `MAKE_K_EXIT=2`.
-- No repo change beyond this record: the claim under test was already written in AGENTS.md (S330).
+- `AGENTS.md` (sast + firmware re-dated; pg-smoke's blocker named).
+- Logs: `/tmp/sast-s332.log`, `/tmp/fw-s332.log`.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), on myself**: S330 documented `-k` from a synthetic Makefile and
-  called it "proven", which proved the *mechanism* and not the *target*. This session closed that gap —
-  and the distinction is worth keeping: a mechanism demonstrated on a toy is evidence about the mechanism,
-  never about the real command.
+- **Layer 3 (execution environment), now measured instead of assumed.** `pg-smoke` had been carried as
+  "needs real PostgreSQL 16" for two hundred sessions; the actual condition on this host (nothing
+  listening on 5432, docker unusable) is a one-command check that nobody had run. A deferral that names
+  its prerequisite is better than one that names a category.
+- **Layer 4 (verification feedback)**: the sweep's "not re-measured" list was itself a claim without a
+  date, so it read as "these might be broken". Two of the four were green the whole time.
 
 ### VERIFY
 
-- `make -k full-verify` → every target reported; `make: *** [Makefile:132: test-scripts] Error 1`;
-  `make: Target 'full-verify' not remade because of errors.`; `MAKE_K_EXIT=2`.
-- Per-target evidence in that log: `✓ All invariants pass` (1) · `All checks passed!` (2) ·
-  `Tests: 885 passed` · `Tests: 30 passed` (electron) · `RESULT: PASS (all E2E tests succeeded)` ·
-  `PASS: 56 FAIL: 0 SKIP: 5` · `All artifacts present and non-empty`.
+- `PATH=/tmp/sgvenv/bin:$PATH make sast` → `Semgrep findings: 48`, `[OK] every finding is either fixed or
+  carries a reviewed reason`, exit 0.
+- `make firmware-host-tests` → `97 checks, 0 failures across 19 cases` · `86 checks, 0 failures across 8
+  cases` · `12 checks, 0 failures across 8 cases`; exit 0.
+- `pg_isready -h localhost -p 5432` → `no response`; `docker ps` → exit 1.
 - `make graph-check` → `✓ All invariants pass`; tree clean before and after.
 
 ### Next session opening
 
-Ask the operator to add this login session to the `docker` group (then re-login) so
-`scripts/test_tls_floor.py` can run — that is the only thing between this tree and a fully green
-`make -k full-verify`, and everything else in the sweep is measured.
+Run `make test-coverage` across all five components — the last gate with no recent number — and record
+which floors are tight (the dashboard's functions floor sat at 62.59 against 62 in S305).
 
 ---
 

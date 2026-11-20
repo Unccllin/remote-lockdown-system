@@ -518,10 +518,11 @@ password — so `make full-verify` stops at `test-scripts` with **1 failed / 1 p
 never reaches `test-e2e`, `verify-env` or `check-artifacts`. Those three were run by hand
 in S307 and passed (14/14, 56 PASS / 0 FAIL / 5 SKIP, all artifacts present).
 
-**Not re-measured in S307 — the older figures still stand, with their dates:** `make pg-smoke`
-65/65 (needs real PostgreSQL 16), `make firmware-host-tests` 195 checks / 35 cases, and
-`make test-coverage` across all five components — only the dashboard floor was re-run, at
-70.62 / 66.59 / 62.59 / 71.40
+**Re-measured in S332:** `make sast` 48 findings / 0 ERROR, all dispositioned (semgrep 1.182.1 from a
+throwaway venv) and `make firmware-host-tests` 195 checks / 35 cases, 0 failures (CBOR 97/19, TPM 86/8,
+COSE 12/8). **Still not re-measured:** `make pg-smoke` — this host has no PostgreSQL on :5432
+(`pg_isready` → no response) and no usable docker (exit 1) — and `make test-coverage` across all five
+components; only the dashboard floor was re-run, at 70.62 / 66.59 / 62.59 / 71.40
 against 68 / 61 / 62 / 70.
 
 **`make test-e2e` was intermittently fatal until 2026-11-13; it is fixed and proven.** The

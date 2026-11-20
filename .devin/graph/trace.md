@@ -6667,3 +6667,88 @@ Ask the operator to add this login session to the `docker` group (then re-login)
 `make -k full-verify`, and everything else in the sweep is measured.
 
 ---
+
+---
+
+## Session 332 — 2026-11-19 (two "not re-measured" gates closed; one shown to be unrunnable here)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: AGENTS.md's sweep paragraph — the sentence that lists `sast`, `firmware-host-tests`,
+  `pg-smoke` and five-component coverage as NOT re-measured, with the reason each was skipped.
+- **Read**: `Makefile:205-212` (sast) and `Makefile:222` (pg-smoke) — what each target actually invokes, so
+  "could not run" would be a measurement rather than an assumption.
+- **Checked**: semgrep 1.182.1 is present in the `/tmp/sgvenv` from S312; `cc`/`gcc` are on PATH;
+  `pg_isready -h localhost -p 5432` → no response and `docker ps` → exit 1.
+
+**Findings**: three of the four stale figures were reachable without a hardware window or a credential —
+two by running them, one by proving it cannot run here.
+
+### Fog cleared
+
+- **`make sast` re-measured** (`/tmp/sast-s332.log`): **48 findings, 0 ERROR**, `[OK] every finding is
+  either fixed or carries a reviewed reason`, exit 0 — the S312 figure holds, with the S312 exceptions in
+  place.
+- **`make firmware-host-tests` re-measured** (`/tmp/fw-s332.log`): **195 checks, 0 failures, 35 cases**
+  (CBOR 97 checks/19 cases, TPM 86/8, COSE 12/8), exit 0 — the recorded figure exactly.
+- **`make pg-smoke` shown to be unrunnable on this host, with evidence rather than recollection**: no
+  PostgreSQL on `localhost:5432` (`pg_isready` → "no response") and no usable docker (`docker ps` → exit
+  1), which is the same socket condition as the sweep's one red.
+- **AGENTS.md updated**: the "not re-measured" sentence now records sast and firmware as re-measured in
+  S332 and names the concrete reason pg-smoke cannot run, instead of listing all four as merely stale.
+
+### Fog remaining
+
+- **`make test-coverage` across all five components was not re-run** (the longest gate, and the context
+  budget for this session); only the dashboard floor has a recent number.
+- **The docker socket remains the single environmental blocker** — it costs both `test_tls_floor.py` and
+  `pg-smoke`, and needs an operator (add to the `docker` group, re-login).
+- **`Dependabot Updates`** still fails with `write access to the repository is required`; the weekly
+  audit's `cron` path is still unexercised; the pyright `reportMissingImports` pair stands as advisory;
+  `harness-template/` remains documented drift awaiting the owner's decision (S329).
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **No PostgreSQL and no usable docker on this host** — `pg-smoke` and `test_tls_floor` are the two gates
+  that cannot run here, and both for the same reason (no docker socket, no local PG).
+
+### Session artifacts
+
+- `AGENTS.md` (sast + firmware re-dated; pg-smoke's blocker named).
+- Logs: `/tmp/sast-s332.log`, `/tmp/fw-s332.log`.
+
+### Failure attribution
+
+- **Layer 3 (execution environment), now measured instead of assumed.** `pg-smoke` had been carried as
+  "needs real PostgreSQL 16" for two hundred sessions; the actual condition on this host (nothing
+  listening on 5432, docker unusable) is a one-command check that nobody had run. A deferral that names
+  its prerequisite is better than one that names a category.
+- **Layer 4 (verification feedback)**: the sweep's "not re-measured" list was itself a claim without a
+  date, so it read as "these might be broken". Two of the four were green the whole time.
+
+### VERIFY
+
+- `PATH=/tmp/sgvenv/bin:$PATH make sast` → `Semgrep findings: 48`, `[OK] every finding is either fixed or
+  carries a reviewed reason`, exit 0.
+- `make firmware-host-tests` → `97 checks, 0 failures across 19 cases` · `86 checks, 0 failures across 8
+  cases` · `12 checks, 0 failures across 8 cases`; exit 0.
+- `pg_isready -h localhost -p 5432` → `no response`; `docker ps` → exit 1.
+- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
+
+### Next session opening
+
+Run `make test-coverage` across all five components — the last gate with no recent number — and record
+which floors are tight (the dashboard's functions floor sat at 62.59 against 62 in S305).
+
+---
