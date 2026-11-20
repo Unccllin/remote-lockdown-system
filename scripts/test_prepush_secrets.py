@@ -199,6 +199,37 @@ def test_all_scans_history_that_the_range_does_not():
     check("--all still finds the historical leak", all_code == 1, all_out[:200])
 
 
+def test_a_patch_with_non_utf8_bytes_is_still_scanned():
+    """S341: `--all` crashed with UnicodeDecodeError on any commit whose captured output held a
+    non-UTF-8 byte — the real repository has such a commit (85ede32, an artifact recording a mangled
+    console byte), so the full-history fallback died with a traceback instead of scanning.
+
+    The stronger property is asserted too: the secret sits in a file that sorts AFTER the bad bytes,
+    so a 'fix' that truncated at the first undecodable byte would pass a crash-only test and still
+    leak. Restoring the strict decode makes this fail with the traceback again."""
+    repo = Path(tempfile.mkdtemp(prefix="prepush-utf8-"))
+    git(repo, "init", "-q", ".")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "test")
+
+    (repo / "README.md").write_text("base\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+
+    log = repo / "docs" / "captured.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(b"[INFO] Setup password was pre-existing \x83?\" not clearing\n")
+    (repo / "zz-creds.js").write_text(f"const k = '{AWS_KEY}';\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "log with a mangled byte, then a credential")
+
+    code, out = scan(repo, "--all")
+
+    check("--all survives a non-UTF-8 patch", "UnicodeDecodeError" not in out, out[:200])
+    check("--all still finds the secret past the bad bytes", code == 1, out[:200])
+    check("the secret is never echoed", AWS_KEY not in out, out[:200])
+
+
 if __name__ == "__main__":
     print("=== test_prepush_secrets.py ===")
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

@@ -85,8 +85,13 @@ ADDED_LINE = re.compile(r"^\+(?!\+\+)")
 
 
 def git(*args):
+    # errors="replace", not the default strict decode: `git show -p` on a commit that captured a
+    # non-UTF-8 byte (S285's artifact recorded a mangled console byte) raised UnicodeDecodeError and
+    # killed the whole scan. It only bit the `--all` / unresolvable-base path, which is the fallback
+    # the range scan is supposed to degrade to — so the guard was weakest exactly where it was
+    # hardened (S317). Replacing the undecodable byte keeps every other line scannable.
     return subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=False
+        ["git", *args], capture_output=True, text=True, errors="replace", check=False
     ).stdout
 
 
