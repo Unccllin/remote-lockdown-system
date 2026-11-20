@@ -1,0 +1,110 @@
+# S341 — electron dependency overrides: 23 moderate advisories -> 0
+# Host: Linux 7.2.15-1-omarchy x86_64 · node v26.13.1 · npm 11.20.0
+# Generated 2026-11-20T12:18:12Z — every block below is real command output.
+
+## 1. BEFORE — npm audit --json in electron (stored output of the run that opened this session)
+metadata: {"info": 0, "low": 0, "moderate": 23, "high": 0, "critical": 0, "total": 23}
+  @electron/universal                moderate  range=1.5.0 || 2.0.0 - 3.0.3         (transitive)
+  @jest/core                         moderate  range=>=30.0.0-alpha.1               (transitive)
+  @jest/expect                       moderate  range=>=30.5.0                       (transitive)
+  @jest/globals                      moderate  range=>=30.5.0                       (transitive)
+  @jest/reporters                    moderate  range=>=30.0.0-alpha.1               (transitive)
+  @jest/transform                    moderate  range=>=30.5.0                       (transitive)
+  app-builder-lib                    moderate  range=>=24.13.4-alpha.0              (transitive)
+  babel-jest                         moderate  range=>=30.5.0                       (transitive)
+  babel-plugin-istanbul              moderate  range=>=8.0.0                        (transitive)
+  dmg-builder                        moderate  range=24.13.4-alpha.0 - 25.0.6 || >=25.1.2 (transitive)
+  electron-builder                   moderate  range=19.25.0 || 24.13.4-alpha.0 - 25.0.6 || >=25.1.2 (transitive)
+  electron-builder-squirrel-windows  moderate  range=24.13.4-alpha.0 - 25.0.6 || >=25.1.2 (transitive)
+  glob                               moderate  range=9.0.0 - 14.0.1                 GHSA-3g3m-2fjr-6pw4
+  jest                               moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-circus                        moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-cli                           moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-config                        moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-resolve-dependencies          moderate  range=>=30.5.0                       (transitive)
+  jest-runner                        moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-runtime                       moderate  range=>=30.0.0-alpha.1               (transitive)
+  jest-snapshot                      moderate  range=>=30.5.0                       (transitive)
+  minimatch                          moderate  range=7.0.0 - 11.0.0                 GHSA-g3hv-75wg-m249
+  test-exclude                       moderate  range=>=7.0.0                        (transitive)
+
+## 2. The advisories and their patched boundaries
+$ npm audit --json | jq the two direct advisories
+  glob: https://github.com/advisories/GHSA-3g3m-2fjr-6pw4
+     advisory range >=9.0.0 <=14.0.1  => patched at 14.0.2+
+  minimatch: https://github.com/advisories/GHSA-g3hv-75wg-m249
+     advisory range >=7.0.0 <11.0.1  => patched at 11.0.1+
+
+## 3. Why a blanket override is NOT usable here (measured, not reasoned)
+$ node -e 'util.promisify(glob.glob)...'  with glob@14.0.6 in a scratch dir
+  glob version: 14.0.6
+  RESULT: HANG — promisified glob never settled
+  => @electron/asar/lib/crawlfs.js does exactly this (util.promisify(glob.glob)), so a blanket
+     glob override would hang electron-builder instead of failing.
+
+## 4. AFTER — the scoped overrides applied
+  "overrides": {
+    "tar": "^7.5.21",
+    "glob@>=9.0.0 <14.0.2": "^14.0.6",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.9"
+  },
+
+## 5. npm audit after (electron)
+found 0 vulnerabilities
+
+## 6. Resolved tree: vulnerable versions replaced, safe ones untouched
+  │   │ ├─┬ glob@7.2.3
+  │   │ │ └── minimatch@3.1.5
+  │   │ └── minimatch@3.1.5
+  │   │ │ └── minimatch@3.1.5
+  │   │ └── minimatch@11.0.9 deduped
+  │   │     └── minimatch@5.1.9
+  │   │       └── glob@7.2.3 deduped
+  │   └── minimatch@11.0.9
+      │ └─┬ glob@14.0.6
+      │   └── minimatch@11.0.9 deduped
+      │     ├─┬ glob@14.0.6
+      │     │ └── minimatch@11.0.9 deduped
+      │     └── minimatch@11.0.9 deduped
+      │ └─┬ glob@14.0.6
+      │   └── minimatch@11.0.9 deduped
+        └─┬ glob@14.0.6
+          └── minimatch@11.0.9 deduped
+
+## 7. Pins hold under npm ci from the committed lockfile (scratch dir, --ignore-scripts)
+92 packages are looking for funding
+  run `npm fund` for details
+  11.0.9    node_modules/minimatch
+  14.0.6    node_modules/jest-config/node_modules/glob
+  14.0.6    node_modules/@jest/reporters/node_modules/glob
+  14.0.6    node_modules/jest-runtime/node_modules/glob
+  14.0.6    node_modules/test-exclude/node_modules/glob
+  3.1.5     node_modules/dir-compare/node_modules/minimatch
+  3.1.5     node_modules/@electron/asar/node_modules/minimatch
+  3.1.5     node_modules/glob/node_modules/minimatch
+  5.1.9     node_modules/filelist/node_modules/minimatch
+  7.2.3     node_modules/glob
+
+## 8. @electron/asar still packs (the glob@7 path the blanket override would have hung)
+$ node -e 'asar.createPackage("node_modules/electron-log", "/tmp/after.asar")'
+  AFTER asar pack OK 105886 bytes
+  baseline (before any change): 105886 bytes — identical size after
+
+## 9. electron-builder file inclusion still correct with minimatch 11
+  minimatch 11.0.9
+  main.js                       -> true
+  node_modules/express/index.js -> false
+  sub/deep/file.js              -> true
+
+## 10. electron tests + coverage (floors 37/45/29/37)
+  Statements   : 39.4% ( 80/203 )
+  Branches     : 47.36% ( 27/57 )
+  Functions    : 30.95% ( 13/42 )
+  Lines        : 39.3% ( 79/201 )
+  Test Suites: 3 passed, 3 total
+  Tests:       30 passed, 30 total
+
+## 11. Graph invariants still pass
+    ✓ All invariants pass.
+  
+  Timestamp: 2026-11-20T12:18:23.513391+00:00
