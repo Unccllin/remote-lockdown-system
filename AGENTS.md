@@ -1030,8 +1030,29 @@ work — pick up here tomorrow.
     decorator to `init`/`assert`/`confirm`/`refute`, plus `scripts/test_brain.py` (7 tests, 16 checks).
     Measured: 12 concurrent writers without the lock kept **6-8 of 12** beliefs, 5/5 rounds; with it,
     12/12. Evidence: `docs/artifacts/s342-brain-store-lock.txt`.
-  - **`scripts/memory.py` still has this gap** — same read-modify-write shape for capture
-    id allocation, no lock, so the argument above applies there unchanged. Untested as of S342.
+  - **`scripts/memory.py`: found in S342, fixed in S343 — and S342's "the argument transfers
+    unchanged" was too strong.** Same shape (capture takes max+1 from a directory listing, so two
+    concurrent captures pick the same `sess-NNN` and the second rename discards a whole session
+    record), but the *window* is microseconds instead of tens of milliseconds: capture globs a
+    directory, whereas brain parses and re-serialises a 4700-line YAML store. Measured: 8 and then 12
+    concurrent captures kept 8/8 and 12/12 (both were **methodology artifacts** — bash staggers
+    fork/exec by ~5 ms and Popen by ~1 ms, both wider than the window); at **40** concurrent captures
+    only **33** survived. With `store_lock()`: 40/40. Evidence:
+    `docs/artifacts/s343-memory-store-lock.txt`.
+  - **A lock copied between these two scripts must be reentrant.** `consolidate`, `reconcile`,
+    `decay` and `cleanup` each call `stage_index()` **in-process**, and `flock()` is per open file
+    description, so a second acquisition in the same process **blocks rather than errors** — brain.py's
+    plain decorator hung `consolidate` forever (measured: `timeout 20` → exit 124). memory.py's
+    `store_lock()` keeps a thread-local depth for that reason, and
+    `test_consolidate_does_not_deadlock_on_its_internal_index_rebuild` fails with a named assertion if
+    the reentrancy is ever removed.
+  - **Lock files are per-checkout state, never committed.** `.devin/brain/.beliefs.lock` was committed
+    by accident in S342 before this was written down; both paths are now in `.gitignore`. Also resolve
+    the lock path from the *current* store directory at call time, not from an import-time constant,
+    or every test that monkeypatches the store dir takes a lock on the real one (S343).
+  - **`scripts/memory.py`'s in-process tests still cannot see a lost update** — they call stage
+    functions directly in one process. The concurrency tests added in S343 spawn the real CLI against a
+    copy of `memory.py` in a temp repo root, which is the only shape that exercises the lock.
 - Floating-point confidence artifacts (0.6000000000000001 in files)
 - Deduplication brittle (first 5 words only — false positives/negatives)
 - Retrieve is keyword-only (no stemming, stopwords, semantic, typo tolerance)

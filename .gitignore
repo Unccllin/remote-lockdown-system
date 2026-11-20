@@ -155,3 +155,11 @@ update_signing.pub
 # none of the generated views below is ever committed.
 firmware/PblPkg/host-tests/include/*.generated.h
 firmware/PblPkg/host-tests/build/
+
+# Runtime lock files for the file-based stores. scripts/brain.py and scripts/memory.py
+# create them on first use (flock/mismatch: one empty file beside the store), which means
+# they are per-checkout state, not content. One of them was committed by accident in S342
+# before this rule existed — an empty file that says nothing, in a directory that is
+# otherwise entirely meaningful.
+.devin/brain/.beliefs.lock
+.devin/memory/.memory.lock

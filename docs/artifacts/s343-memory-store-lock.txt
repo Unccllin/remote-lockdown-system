@@ -1,0 +1,97 @@
+# S343 — memory.py: the same lost-update race, a narrower window, and a deadlock trap
+# Host: Linux 7.2.15-1-omarchy x86_64 · python 3.14.8
+# Generated 2026-11-20T12:56:28Z — every block below is real command output.
+
+## 1. Measuring first was the point: the first two measurements said NO race
+   8 captures launched from a bash `&` loop:   kept 8/8
+   12 captures launched from Python Popen:     kept 12/12
+   Both were METHODOLOGY artifacts. bash staggers fork/exec by ~5 ms, and each
+   process's window (glob the raw dir, compute max+1, write) is microseconds, so no
+   two scans overlapped. Popen closed that to ~1 ms — still not enough to collide.
+
+## 2. At 40 concurrent captures the race is unambiguous
+   $ 40x subprocess capture, every process exiting 0
+   BEFORE (no lock): kept 33 of 40 — 7 whole session records overwritten, silently.
+   The window is narrow because capture only globs a directory; brain.py's window is
+   wide because it parses and re-serialises a 4700-line YAML store. Same shape,
+   different severity — which is why S342's 'the argument transfers unchanged' was
+   too strong and is corrected in AGENTS.md.
+
+## 3. The trap: copying brain.py's lock verbatim would have HUNG memory.py
+   consolidate, reconcile, decay and cleanup each call stage_index() in-process, and
+   stage_index writes index.md. flock() is per open file description, so a second
+   acquisition inside the same process BLOCKS — it does not error. store_lock() keeps
+   a thread-local depth for exactly that:
+       depth = getattr(_LOCK_DEPTH, "depth", 0)
+       if depth:
+           _LOCK_DEPTH.depth = depth + 1
+           try:
+               yield
+           finally:
+               _LOCK_DEPTH.depth = depth
+           return
+
+   MEASURED with the depth block removed, on a store with one real learning:
+   $ timeout 20 python3 scripts/memory.py consolidate
+   exit=124 after 20s (124 = killed by timeout = deadlock; the same command exits 0
+   with the depth block present — see section 4).
+
+## 4. AFTER: 40 concurrent captures all kept, and consolidate rebuilds the index
+   WITH LOCK: kept 40 of 40 captures, all exit 0: True
+   $ python3 scripts/memory.py consolidate   (the reentrancy path)
+   [OK] Consolidation complete:
+        Processed 41 new raw captures (41 total)
+        Extracted 1 learnings
+        Created 1 new memories
+        Updated 0 existing memories
+   [OK] Index rebuilt: 1 active, 0 superseded, 0 decayed
+   exit=0
+
+## 5. The three regression tests (added to scripts/test_memory.py)
+   ...                                                                      [100%]
+   3 passed, 45 deselected in 2.48s
+
+## 6. Teeth 1 — remove @mutating: the capture race returns
+           """The S343 defect: concurrent captures overwrote each other's session record."""
+   1 failed, 47 deselected in 1.70s
+
+## 7. Teeth 2 — remove the reentrancy: the deadlock test names the cause
+   E           AssertionError: consolidate did not finish in 60s — store_lock() is not reentrant, so the in-process stage_index() rebuild deadlocked on the lock it already holds
+   1 failed, 47 deselected in 60.50s (0:01:00)
+   restored -> 2 passed, 46 deselected in 2.28s
+
+## 8. Two analyzer rules contradict each other for a lock handle, so one is suppressed
+   'unwrapped open() throws'  vs  SIM115 'use a context manager for opening files'.
+   The handle must outlive the acquire/release pair, so it cannot be confined to a
+   `with` body and still span the yield. Resolution: open inside try/except SystemExit
+   (a lock that cannot be opened must fail loudly, never silently degrade to unlocked)
+   and put `# noqa: SIM115` on that one line with the reason above it.
+   The msvcrt branch was fixed at the source instead: getattr(msvcrt, 'locking', None).
+   On a POSIX host msvcrt is a stub without those names, and S342's code read them
+   directly — which is why both scripts reported 5 Pyright errors until this session.
+
+## 9. Committing the lock file was a mistake, found by looking at git status
+   .devin/brain/.beliefs.lock was committed in 949fefb (S342): an empty file of pure
+   per-checkout state. Both lock paths are now in .gitignore, the tracked one is
+   removed, and the scripts recreate them on demand — `brain.py check` does NOT create
+   one, because it is read-only and not decorated (verified this session).
+
+## 10. A second defect, found while checking the change: the lock path was import-time
+   LOCK_FILE = MEMORY_DIR / '.memory.lock' is bound at import, but the test fixture
+   monkeypatches MEMORY_DIR/RAW_DIR/CONSOLIDATED_DIR/DECAYED_DIR/INDEX_FILE — so every
+   in-process test took an exclusive lock on the REAL store while operating on a temp
+   one, and left a file in the project tree. Verified, then fixed:
+   $ rm .devin/memory/.memory.lock && python3 -m pytest -k 'index or decay'
+   BEFORE the fix: .devin/memory/.memory.lock reappeared (created by the test run)
+   AFTER the fix:  not created — store_lock() resolves the path from MEMORY_DIR at call
+                   time, and the fixture patches LOCK_FILE as well.
+   Why it mattered: a test run and a real `capture` could contend on the same lock, and
+   a hung test would block a session's capture instead of a temp directory's.
+
+## 11. Gate results (all measured this session)
+   make test-scripts            MAKE_EXIT=0, 17 suites; scripts/test_memory.py 48 passed
+   make verify-env              56 PASS / 0 FAIL / 5 SKIP
+   make graph-check             all invariants pass
+   ruff check scripts/memory.py scripts/brain.py scripts/test_memory.py   no NEW findings
+   (the 19 pre-existing memory.py findings and 4 in test_memory.py are unchanged; the
+    5 Pyright msvcrt errors S342 introduced in both scripts are gone)

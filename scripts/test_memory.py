@@ -18,11 +18,16 @@ The tests use a temp directory so they never touch the real .devin/memory/.
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-import pytest
+# pyright: ignore[reportMissingImports] — pytest is not installed in the interpreter the
+# analysis runs on (system python3); it lives in agent/.venv, which is the interpreter
+# `make test-scripts` and CI use (pytest 9.0.3, suite green). The import is real; only the
+# resolver is wrong. The untouched test_check_debt_ledger.py reports the same finding.
+import pytest  # pyright: ignore[reportMissingImports]
 
 # Import memory.py by manipulating sys.path
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -49,6 +54,11 @@ def tmp_memory_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, "CONSOLIDATED_DIR", consol_dir)
     monkeypatch.setattr(memory, "DECAYED_DIR", decayed_dir)
     monkeypatch.setattr(memory, "INDEX_FILE", mem_dir / "index.md")
+    # The lock path too, or every in-process test takes a lock on the REAL store: LOCK_FILE
+    # is bound at import time from the project's .devin/memory/, and the lock appeared there
+    # while this suite ran in a temp dir (S343). store_lock() now also resolves it from
+    # MEMORY_DIR at call time — this is the belt to that braces.
+    monkeypatch.setattr(memory, "LOCK_FILE", mem_dir / ".memory.lock")
 
     return mem_dir
 
@@ -690,13 +700,140 @@ class TestIndex:
         assert "Superseded: 1" in text
 
 
+# ─── Concurrency tests ─────────────────────────────────────────────────────────
+#
+# Every test above runs in ONE process and calls stage functions directly, so none of
+# them could see the store's lost-update race: gen_session_id() takes max+1 from a
+# directory listing, and two concurrent captures both choose sess-NNN and both write
+# that file, so the second rename discards the first session's whole record.
+#
+# Measured in S343 before the fix: 40 concurrent `capture` runs kept **33** captures
+# (7 sessions silently vanished, every process exiting 0). With store_lock(), 40/40.
+#
+# These tests therefore spawn the real CLI against a copy of memory.py in a temp repo
+# root — memory.py resolves its store from `__file__`, so the copy writes there and
+# the project's own .devin/memory/ is untouched.
+
+CONCURRENT_CAPTURES = 40
+
+
+def make_isolated_repo() -> Path:
+    """Create a temp repo root holding a copy of memory.py and return the root."""
+    root = Path(tempfile.mkdtemp(prefix="memory-race-"))
+    (root / "scripts").mkdir()
+    shutil.copy2(SCRIPTS_DIR / "memory.py", root / "scripts" / "memory.py")
+    subprocess.run(
+        [sys.executable, str(root / "scripts" / "memory.py"), "init"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return root
+
+
+def memory_cli(root: Path, *args: str, timeout: float = 120) -> subprocess.CompletedProcess:
+    # check=False on purpose: the deadlock test needs the returncode of a run that may
+    # legitimately fail, so raising inside the helper would hide what it asserts.
+    return subprocess.run(
+        [sys.executable, str(root / "scripts" / "memory.py"), *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def test_concurrent_captures_keep_every_capture():
+    """The S343 defect: concurrent captures overwrote each other's session record."""
+    root = make_isolated_repo()
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(root / "scripts" / "memory.py"),
+                "capture",
+                "--task",
+                f"concurrent capture {i}",
+                "--files",
+                "- scripts/memory.py",
+            ],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for i in range(CONCURRENT_CAPTURES)
+    ]
+    results = [(p.wait(timeout=180), p.communicate()) for p in procs]
+    assert all(code == 0 for code, _ in results), [r for r in results if r[0] != 0][:1]
+
+    files = sorted((root / ".devin" / "memory" / "raw").glob("sess-*.md"))
+    assert len(files) == CONCURRENT_CAPTURES, (
+        f"{CONCURRENT_CAPTURES} concurrent captures kept {len(files)} files — "
+        f"{CONCURRENT_CAPTURES - len(files)} session record(s) were overwritten"
+    )
+    assert len({f.stem for f in files}) == CONCURRENT_CAPTURES
+
+    tasks = {
+        line.split(":", 1)[1].strip()
+        for f in files
+        for line in f.read_text().splitlines()
+        if line.startswith("- Task:")
+    }
+    assert tasks == {f"concurrent capture {i}" for i in range(CONCURRENT_CAPTURES)}
+
+
+def test_consolidate_does_not_deadlock_on_its_internal_index_rebuild():
+    """The lock is reentrant, and this is why it has to be.
+
+    consolidate, reconcile, decay and cleanup each call stage_index() in-process at the
+    end. flock() is per open file description, so a plain non-reentrant lock — the shape
+    copied straight from brain.py — would block forever on the inner call and hang
+    `consolidate` with no error. This test fails with a timeout if that regresses.
+    """
+    root = make_isolated_repo()
+    memory_cli(root, "capture", "--task", "t", "--learnings", "- alpha bravo charlie delta", "--files", "- f")
+
+    try:
+        proc = memory_cli(root, "consolidate", timeout=60)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            "consolidate did not finish in 60s — store_lock() is not reentrant, so the "
+            "in-process stage_index() rebuild deadlocked on the lock it already holds"
+        ) from None
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Index rebuilt" in proc.stdout, proc.stdout
+    assert len(list((root / ".devin" / "memory" / "consolidated").glob("m-*.md"))) == 1
+
+
+def test_the_memory_lock_is_a_file_beside_the_store():
+    """A process-local mutex would pass every test above and fix nothing in reality."""
+    root = make_isolated_repo()
+    memory_cli(root, "capture", "--task", "t", "--files", "- f")
+    assert (root / ".devin" / "memory" / ".memory.lock").exists()
+
+
+def test_store_lock_refuses_when_no_lock_primitive_exists(tmp_memory_dir, monkeypatch):
+    """Running unlocked silently loses a writer's memory; refusing is the safe failure."""
+    monkeypatch.setattr(memory, "fcntl", None)
+    monkeypatch.setattr(memory, "_msvcrt_locking", None)
+
+    with pytest.raises(SystemExit) as exc, memory.store_lock():
+        pass
+
+    assert "refusing to run unlocked" in str(exc.value)
+
+
 if __name__ == "__main__":
     # Without this block the file was a silent no-op: `python3
     # scripts/test_memory.py` imported 44 test functions and exited 0 without
     # running one of them, which is exactly how the CI job invoked it. A test
     # command that cannot fail is worse than no test.
     try:
-        import pytest
+        import pytest  # pyright: ignore[reportMissingImports]
     except ImportError:
         sys.exit(
             "pytest is required to run these tests: "

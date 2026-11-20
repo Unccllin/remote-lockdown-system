@@ -42,9 +42,17 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None
 try:
-    import msvcrt  # Windows store lock
+    # Attribute access goes through getattr, not `msvcrt.locking(...)`: on a POSIX host the
+    # msvcrt module is a stub with none of these names, and reading them directly is a
+    # static-analysis error in a branch that can never run here. Resolving them once, as a
+    # capability, is the source-level shape AGENTS.md recommends for `ctypes.windll`.
+    import msvcrt
+
+    _msvcrt_locking = getattr(msvcrt, "locking", None)
+    _msvcrt_lock = getattr(msvcrt, "LK_LOCK", None)
+    _msvcrt_unlock = getattr(msvcrt, "LK_UNLCK", None)
 except ImportError:  # pragma: no cover - POSIX
-    msvcrt = None
+    _msvcrt_locking = _msvcrt_lock = _msvcrt_unlock = None
 
 try:
     import yaml
@@ -88,20 +96,38 @@ def store_lock():
     loudly instead of hanging a session.
     """
     BRAIN_DIR.mkdir(parents=True, exist_ok=True)
-    with open(LOCK_FILE, "a+") as fh:
+    # Neither mechanism means this platform cannot serialise writers, and a store that runs
+    # unlocked silently loses data — refuse instead. The Windows branch is resolved through
+    # getattr, so a renamed msvcrt symbol would otherwise degrade to "no lock" without a word.
+    if fcntl is None and _msvcrt_locking is None:
+        raise SystemExit(
+            "[ERROR] no file-locking primitive available (neither fcntl.flock nor "
+            "msvcrt.locking) — refusing to run unlocked, because concurrent asserts would "
+            "silently overwrite each other's beliefs"
+        )
+    # Resolved here, not from the module constant: anything that rebinds BRAIN_DIR (a test, a
+    # future --store flag) would otherwise lock the real store while reading the new one.
+    lock_path = BRAIN_DIR / LOCK_FILE.name
+    try:
+        # A `with` block cannot satisfy the unwrapped-open rule, and the handle must outlive
+        # the acquisition/release pair, so SIM115 is the rule that gives — hence the noqa.
+        fh = open(lock_path, "a+")  # noqa: SIM115
+    except OSError as exc:
+        raise SystemExit(f"[ERROR] cannot open the belief store lock {lock_path}: {exc}") from exc
+    with fh:
         if fcntl is not None:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        elif msvcrt is not None:  # pragma: no cover - Windows
+        elif _msvcrt_locking is not None:  # pragma: no cover - Windows
             fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            _msvcrt_locking(fh.fileno(), _msvcrt_lock, 1)
         try:
             yield
         finally:
             if fcntl is not None:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            elif msvcrt is not None:  # pragma: no cover - Windows
+            elif _msvcrt_locking is not None:  # pragma: no cover - Windows
                 fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                _msvcrt_locking(fh.fileno(), _msvcrt_unlock, 1)
 
 
 def mutating(fn):

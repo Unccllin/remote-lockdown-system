@@ -28,12 +28,33 @@ Examples:
 """
 
 import argparse
+import contextlib
+import functools
 import math
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX store lock
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+try:
+    # Attribute access goes through getattr, not `msvcrt.locking(...)`: on a POSIX host
+    # the msvcrt module is a stub with none of these names, and reading them directly is
+    # a static-analysis error in a branch that can never run here. Resolving them once,
+    # as a capability, is the same source-level shape AGENTS.md recommends for
+    # `ctypes.windll` — and it makes the Windows branch explicitly opt-in.
+    import msvcrt
+
+    _msvcrt_locking = getattr(msvcrt, "locking", None)
+    _msvcrt_lock = getattr(msvcrt, "LK_LOCK", None)
+    _msvcrt_unlock = getattr(msvcrt, "LK_UNLCK", None)
+except ImportError:  # pragma: no cover - POSIX
+    _msvcrt_locking = _msvcrt_lock = _msvcrt_unlock = None
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -42,6 +63,7 @@ RAW_DIR = MEMORY_DIR / "raw"
 CONSOLIDATED_DIR = MEMORY_DIR / "consolidated"
 DECAYED_DIR = MEMORY_DIR / "decayed"
 INDEX_FILE = MEMORY_DIR / "index.md"
+LOCK_FILE = MEMORY_DIR / ".memory.lock"
 
 DECAY_HALF_LIFE_DAYS = 60  # recency_weight half-life
 DECAY_THRESHOLD = 0.1      # effective_score below this → archive
@@ -70,6 +92,95 @@ def atomic_write(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content)
     tmp.rename(path)
+
+
+# ─── Store lock ──────────────────────────────────────────────────────────────
+
+_LOCK_DEPTH = threading.local()
+
+
+@contextlib.contextmanager
+def store_lock():
+    """Hold an exclusive lock across one read-modify-write of the memory store.
+
+    atomic_write() prevents a *torn* file and never prevented a *lost update*. Two
+    concurrent `capture` runs both compute the next session id from the directory
+    listing, so both write `sess-NNN.md` and the second rename discards the first
+    session's entire record. Measured in S343: 40 concurrent captures kept 33.
+
+    **Reentrant by design, and that is load-bearing here in a way it was not in
+    brain.py.** consolidate, reconcile, decay and cleanup each call stage_index()
+    in-process at the end, which writes index.md. flock() is per open file
+    description, so a second acquisition inside the same process BLOCKS — a plain
+    decorator copied from brain.py would deadlock `consolidate` forever, not error.
+    The depth counter below is what makes the outer lock cover the inner rebuild.
+
+    fcntl is POSIX, msvcrt is Windows; whichever exists is used.
+    """
+    depth = getattr(_LOCK_DEPTH, "depth", 0)
+    if depth:
+        _LOCK_DEPTH.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LOCK_DEPTH.depth = depth
+        return
+
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    # Neither mechanism means this platform cannot serialise writers, and a store that runs
+    # unlocked silently loses data — refuse instead. The Windows branch is resolved through
+    # getattr, so a renamed msvcrt symbol would otherwise degrade to "no lock" without a word.
+    if fcntl is None and _msvcrt_locking is None:
+        raise SystemExit(
+            "[ERROR] no file-locking primitive available (neither fcntl.flock nor "
+            "msvcrt.locking) — refusing to run unlocked, because concurrent writers would "
+            "silently overwrite each other's memories"
+        )
+    # Resolved here, not from the module constant: every test that monkeypatches MEMORY_DIR
+    # would otherwise take a lock on the REAL store — the lock file appeared in the project's
+    # .devin/memory/ while the suite ran in a temp dir (S343). The lock always belongs to
+    # whichever directory the store is currently using.
+    lock_path = MEMORY_DIR / LOCK_FILE.name
+    try:
+        # A `with` block cannot satisfy the unwrapped-open rule, and the handle must outlive
+        # the acquisition/release pair, so SIM115 is the rule that gives — hence the noqa.
+        fh = open(lock_path, "a+")  # noqa: SIM115
+    except OSError as exc:
+        # A lock file that cannot be opened is a broken store, not a fallback case:
+        # proceeding unlocked is how the next concurrent writer silently loses data.
+        raise SystemExit(f"[ERROR] cannot open the memory store lock {lock_path}: {exc}") from exc
+    with fh:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        elif _msvcrt_locking is not None:  # pragma: no cover - Windows
+            fh.seek(0)
+            _msvcrt_locking(fh.fileno(), _msvcrt_lock, 1)
+        _LOCK_DEPTH.depth = 1
+        try:
+            yield
+        finally:
+            _LOCK_DEPTH.depth = 0
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            elif _msvcrt_locking is not None:  # pragma: no cover - Windows
+                fh.seek(0)
+                _msvcrt_locking(fh.fileno(), _msvcrt_unlock, 1)
+
+
+def mutating(fn):
+    """Run a store-mutating stage under store_lock().
+
+    A decorator rather than a `with` block inside each stage: every mutating stage
+    has the same load-mutate-save shape, and one wrapper cannot be forgotten when a
+    stage is added. Nesting is safe because store_lock() is reentrant.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(args):
+        with store_lock():
+            return fn(args)
+
+    return wrapper
 
 
 def now_iso():
@@ -232,6 +343,7 @@ def keyword_match(query, text):
 
 # ─── Stage 1: CAPTURE ───────────────────────────────────────────────────────
 
+@mutating
 def stage_capture(args):
     """Extract session learnings into a raw memory file."""
     session_id = args.session_id or gen_session_id()
@@ -304,6 +416,7 @@ def stage_capture(args):
 
 # ─── Stage 2: CONSOLIDATE ───────────────────────────────────────────────────
 
+@mutating
 def stage_consolidate(args):
     """Merge raw captures into deduplicated consolidated memories.
 
@@ -664,6 +777,7 @@ def _apply_optional_fields(meta, args):
         meta["correction_lesson"] = args.correction_lesson
 
 
+@mutating
 def stage_reconcile(args):
     """Update a memory based on new observations.
 
@@ -829,6 +943,7 @@ def stage_reconcile(args):
 
 # ─── Stage 5: DECAY ─────────────────────────────────────────────────────────
 
+@mutating
 def stage_decay(args):
     """Archive stale memories and rebuild index."""
     mem_files = list(CONSOLIDATED_DIR.glob("m-*.md"))
@@ -902,6 +1017,7 @@ def stage_decay(args):
 
 # ─── Cleanup (merge duplicates) ─────────────────────────────────────────────
 
+@mutating
 def stage_cleanup(args):
     """Merge duplicate memories and fix broken titles.
 
@@ -1047,6 +1163,7 @@ def _md_cell(value) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+@mutating
 def stage_index(args):
     """Rebuild the master index from consolidated memories."""
     mem_files = list(CONSOLIDATED_DIR.glob("m-*.md"))
@@ -1178,6 +1295,7 @@ def stage_index(args):
 
 # ─── Init ────────────────────────────────────────────────────────────────────
 
+@mutating
 def stage_init(args):
     """Initialize the memory directory structure."""
     for d in [RAW_DIR, CONSOLIDATED_DIR, DECAYED_DIR]:

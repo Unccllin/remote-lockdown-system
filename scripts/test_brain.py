@@ -282,6 +282,44 @@ def test_a_refuted_belief_gets_a_replacement_under_the_lock():
     )
 
 
+def test_a_platform_without_any_lock_primitive_refuses_to_run():
+    """Silently running unlocked is worse than refusing: it loses a writer's belief.
+
+    The Windows branch is resolved through getattr, so a renamed msvcrt symbol would
+    otherwise degrade to "no lock" with no signal at all. Exercised through a driver
+    script in a temp tree rather than by importing brain.py into this process: the guard
+    has to hold for a REAL invocation, and a fresh interpreter is the honest test of that.
+    """
+    root = Path(tempfile.mkdtemp(prefix="brain-nolock-"))
+    driver = root / "probe.py"
+    driver.write_text(
+        "import importlib.util, pathlib, sys\n"
+        f"spec = importlib.util.spec_from_file_location('b', {str(BRAIN_SCRIPT)!r})\n"
+        "brain = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(brain)\n"
+        "brain.BRAIN_DIR = pathlib.Path(sys.argv[1])\n"
+        "brain.LOCK_FILE = brain.BRAIN_DIR / '.beliefs.lock'\n"
+        "brain.fcntl = None\n"
+        "brain._msvcrt_locking = None\n"
+        "with brain.store_lock():\n"
+        "    print('ENTERED_UNLOCKED')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, str(driver), str(root)], capture_output=True, text=True, check=False
+    )
+    combined = proc.stdout + proc.stderr
+    check(
+        "refuses to run with no lock primitive",
+        proc.returncode != 0 and "ENTERED_UNLOCKED" not in combined,
+        f"rc={proc.returncode} out={combined[-200:]}",
+    )
+    check(
+        "and says why",
+        "refusing to run unlocked" in combined,
+        combined[-200:],
+    )
+
+
 if __name__ == "__main__":
     print("=== test_brain.py ===")
     tests = [

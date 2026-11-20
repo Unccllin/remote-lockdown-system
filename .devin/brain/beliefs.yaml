@@ -4142,3 +4142,21 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-189
+  statement: 'scripts/memory.py''s store_lock() is reentrant (thread-local depth) because consolidate,
+    reconcile, decay and cleanup each call stage_index() in-process, and flock() blocks rather than errors
+    on a second acquisition in the same process: a non-reentrant lock copied from brain.py makes consolidate
+    hang forever (measured: timeout 20 -> exit 124). Both stores also refuse to run when neither fcntl
+    nor msvcrt.locking exists, rather than silently taking no lock.'
+  domain: tooling/memory
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S343: scripts/memory.py store_lock; docs/artifacts/s343-memory-store-lock.txt'
+  source: ''
+  asserted: '2026-11-20'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

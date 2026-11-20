@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-20 15:41:18 — 188 beliefs
+Generated: 2026-11-20 16:05:42 — 189 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -490,6 +490,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-188 | proposed | assumed | scripts/brain.py serialises every store-mutating command under store_lock() (flock; msvcrt on Windows) via a @mutating decorator, so concurrent asserts no longer collide on the same max-id. Measured: 12 concurrent writers kept 6-8 of 12 beliefs without the lock in 5/5 rounds, 12/12 with it. scripts/test_brain.py pins it. |
+
+## tooling/memory
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-189 | proposed | assumed | scripts/memory.py's store_lock() is reentrant (thread-local depth) because consolidate, reconcile, decay and cleanup each call stage_index() in-process, and flock() blocks rather than errors on a second acquisition in the same process: a non-reentrant lock copied from brain.py makes consolidate hang forever (measured: timeout 20 -> exit 124). Both stores also refuse to run when neither fcntl nor msvcrt.locking exists, rather than silently taking no lock. |
 
 ## tooling/sast
 
