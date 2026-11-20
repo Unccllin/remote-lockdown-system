@@ -270,6 +270,29 @@ rulings, multi-option decisions), add them as `- [ ]` items. When the user
 answers, mark `[x]` with a one-word outcome note. Delete answered sections as
 they close — the file is live state, not a log.
 
+## Repository settings that gates depend on (owner-only, not in this repo)
+
+Some behaviour cannot be fixed by a commit, and diagnosing it from the CLI costs an hour. These are the
+ones found the hard way (S340). Verify with the commands, not by memory:
+
+| setting | correct value | symptom when wrong |
+|---|---|---|
+| Settings → Actions → General → Workflow permissions | **Read and write** | `Dependabot Updates` fails with **"write access to the repository is required"**, so dependency PRs are opened once and then go stale (PRs #1/#2) |
+| Settings → General → Pull Requests → Allow auto-merge | **on** | `gh pr merge --auto` is rejected (`Auto merge is not allowed for this repository`) |
+| Settings → General → Pull Requests → Automatically delete head branches | **on** | merged Dependabot branches linger as stale tracking refs |
+
+```bash
+gh api repos/Unccllin/remote-lockdown-system/actions/permissions/workflow \
+  --jq '"default=\(.default_workflow_permissions)"'                       # want: write
+gh api repos/Unccllin/remote-lockdown-system \
+  --jq '"auto_merge=\(.allow_auto_merge) delete_branch=\(.delete_branch_on_merge)"'   # want: true true
+```
+
+The `EFFORT` branch ruleset is separate and intentional: linear history, signatures, CodeQL alert
+thresholds and coverage. It blocks *PR merges* from the CLI, not the owner's direct pushes; `--admin`
+bypasses it per-merge without altering it (verify afterwards with
+`gh api repos/Unccllin/remote-lockdown-system/rulesets --jq '.[] | "\(.name) \(.enforcement)"'`).
+
 ## Environment
 
 - Node.js lives at `~/.local/node/bin` (NOT on default PATH). Prefix commands with
