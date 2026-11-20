@@ -426,13 +426,18 @@ bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 # On this host its only red is scripts/test_tls_floor.py, which needs a readable
 # /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
 # unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
-# has not passed. Measured 2026-11-19 (S330): server 885 (52 suites), agent 990,
-# dashboard 272 (30 files), worker 495, electron 30, API E2E 14, verify-env 56 PASS /
-# 0 FAIL / 5 SKIP, 16 script suites (15 green, tls-floor 1 failed/1 passed, worker-update
-# 5 skipped), and lint now includes lint-graph. The chain STOPS at test-scripts on the
-# tls-floor red — `make` exits 2 and `test-e2e`, `verify-env` and `check-artifacts` never
-# run — so those three were executed separately and passed. Use `make -k full-verify` when
-# you want one run to report everything instead of stopping at the known red.
+# has not passed. Measured 2026-11-20 (S339): **fully green end to end, FV_EXIT=0** —
+# server 885 (52 suites), agent 990, dashboard 272 (30 files), worker 495, electron 30,
+# API E2E 14, verify-env **57 PASS / 0 FAIL / 4 SKIP**, all 16 script suites green
+# (tls-floor now 2 passed), lint including lint-graph. This became possible only after the
+# login user joined the `docker` group; the sweep must be run so its children SEE that
+# group. `usermod` alone does not help a process that already exists — this session's own
+# shell keeps its old group set — so run:
+#
+#   printf 'cd <repo> && make -k full-verify\nexit\n' | newgrp docker      # `sg` is not packaged here
+#
+# `make pg-smoke` is NOT part of full-verify; run it the same way (66 PASS / 0 FAIL measured
+# S339). `make -k` still matters: it reports every target instead of stopping at the first.
 make full-verify
 
 # Full environment + artifact verification (63 checks)

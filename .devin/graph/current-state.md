@@ -53,26 +53,37 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 338 — 2026-11-20 (pytest-timeout 2.4.0: the last of the three toolchain bumps)
+## Latest session: 339 — 2026-11-20 (docker access landed: both blocked gates green, sweep fully green)
 
 ### Fog cleared
 
-- **pytest-timeout 2.4.0 passes under `--timeout=30`**: full suite exit 0, **no timeout warnings**, and a
-  clean `pip install -r` reports 2.4.0 (`dac0c19`).
-- **`agent/requirements-dev.txt` is current on all three**: `pytest==9.0.3`, `pytest-cov==7.1.0`,
-  `pytest-timeout==2.4.0`; `scripts/lint-agent.sh` exit 0.
-- **CI is green on `dac0c19`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` — `Agent Tests` runs in the
-  same `--timeout=30` configuration, so a silently cut-off test would have surfaced there.
+- **The group change is real and the process boundary is the reason `docker ps` still failed**:
+  `getent group docker` lists the user, `id -nG` in the inherited shell does not. `sg` is not packaged on
+  this host; `newgrp docker` is, and `printf 'docker ps\nexit\n' | newgrp docker` proved `DOCKER_USABLE`.
+- **`test_tls_floor.py` is green for the first time in this arc**: **2 passed** — the static Caddyfile
+  range check *and* a real TLS terminator refusing 1.0/1.1.
+- **`pg-smoke` passes: 66 PASS / 0 FAIL.** Its first run failed with
+  `migrations failed — Connection terminated unexpectedly`; that was **not** accepted as a fluke: the
+  migrations were reproduced against a hand-started `postgres:16` on another port (**19/19 applied, exit
+  0**), which isolated the failure to the container's first start, and the real target then passed.
+- **The whole sweep is green**: `make -k full-verify` under `newgrp docker` → **FV_EXIT=0**, with
+  `verify-env` now **57 PASS / 0 FAIL / 4 SKIP** (the docker check moved from SKIP to PASS) and every
+  script suite green including `test_tls_floor` 2/2.
+- **AGENTS.md corrected**: the paragraph that documented "the sweep's only red is the docker socket" now
+  records the green result, states that `pg-smoke` is *not* part of `full-verify`, and gives the
+  `newgrp docker` recipe — including why `usermod` alone does not help an existing process.
 
 ### Fog remaining
 
-- **The agent toolchain thread is finished**; nothing in it is outstanding.
-- **Two gates remain un-runnable on this host**: `test_tls_floor.py` and `pg-smoke`, both needing docker
-  group membership (`sudo usermod -aG docker $USER`) plus a fresh login.
-- **`Dependabot Updates`** still fails with `write access to the repository is required` and will keep
-  producing stale PRs until that setting changes (PRs #1/#2 were already closed/superseded, S337).
-- **The weekly audit's `cron` path is still unexercised**; the pyright `advisory` pair stands; the four
-  open ledger items need hardware or an operator credential.
+- **A fresh login session is still the durable fix**; `newgrp` is the per-command workaround. Until the
+  next login, every docker-dependent command must be wrapped, and anything spawned from an old session
+  still sees the old group set.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` (PRs #1/#2 went
+  stale because of it).
+- **The weekly audit's `cron` path is still unexercised**; the pyright advisory pair stands.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, and the four ledger items
+  (all hardware- or credential-blocked).
 
 ### Debt items closed
 
@@ -84,30 +95,35 @@ D-120, D-129, D-130, D-134.
 
 ### Blockers
 
-- **Docker group membership** (two gates) and **repository settings** (Dependabot write access).
+- **None in the environment any more** — the docker group is the user's; `newgrp` bridges the session.
 
 ### Session artifacts
 
-- `agent/requirements-dev.txt` (pytest-timeout 2.4.0) — `dac0c19`; log `/tmp/to24.txt`.
+- `AGENTS.md` (green sweep result, `newgrp` recipe, pg-smoke's independence); logs
+  `/tmp/fv-all-green.log`, `/tmp/pgsmoke2.txt`, `/tmp/repro.sh` (the migration isolation).
 
 ### Failure attribution
 
-- No failure this session. Worth naming why: the three bumps were each verified by the measure that
-  actually moves in that plugin (coverage number for cov, bound-and-finish for timeout), which is the
-  practice S333–S337 were building.
+- **Layer 3 (execution environment), diagnosed rather than assumed.** Two failures had the same surface
+  ("permission denied", "connection terminated") and neither was about the code: one was a group set
+  frozen at process start, the other a container's first start. Both were separated from code defects by
+  reproducing the inner step in isolation — the migrations on a hand-started PG — which is the difference
+  between "it failed" and "it failed because of X".
 
 ### VERIFY
 
-- `scripts/run-agent-tests.sh -q` → exit 0, no timeout warnings; `pip show pytest-timeout` → 2.4.0.
-- `agent/requirements-dev.txt` → 9.0.3 / 7.1.0 / 2.4.0; `scripts/lint-agent.sh` → exit 0.
-- CI on `dac0c19` → **CI · Lint · CodeQL · Dependency Graph all success**.
-- `make graph-check` → `✓ All invariants pass`; tree clean.
+- `getent group docker` → `docker:x:968:unccllin`; `id -nG` in the inherited shell → no docker (expected).
+- `printf 'docker ps\nexit\n' | newgrp docker` → `IN_GROUP` + `DOCKER_USABLE`.
+- `agent/.venv/bin/python -m pytest scripts/test_tls_floor.py -q` under newgrp → **2 passed**.
+- `make pg-smoke` under newgrp → **66 PASS / 0 FAIL**, `[OK] pg-smoke passed`.
+- `make -k full-verify` under newgrp → **FV_EXIT=0**, `✓ All invariants pass`, `RESULT: PASS (all E2E
+  tests succeeded)`, `PASS: 57 FAIL: 0 SKIP: 4`, `All artifacts present and non-empty`.
 
 ### Next session opening
 
-Add this login session to the `docker` group (`sudo usermod -aG docker $USER`, then re-login) and run
-`make -k full-verify` — that unblocks `test_tls_floor.py` and `pg-smoke`, the last two gates in the
-repository that cannot run here.
+Confirm the first CI-style sweep from a genuinely fresh login session (not `newgrp`) so the group is in
+the session itself, then fix `Dependabot Updates`' write access so the three open dependency PRs stop
+going stale.
 
 ---
 

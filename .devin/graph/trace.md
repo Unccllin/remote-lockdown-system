@@ -7221,3 +7221,92 @@ Add this login session to the `docker` group (`sudo usermod -aG docker $USER`, t
 repository that cannot run here.
 
 ---
+
+---
+
+## Session 339 — 2026-11-20 (docker access landed: both blocked gates green, sweep fully green)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `getent group docker` (`docker:x:968:unccllin`), the socket (`root:docker 0660`) and
+  `sudo -n` — to separate "the group change did not land" from "this process has not re-read it".
+- **Read**: `scripts/run-pg-smoke.sh` — `docker run … -p 55432:5432 postgres:16-alpine`, `pg_isready`
+  inside the container, then `node src/db/migrate.js` with `DB_SSL=false` — before diagnosing the first
+  `pg-smoke` failure as a migration problem.
+- **Read**: `scripts/test_tls_floor.py:61` — the skip condition is `shutil.which("docker") and
+  which("openssl")`, which is why a *present CLI with an unreachable daemon* fails rather than skips.
+
+**Findings**: the operator had run `usermod`; the change was real, and the only thing standing between the
+tree and a green sweep was that no process of mine had re-read the group database.
+
+### Fog cleared
+
+- **The group change is real and the process boundary is the reason `docker ps` still failed**:
+  `getent group docker` lists the user, `id -nG` in the inherited shell does not. `sg` is not packaged on
+  this host; `newgrp docker` is, and `printf 'docker ps\nexit\n' | newgrp docker` proved `DOCKER_USABLE`.
+- **`test_tls_floor.py` is green for the first time in this arc**: **2 passed** — the static Caddyfile
+  range check *and* a real TLS terminator refusing 1.0/1.1.
+- **`pg-smoke` passes: 66 PASS / 0 FAIL.** Its first run failed with
+  `migrations failed — Connection terminated unexpectedly`; that was **not** accepted as a fluke: the
+  migrations were reproduced against a hand-started `postgres:16` on another port (**19/19 applied, exit
+  0**), which isolated the failure to the container's first start, and the real target then passed.
+- **The whole sweep is green**: `make -k full-verify` under `newgrp docker` → **FV_EXIT=0**, with
+  `verify-env` now **57 PASS / 0 FAIL / 4 SKIP** (the docker check moved from SKIP to PASS) and every
+  script suite green including `test_tls_floor` 2/2.
+- **AGENTS.md corrected**: the paragraph that documented "the sweep's only red is the docker socket" now
+  records the green result, states that `pg-smoke` is *not* part of `full-verify`, and gives the
+  `newgrp docker` recipe — including why `usermod` alone does not help an existing process.
+
+### Fog remaining
+
+- **A fresh login session is still the durable fix**; `newgrp` is the per-command workaround. Until the
+  next login, every docker-dependent command must be wrapped, and anything spawned from an old session
+  still sees the old group set.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` (PRs #1/#2 went
+  stale because of it).
+- **The weekly audit's `cron` path is still unexercised**; the pyright advisory pair stands.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, and the four ledger items
+  (all hardware- or credential-blocked).
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- **None in the environment any more** — the docker group is the user's; `newgrp` bridges the session.
+
+### Session artifacts
+
+- `AGENTS.md` (green sweep result, `newgrp` recipe, pg-smoke's independence); logs
+  `/tmp/fv-all-green.log`, `/tmp/pgsmoke2.txt`, `/tmp/repro.sh` (the migration isolation).
+
+### Failure attribution
+
+- **Layer 3 (execution environment), diagnosed rather than assumed.** Two failures had the same surface
+  ("permission denied", "connection terminated") and neither was about the code: one was a group set
+  frozen at process start, the other a container's first start. Both were separated from code defects by
+  reproducing the inner step in isolation — the migrations on a hand-started PG — which is the difference
+  between "it failed" and "it failed because of X".
+
+### VERIFY
+
+- `getent group docker` → `docker:x:968:unccllin`; `id -nG` in the inherited shell → no docker (expected).
+- `printf 'docker ps\nexit\n' | newgrp docker` → `IN_GROUP` + `DOCKER_USABLE`.
+- `agent/.venv/bin/python -m pytest scripts/test_tls_floor.py -q` under newgrp → **2 passed**.
+- `make pg-smoke` under newgrp → **66 PASS / 0 FAIL**, `[OK] pg-smoke passed`.
+- `make -k full-verify` under newgrp → **FV_EXIT=0**, `✓ All invariants pass`, `RESULT: PASS (all E2E
+  tests succeeded)`, `PASS: 57 FAIL: 0 SKIP: 4`, `All artifacts present and non-empty`.
+
+### Next session opening
+
+Confirm the first CI-style sweep from a genuinely fresh login session (not `newgrp`) so the group is in
+the session itself, then fix `Dependabot Updates`' write access so the three open dependency PRs stop
+going stale.
+
+---
