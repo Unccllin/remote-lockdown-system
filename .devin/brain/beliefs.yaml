@@ -4131,12 +4131,13 @@ beliefs:
     Measured: 12 concurrent writers kept 6-8 of 12 beliefs without the lock in 5/5 rounds, 12/12 with
     it. scripts/test_brain.py pins it.'
   domain: tooling/brain
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S342: scripts/brain.py store_lock; docs/artifacts/s342-brain-store-lock.txt'
+  status: confirmed
+  evidence_level: emulated
+  provenance: scripts/test_brain.py (16 checks) + test_store_lock_excludes_a_second_process; docs/artifacts/s342-brain-store-lock.txt,
+    s344-store-lock-exclusion.txt
   source: ''
   asserted: '2026-11-20'
-  last_verified: null
+  last_verified: '2026-11-20'
   commit_ref: null
   supersedes: null
   superseded_by: null
@@ -4149,12 +4150,13 @@ beliefs:
     hang forever (measured: timeout 20 -> exit 124). Both stores also refuse to run when neither fcntl
     nor msvcrt.locking exists, rather than silently taking no lock.'
   domain: tooling/memory
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S343: scripts/memory.py store_lock; docs/artifacts/s343-memory-store-lock.txt'
+  status: confirmed
+  evidence_level: emulated
+  provenance: scripts/test_memory.py::test_consolidate_does_not_deadlock_on_its_internal_index_rebuild;
+    docs/artifacts/s343-memory-store-lock.txt (timeout 20 -> exit 124 without reentrancy)
   source: ''
   asserted: '2026-11-20'
-  last_verified: null
+  last_verified: '2026-11-20'
   commit_ref: null
   supersedes: null
   superseded_by: null
@@ -4168,12 +4170,32 @@ beliefs:
     are independent copies. Its teeth are LOCK_EX -> LOCK_SH, which leaves a working lock that excludes
     nobody.'
   domain: tooling/testing
-  status: proposed
-  evidence_level: assumed
-  provenance: 'S344: scripts/test_memory.py::test_store_lock_excludes_a_second_process; docs/artifacts/s344-store-lock-exclusion.txt'
+  status: confirmed
+  evidence_level: emulated
+  provenance: 'scripts/test_memory.py::test_store_lock_excludes_a_second_process (LOCK_SH teeth: 0.7085s
+    overlap); docs/artifacts/s344-store-lock-exclusion.txt'
   source: ''
   asserted: '2026-11-20'
-  last_verified: null
+  last_verified: '2026-11-20'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-191
+  statement: 'msvcrt.locking on a 0-byte lock file opened ''a+'' excludes a second process on Windows,
+    measured on MOLE (Win10.0.26300, Python 3.14.8): with process A holding store_lock for 0.8s, process
+    B entered +0.5568s after A released, while the lock-bypassed control entered -0.5484s BEFORE it. 20
+    concurrent memory.py capture through the real CLI kept 20/20. The Windows wait is coarse (~1s LK_LOCK
+    retries), so a blocked writer can wait about a second while consolidate holds the lock.'
+  domain: tooling/memory
+  status: confirmed
+  evidence_level: hardware
+  provenance: docs/artifacts/s345-store-lock-windows.txt (MOLE 192.168.1.249, win32, msvcrt.locking, +0.5568s
+    EXCLUDED vs -0.5484s control)
+  source: ''
+  asserted: '2026-11-20'
+  last_verified: '2026-11-20'
   commit_ref: null
   supersedes: null
   superseded_by: null

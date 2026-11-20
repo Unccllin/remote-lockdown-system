@@ -7904,3 +7904,100 @@ failed again; if FRANKENSTEIN is reachable, run two concurrent `brain.py assert`
 `msvcrt.locking` excludes — the only remaining unproven half of the store lock.
 
 ---
+
+---
+
+## Session 345 — 2026-11-20 (MOLE was up, so the last unproven half got measured instead of carried)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: S344's closing blocker — "Windows `msvcrt.locking` exclusion is unproven; the lab server
+  answered HTTP 000". The user's report that MOLE is active makes that blocker testable, so the first
+  action was to find *how* MOLE is reached, not to write a test.
+- **Read**: `docs/artifacts/s315-bssid-probe-hardware.txt` and `s281-*` — the established access path is
+  **OpenSSH** (`labadmin@192.168.1.249`, `~/.ssh/lockdown_lab_ed25519`), which is how both earlier
+  Windows probes were run. No new mechanism invented.
+- **Read**: `scripts/memory.py`'s imports to confirm it is **stdlib-only** (no PyYAML) — that is what
+  makes it transferable to a Windows box without provisioning a virtualenv there.
+- **Read**: S344's `TEST_DRIVER` and the exclusion test, so the Windows run measures the same protocol
+  rather than a new one.
+
+**Finding**: the recorded blocker was reachability, not design, and MOLE was reachable. The one claim
+that had never executed anywhere — `msvcrt.locking` on a **0-byte** lock file opened `a+` — is exactly
+the kind of thing a POSIX host cannot even approximate.
+
+### Fog cleared
+
+- **`msvcrt.locking` excludes, measured on MOLE** (Windows 10.0.26300, Python 3.14.8, `platform: win32`,
+  `primitive: msvcrt.locking`): with process A holding `store_lock()` for 0.8 s, process B entered
+  **+0.5568 s AFTER** A released — **EXCLUDED**.
+- **The control proves the measurement is not the harness.** The same protocol with only `with
+  store.store_lock():` replaced by `if True:` gives **−0.5484 s NOT EXCLUDED**. Same machine, same
+  orchestrator, same timestamps — the sign of the gap is the lock.
+- **A 0-byte lock file is lockable on Windows**, which was the specific doubt: `msvcrt.locking` locks
+  one byte from the current position and the file is empty on first creation. Both processes returned
+  rc=0, so the `a+` + lock-byte-0 shape needs no size fix-up.
+- **End-to-end on the target platform**: 20 concurrent `memory.py capture` through the real CLI on
+  MOLE kept **20/20** captures, all exit 0, lock file created — the `@mutating` decorator works on
+  Windows, not just the primitive underneath it.
+- **A learned property that no amount of Linux testing would have produced**: the Windows wait is
+  **coarse**. B entered ~0.55 s after release because `LK_LOCK` retries at ~1 s intervals. Correctness
+  is unaffected; latency is — and it matters because `consolidate` holds the lock for its entire run,
+  so a concurrent `capture` on Windows waits seconds, not milliseconds. Recorded in `AGENTS.md`.
+
+### Fog remaining
+
+- **Nothing is left unproven about the locks themselves.** What remains adjacent:
+  - the coarse Windows retry means a long `consolidate` blocks `capture` for its duration — acceptable
+    for CLI use, but if the fleet ever runs these automatically in parallel it is worth a timeout or a
+    shorter critical section;
+  - the lab device keeps the probe scripts in `C:\Users\labadmin\lockdown-lock-test` so the run can be
+    repeated; that directory is not managed by anything and will rot silently if MOLE is reimaged.
+- **Unchanged and unrelated**: `Dependabot Updates` still has not run since `fdfceab` (checked again
+  in S344 — latest 2026-11-20T05:03Z); the weekly audit `cron` path; the four open ledger items
+  (hardware/credential-blocked).
+
+### Debt items closed
+
+None. This closed a verification gap; the ledger tracks work items, not proof.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- None from this session. The Windows blocker from S344 is cleared.
+
+### Session artifacts
+
+- `docs/artifacts/s345-store-lock-windows.txt` — the three measured runs, the control, and the two
+  properties only a Windows run could show.
+- `AGENTS.md` — the lock section now states both branches are measured on their own platform, with the
+  MOLE numbers and the coarse-retry caveat.
+
+### Failure attribution
+
+- **Layer 5 (state management)**: S344 closed with a blocker framed as an access problem, which was
+  correct but left the item parked. Nothing in the record said *how* to reach the Windows host, so the
+  next session had to rediscover the SSH path from `s315-*`. **When a blocker is access-shaped, write
+  the access path next to it** — the artifact that proves it is the artifact that documents how to
+  repeat it.
+
+### VERIFY
+
+- MOLE reachable: `ssh labadmin@192.168.1.249` → `MOLE`, `Microsoft Windows [Version 10.0.26300.9974]`,
+  `C:\Python314\python.exe` → Python 3.14.8.
+- Exclusion: **+0.5568 s (EXCLUDED)**, exit 0. Control: **−0.5484 s (NOT EXCLUDED)**, exit 1 — the
+  control's exit code is asserted to be 1, so a passing control cannot masquerade as success.
+- End-to-end: 20 writers, all exit 0, 20/20 captures kept, lock file present.
+- Local gates unchanged by this session (no repo code touched except docs): `make graph-check` all
+  invariants, `make verify-env` 56 PASS / 0 FAIL / 5 SKIP.
+
+### Next session opening
+
+Nothing in the store-lock thread is open; if the fleet ever runs `capture`/`assert` automatically in
+parallel, revisit the coarse Windows `LK_LOCK` retry, which makes a blocked writer wait ~1 s per
+attempt while `consolidate` holds the lock.
+
+---

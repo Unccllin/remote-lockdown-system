@@ -53,48 +53,42 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 344 — 2026-11-20 (the locks were proven by their results, not by excluding anyone)
+## Latest session: 345 — 2026-11-20 (MOLE was up, so the last unproven half got measured instead of carried)
 
 ### Fog cleared
 
-- **The lock is now tested as a primitive, parametrised over both scripts.** Process A takes
-  `store_lock()`, stamps `time.monotonic()`, holds 0.8 s, stamps again; process B starts once A is
-  inside and stamps its own entry. The assertion is `B.entry >= A.release`, so a lock that excludes
-  nobody fails with a *measured gap* rather than a vague failure.
-- **The teeth are the right mutation, not just a plausible one.** Replacing `LOCK_EX` with `LOCK_SH`
-  leaves a lock that still acquires and still releases — nothing crashes, it simply stops being
-  exclusive. Result: both parametrisations fail with
-  `the second process entered the lock 0.7085s BEFORE the holder released it`. Restored → 2 passed.
-  A test that only fired when the lock was *absent* would not have caught a lock that was present,
-  working, and shared.
-- **The Windows opening is blocked on access, and now says so with evidence instead of staying an
-  open question.** The lab server that fronts FRANKENSTEIN answered **HTTP 000** (no connection), so
-  the Windows branch cannot be exercised this session: that box has no git and no shared filesystem,
-  and the LAN port-proxy does not survive a WSL restart. This is a named, dated block rather than a
-  vague "not done".
-- **S341's Dependabot question has not been answered by GitHub yet, and the reason is scheduling.**
-  The four most recent `Dependabot Updates` runs are 2026-11-20T05:03Z, 11-19T17:00Z, 11-17T08:24Z,
-  11-12T15:43Z — **all older than the fix** (`fdfceab`, committed ~08:10Z on the 20th). So no run has
-  tested the overrides. The current best evidence remains indirect: `npm audit` 0 in electron and
-  **0 open Dependabot alerts** (every alert transitioned to `fixed` on the push).
+- **`msvcrt.locking` excludes, measured on MOLE** (Windows 10.0.26300, Python 3.14.8, `platform: win32`,
+  `primitive: msvcrt.locking`): with process A holding `store_lock()` for 0.8 s, process B entered
+  **+0.5568 s AFTER** A released — **EXCLUDED**.
+- **The control proves the measurement is not the harness.** The same protocol with only `with
+  store.store_lock():` replaced by `if True:` gives **−0.5484 s NOT EXCLUDED**. Same machine, same
+  orchestrator, same timestamps — the sign of the gap is the lock.
+- **A 0-byte lock file is lockable on Windows**, which was the specific doubt: `msvcrt.locking` locks
+  one byte from the current position and the file is empty on first creation. Both processes returned
+  rc=0, so the `a+` + lock-byte-0 shape needs no size fix-up.
+- **End-to-end on the target platform**: 20 concurrent `memory.py capture` through the real CLI on
+  MOLE kept **20/20** captures, all exit 0, lock file created — the `@mutating` decorator works on
+  Windows, not just the primitive underneath it.
+- **A learned property that no amount of Linux testing would have produced**: the Windows wait is
+  **coarse**. B entered ~0.55 s after release because `LK_LOCK` retries at ~1 s intervals. Correctness
+  is unaffected; latency is — and it matters because `consolidate` holds the lock for its entire run,
+  so a concurrent `capture` on Windows waits seconds, not milliseconds. Recorded in `AGENTS.md`.
 
 ### Fog remaining
 
-- **`msvcrt.locking`'s exclusion is unproven.** The new test covers the POSIX path only. What is
-  needed is two concurrent `brain.py assert` (and `memory.py capture`) invocations on a Windows host;
-  the guard added in S343 means a *missing* primitive refuses to run, but a primitive that acquires
-  without excluding would still be silent.
-- **Dependabot's next scheduled run** is the measurement for S341's overrides. Nothing to do until it
-  happens; the correct read on a repeat failure is the updater's `explanation` field, not the log's
-  "write access" boilerplate.
-- **Pre-existing, untouched**: `stage_graph` is undecorated (it does not mutate the store today); the
-  `memory.py` / `test_memory.py` ruff findings (rule-id set identical to `HEAD`, verified); the
-  `.devin/brain/beliefs.yaml` style findings on a generated file; the weekly audit `cron` path; the
-  four open ledger items (hardware/credential-blocked).
+- **Nothing is left unproven about the locks themselves.** What remains adjacent:
+  - the coarse Windows retry means a long `consolidate` blocks `capture` for its duration — acceptable
+    for CLI use, but if the fleet ever runs these automatically in parallel it is worth a timeout or a
+    shorter critical section;
+  - the lab device keeps the probe scripts in `C:\Users\labadmin\lockdown-lock-test` so the run can be
+    repeated; that directory is not managed by anything and will rot silently if MOLE is reimaged.
+- **Unchanged and unrelated**: `Dependabot Updates` still has not run since `fdfceab` (checked again
+  in S344 — latest 2026-11-20T05:03Z); the weekly audit `cron` path; the four open ledger items
+  (hardware/credential-blocked).
 
 ### Debt items closed
 
-None. This closed a verification gap, which the ledger does not track.
+None. This closed a verification gap; the ledger tracks work items, not proof.
 
 ### Debt items still open
 
@@ -102,46 +96,38 @@ D-120, D-129, D-130, D-134.
 
 ### Blockers
 
-- **Windows lock verification**: blocked on reachability of the only Windows host (lab server
-  `192.168.1.43:3001` → HTTP 000 at 2026-11-20T13:19Z). Needs a session where that box is up and the
-  port-proxy has been re-created.
+- None from this session. The Windows blocker from S344 is cleared.
 
 ### Session artifacts
 
-- `scripts/test_memory.py` — `test_store_lock_excludes_a_second_process`, parametrised over
-  `memory.py` and `brain.py`; suite 49 → 51. Evidence:
-  `docs/artifacts/s344-store-lock-exclusion.txt`.
+- `docs/artifacts/s345-store-lock-windows.txt` — the three measured runs, the control, and the two
+  properties only a Windows run could show.
+- `AGENTS.md` — the lock section now states both branches are measured on their own platform, with the
+  MOLE numbers and the coarse-retry caveat.
 
 ### Failure attribution
 
-- **Layer 4 (verification feedback), and the mistake is mine from two sessions ago.** S342 and S343
-  both closed with "measured" language while asserting only outcomes; S343's own 12/12 negative result
-  is the proof that outcome tests are blind at low contention. The general lesson worth keeping:
-  **when the mechanism is a lock, test that it excludes — not that the data survived.** Data survival
-  is the *effect*, and the effect can be produced by luck at any concurrency level you happened to
-  try.
-- **Layer 2 (context provision)**: neither session's notes said which property was under test, so
-  "concurrency tests added" read as complete. The artifact now records what the primitive assertion is
-  and what mutation proves it.
+- **Layer 5 (state management)**: S344 closed with a blocker framed as an access problem, which was
+  correct but left the item parked. Nothing in the record said *how* to reach the Windows host, so the
+  next session had to rediscover the SSH path from `s315-*`. **When a blocker is access-shaped, write
+  the access path next to it** — the artifact that proves it is the artifact that documents how to
+  repeat it.
 
 ### VERIFY
 
-- `pytest scripts/test_memory.py -k excludes_a_second_process` → **2 passed** (memory, brain).
-- Teeth (`LOCK_EX` → `LOCK_SH` in both scripts) → **2 failed**, each naming the measured gap
-  (0.7085 s / 0.7045 s of overlap); restored → 2 passed. Both structures verified by `grep -c` before
-  and after, after S342's void teeth experiment.
-- `make test-scripts` (under `newgrp docker`) → **MAKE_EXIT=0**, 17 suites,
-  `scripts/test_memory.py` **51 passed**.
-- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**. `make graph-check` → all invariants pass.
-- `ruff` on the touched file → rule ids identical to `HEAD` (no new classes).
-- Reachability: `curl http://192.168.1.43:3001/api/health` → **HTTP 000**. Dependabot run list →
-  latest 2026-11-20T05:03Z, older than `fdfceab`.
+- MOLE reachable: `ssh labadmin@192.168.1.249` → `MOLE`, `Microsoft Windows [Version 10.0.26300.9974]`,
+  `C:\Python314\python.exe` → Python 3.14.8.
+- Exclusion: **+0.5568 s (EXCLUDED)**, exit 0. Control: **−0.5484 s (NOT EXCLUDED)**, exit 1 — the
+  control's exit code is asserted to be 1, so a passing control cannot masquerade as success.
+- End-to-end: 20 writers, all exit 0, 20/20 captures kept, lock file present.
+- Local gates unchanged by this session (no repo code touched except docs): `make graph-check` all
+  invariants, `make verify-env` 56 PASS / 0 FAIL / 5 SKIP.
 
 ### Next session opening
 
-Check whether `Dependabot Updates` has run since `fdfceab` and read its `explanation` field if it
-failed again; if FRANKENSTEIN is reachable, run two concurrent `brain.py assert` calls there to prove
-`msvcrt.locking` excludes — the only remaining unproven half of the store lock.
+Nothing in the store-lock thread is open; if the fleet ever runs `capture`/`assert` automatically in
+parallel, revisit the coarse Windows `LK_LOCK` retry, which makes a blocked writer wait ~1 s per
+attempt while `consolidate` holds the lock.
 
 ---
 
