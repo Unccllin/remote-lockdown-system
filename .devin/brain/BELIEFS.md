@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-20 16:05:42 — 189 beliefs
+Generated: 2026-11-20 16:23:14 — 190 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -502,6 +502,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-126 | confirmed | code-read | A green Semgrep gate does not mean the code was scanned: the OSS C parser cannot read EDK II C, so 17 files in this repo yield no findings at all and are indistinguishable from clean ones in the report. |
+
+## tooling/testing
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-190 | proposed | assumed | An outcome test cannot prove a lock works: S343 measured 12 concurrent memory captures producing 12/12 correct results while the lost-update race was still present, and only 40 writers exposed it. The store locks are therefore pinned by a primitive-level test (process A holds store_lock, process B must not enter until release) parametrised over both memory.py and brain.py, whose store_lock bodies are independent copies. Its teeth are LOCK_EX -> LOCK_SH, which leaves a working lock that excludes nobody. |
 
 ## verification
 
