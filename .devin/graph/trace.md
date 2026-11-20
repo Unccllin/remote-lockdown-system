@@ -6487,3 +6487,99 @@ and the sweep's recorded numbers predate all of it — with the known docker-soc
 `test_tls_floor.py` as the one expected failure.
 
 ---
+
+---
+
+## Session 330 — 2026-11-19 (the sweep re-measured, and the one-command story is not one command)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `Makefile`'s `full-verify` chain (`graph-check lint test test-e2e verify-env check-artifacts`)
+  and the documented expectation that `scripts/test_tls_floor.py` fails here because `/var/run/docker.sock`
+  is unreadable from this login session.
+- **Read**: AGENTS.md's sweep paragraph — dated S307 and carrying server 882 / agent 976 / worker 490,
+  which twenty sessions of gate changes had made stale.
+- **Read**: the S307 lesson in this repo's own record: `make` aborts at the failing target, so three steps
+  never ran and had to be run by hand.
+
+**Findings**: the sweep is not a single command in practice on this host, and its recorded numbers were
+three sessions behind even before this arc's gate work.
+
+### Fog cleared
+
+- **The whole tree was re-measured** (log: `/tmp/full-verify-s330.log`): graph-check ✓ ·
+  `make lint` ✓ **including the new `lint-graph`** (`All checks passed! / [OK] ruff check clean`) ·
+  server **885** (52 suites) · dashboard **272** (30 files) · worker **495** (4 files) ·
+  electron **30** (3 suites) · agent **990** collected · **16 script suites** (15 green; `test_tls_floor`
+  1 failed/1 passed; `worker_update` 5 skipped).
+- **The three steps the abort skipped were run by hand and pass**: `test-e2e` **14/14** with
+  `RESULT: PASS`, `verify-env` **56 PASS / 0 FAIL / 5 SKIP**, `check-artifacts` all present.
+- **AGENTS.md now carries these numbers** (dated S330) instead of the S307 figures, and states plainly
+  that the chain stops at `test-scripts` on the tls-floor red, so those three ran separately.
+- **`make -k full-verify` is documented as the one-run option, and the claim was tested** rather than
+  assumed: on a throwaway Makefile, `make all` stops at the failing prerequisite while `make -k all` runs
+  the rest and reports "Target 'all' not remade because of errors".
+
+### Fog remaining
+
+- **The only red is environmental and unchanged**: `test_tls_floor.py` needs a readable
+  `/var/run/docker.sock`; the socket is `root:docker 0660`, this login session is in no docker group, and
+  `sudo -n` needs a password. Fixing it is an operator action (add the group, start a new session).
+- **Four gates were not re-measured**: `make pg-smoke` (real PostgreSQL), `make sast` (semgrep absent
+  locally), `make firmware-host-tests`, and `make test-coverage` across all five components. They keep
+  their older dates in AGENTS.md.
+- **`Dependabot Updates` still fails** with `write access to the repository is required` (same text as
+  2026-11-12) — a repository setting, not a code change.
+- **The weekly audit's `cron` path is still unexercised**, and the pyright `reportMissingImports` pair on
+  the runtime `sys.path` import remains an advisory.
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, and the `harness-template/`
+  fork left as the owner's decision (S329).
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **`/var/run/docker.sock` is unreadable from this login session**, so one gate cannot run and the sweep
+  cannot complete in one command here. Not a code defect.
+
+### Session artifacts
+
+- `AGENTS.md` sweep paragraph re-dated to S330 with the measured figures and the `-k` note.
+- `/tmp/full-verify-s330.log` (full sweep), `/tmp/e2e-s330.log`, `/tmp/env-s330.log`, `/tmp/art-s330.log`.
+- CI evidence: the `-k` behaviour was proven on a throwaway Makefile, not asserted.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback) — the sweep's own documentation was the defect.** "Run `make
+  full-verify`" reads as one complete report; on this host it stops one target in and silently omits
+  three steps, which is the same shape as S318–S321 applied to a *command* rather than a check: the
+  report described less than it appeared to. The fix is the two-line paragraph: state what the chain does
+  on this host, and give `-k` as the alternative that actually reports everything.
+- **Layer 3 (execution environment)**: the docker socket is the single environmental limit, and it is
+  re-stated with the evidence (`root:docker 0660`, no group membership, `sudo -n` unavailable) rather
+  than as folklore.
+
+### VERIFY
+
+- `make full-verify` → `make: *** [test-scripts] Error 1`, `FULL_VERIFY_EXIT=2` (make's code for a failed
+  recipe); every target before it passed.
+- `make test-e2e` → **14 passed, 14 total**, `RESULT: PASS (all E2E tests succeeded)`, exit 0.
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**, exit 0 · `make check-artifacts` → all present, exit 0.
+- `scripts/run-agent-tests.sh --collect-only` → **990** collected.
+- `make -k` proven on a synthetic Makefile: without it the second target never runs; with it, it does.
+- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
+
+### Next session opening
+
+Run `make -k full-verify` once, end to end, so the sweep produces a single complete report in this
+environment — confirming in practice what S330 documented, and leaving only the docker-socket red.
+
+---

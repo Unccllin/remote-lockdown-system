@@ -426,10 +426,13 @@ bash -n scripts/*.sh && bash -n .devin/orchestration/orchestrator.sh
 # On this host its only red is scripts/test_tls_floor.py, which needs a readable
 # /var/run/docker.sock (this login session is not in the `docker` group; `sudo -n` is
 # unavailable). That test is deliberately not softened to a SKIP — a gate that cannot run
-# has not passed. Measured 2026-11-19 (S307): server 882 (52 suites), agent 976,
-# dashboard 272 (30 files), worker 490, electron 30, API E2E 14, verify-env 56 PASS /
-# 0 FAIL / 5 SKIP. The chain stops at test-scripts on the tls-floor red, so test-e2e
-# (14/14), verify-env and check-artifacts were run separately by hand and passed.
+# has not passed. Measured 2026-11-19 (S330): server 885 (52 suites), agent 990,
+# dashboard 272 (30 files), worker 495, electron 30, API E2E 14, verify-env 56 PASS /
+# 0 FAIL / 5 SKIP, 16 script suites (15 green, tls-floor 1 failed/1 passed, worker-update
+# 5 skipped), and lint now includes lint-graph. The chain STOPS at test-scripts on the
+# tls-floor red — `make` exits 2 and `test-e2e`, `verify-env` and `check-artifacts` never
+# run — so those three were executed separately and passed. Use `make -k full-verify` when
+# you want one run to report everything instead of stopping at the known red.
 make full-verify
 
 # Full environment + artifact verification (63 checks)

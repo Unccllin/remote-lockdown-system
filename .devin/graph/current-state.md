@@ -53,32 +53,38 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 329 — 2026-11-19 (a stale fork documented, and a worktree I left behind)
+## Latest session: 330 — 2026-11-19 (the sweep re-measured, and the one-command story is not one command)
 
 ### Fog cleared
 
-- **`harness-template/` now says what it is** (`7c7db09`): a scaffold, not the engine; nothing here runs
-  it; a table of its three files against their live counterparts; the consequence of the drift (missing
-  S326/S327 ledger checks); and the two honest options — delete it, or re-sync it when it is actually used
-  to bootstrap a project. Deleting something named "template" is the owner's call, so the note is the
-  action and the choice stays open.
-- **The orphaned worktree is gone**: `git worktree remove /tmp/pre304 --force` + `git worktree prune`;
-  `git worktree list` shows one worktree and `.git/worktrees/` is empty.
-- **CI is green** on `7c7db09`: `CI`, `Lint`, `CodeQL` all success. Tree clean, local == remote.
+- **The whole tree was re-measured** (log: `/tmp/full-verify-s330.log`): graph-check ✓ ·
+  `make lint` ✓ **including the new `lint-graph`** (`All checks passed! / [OK] ruff check clean`) ·
+  server **885** (52 suites) · dashboard **272** (30 files) · worker **495** (4 files) ·
+  electron **30** (3 suites) · agent **990** collected · **16 script suites** (15 green; `test_tls_floor`
+  1 failed/1 passed; `worker_update` 5 skipped).
+- **The three steps the abort skipped were run by hand and pass**: `test-e2e` **14/14** with
+  `RESULT: PASS`, `verify-env` **56 PASS / 0 FAIL / 5 SKIP**, `check-artifacts` all present.
+- **AGENTS.md now carries these numbers** (dated S330) instead of the S307 figures, and states plainly
+  that the chain stops at `test-scripts` on the tls-floor red, so those three ran separately.
+- **`make -k full-verify` is documented as the one-run option, and the claim was tested** rather than
+  assumed: on a throwaway Makefile, `make all` stops at the failing prerequisite while `make -k all` runs
+  the rest and reports "Target 'all' not remade because of errors".
 
 ### Fog remaining
 
-- **The fork still exists.** It is documented, not resolved: either delete `harness-template/` or re-sync
-  it from `.devin/graph/` the first time it bootstraps a project. A template that tracks its source needs
-  no disclaimer, which is why the README names that end state.
-- **`Dependabot Updates` fails with `write access to the repository is required`** — the same text as the
-  2026-11-12 run, before this session's dependency overrides, so it is a repository/permission condition
-  and not a change of mine. It is a setting only the owner can change.
-- **The weekly audit's `cron` path is still unexercised** (every run so far was dispatch).
-- **The pyright `reportMissingImports` pair** on the runtime `sys.path` import remains an advisory.
+- **The only red is environmental and unchanged**: `test_tls_floor.py` needs a readable
+  `/var/run/docker.sock`; the socket is `root:docker 0660`, this login session is in no docker group, and
+  `sudo -n` needs a password. Fixing it is an operator action (add the group, start a new session).
+- **Four gates were not re-measured**: `make pg-smoke` (real PostgreSQL), `make sast` (semgrep absent
+  locally), `make firmware-host-tests`, and `make test-coverage` across all five components. They keep
+  their older dates in AGENTS.md.
+- **`Dependabot Updates` still fails** with `write access to the repository is required` (same text as
+  2026-11-12) — a repository setting, not a code change.
+- **The weekly audit's `cron` path is still unexercised**, and the pyright `reportMissingImports` pair on
+  the runtime `sys.path` import remains an advisory.
 - Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
-  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, the docker-socket red for
-  `test_tls_floor.py`.
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, and the `harness-template/`
+  fork left as the owner's decision (S329).
 
 ### Debt items closed
 
@@ -91,41 +97,40 @@ signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy)
 
 ### Blockers
 
-- None. The four open items remain blocked on hardware or an operator credential.
+- **`/var/run/docker.sock` is unreadable from this login session**, so one gate cannot run and the sweep
+  cannot complete in one command here. Not a code defect.
 
 ### Session artifacts
 
-- `harness-template/README.md` (the drift table and the two options) — `7c7db09`. Plus the removal of the
-  `/tmp/pre304` worktree registration (repo state, not a commit).
+- `AGENTS.md` sweep paragraph re-dated to S330 with the measured figures and the `-k` note.
+- `/tmp/full-verify-s330.log` (full sweep), `/tmp/e2e-s330.log`, `/tmp/env-s330.log`, `/tmp/art-s330.log`.
+- CI evidence: the `-k` behaviour was proven on a throwaway Makefile, not asserted.
 
 ### Failure attribution
 
-- **Layer 5 (state management), twice, and both mine.** The `pre304` worktree was registered in S307 for a
-  one-off attribution, answered nothing, and stayed registered for twenty sessions; the template fork was
-  created before this arc began and drifted silently. Neither failed a gate, because neither is the kind
-  of thing a gate looks at — which is exactly why the sweep has to include "what did I leave behind" as
-  well as "what does the code say".
-- **A note on restraint**: the tempting move was to delete `harness-template/` because it is unreferenced.
-  That is an owner decision about a scaffold that may bootstrap another repo, and the evidence for deletion
-  (`grep` finds nothing) is weaker than the evidence against it (the name says "template"). Documenting the
-  drift and naming both options is the action that cannot be wrong.
+- **Layer 4 (verification feedback) — the sweep's own documentation was the defect.** "Run `make
+  full-verify`" reads as one complete report; on this host it stops one target in and silently omits
+  three steps, which is the same shape as S318–S321 applied to a *command* rather than a check: the
+  report described less than it appeared to. The fix is the two-line paragraph: state what the chain does
+  on this host, and give `-k` as the alternative that actually reports everything.
+- **Layer 3 (execution environment)**: the docker socket is the single environmental limit, and it is
+  re-stated with the evidence (`root:docker 0660`, no group membership, `sudo -n` unavailable) rather
+  than as folklore.
 
 ### VERIFY
 
-- `grep -rn harness-template` (excluding the directory itself) → nothing outside `.git/`; the statement in
-  the new README is itself checkable.
-- `harness-template/graph_assert.py` vs `.devin/graph/graph_assert.py` → **640 vs 1314** lines;
-  `assert_open_debt_list_matches_ledger` and `assert_claimed_closures_are_real` absent from the fork.
-- `git worktree list` → one worktree (`e0dc669 [master]`); `.git/worktrees/` → empty.
-- `make graph-check` → `✓ All invariants pass`; tree clean; local == remote before and after.
-- CI on `7c7db09` → **CI success · Lint success · CodeQL success**.
+- `make full-verify` → `make: *** [test-scripts] Error 1`, `FULL_VERIFY_EXIT=2` (make's code for a failed
+  recipe); every target before it passed.
+- `make test-e2e` → **14 passed, 14 total**, `RESULT: PASS (all E2E tests succeeded)`, exit 0.
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**, exit 0 · `make check-artifacts` → all present, exit 0.
+- `scripts/run-agent-tests.sh --collect-only` → **990** collected.
+- `make -k` proven on a synthetic Makefile: without it the second target never runs; with it, it does.
+- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
 
 ### Next session opening
 
-Re-run `make full-verify` end to end: twenty sessions have added or changed gates (`lint-graph` is now in
-`make lint`, the SAST exceptions changed, the dependency overrides landed, the audit gained a weekly job),
-and the sweep's recorded numbers predate all of it — with the known docker-socket red for
-`test_tls_floor.py` as the one expected failure.
+Run `make -k full-verify` once, end to end, so the sweep produces a single complete report in this
+environment — confirming in practice what S330 documented, and leaving only the docker-socket red.
 
 ---
 
