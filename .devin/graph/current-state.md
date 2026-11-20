@@ -53,37 +53,33 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 339 — 2026-11-20 (docker access landed: both blocked gates green, sweep fully green)
+## Latest session: 340 — 2026-11-20 (the "flaky" worker test was a real ordering bug)
 
 ### Fog cleared
 
-- **The group change is real and the process boundary is the reason `docker ps` still failed**:
-  `getent group docker` lists the user, `id -nG` in the inherited shell does not. `sg` is not packaged on
-  this host; `newgrp docker` is, and `printf 'docker ps\nexit\n' | newgrp docker` proved `DOCKER_USABLE`.
-- **`test_tls_floor.py` is green for the first time in this arc**: **2 passed** — the static Caddyfile
-  range check *and* a real TLS terminator refusing 1.0/1.1.
-- **`pg-smoke` passes: 66 PASS / 0 FAIL.** Its first run failed with
-  `migrations failed — Connection terminated unexpectedly`; that was **not** accepted as a fluke: the
-  migrations were reproduced against a hand-started `postgres:16` on another port (**19/19 applied, exit
-  0**), which isolated the failure to the container's first start, and the real target then passed.
-- **The whole sweep is green**: `make -k full-verify` under `newgrp docker` → **FV_EXIT=0**, with
-  `verify-env` now **57 PASS / 0 FAIL / 4 SKIP** (the docker check moved from SKIP to PASS) and every
-  script suite green including `test_tls_floor` 2/2.
-- **AGENTS.md corrected**: the paragraph that documented "the sweep's only red is the docker socket" now
-  records the green result, states that `pg-smoke` is *not* part of `full-verify`, and gives the
-  `newgrp docker` recipe — including why `usermod` alone does not help an existing process.
+- **Root cause fixed, not papered over**: `newestFirst()` breaks ties by array index (the KV append
+  order), so a later-appended record always wins; applied to the device-commands list and the
+  BIOS-password list, which had the same latent defect. The third similar sort was already correct (it
+  sorts ascending and takes the last element).
+- **The regression test is proven to have teeth**: with the fix `1 passed`; with the fix stashed
+  `1 failed — expected [ 'tie-older', 'tie-newer' ] to deeply equal [ 'tie-newer', 'tie-older' ]`. It
+  seeds two commands at a fixed identical `created_at`, so the collision is deterministic, and it also
+  asserts `limit=1` returns the newest (the slice happens after the sort, so a bad tie-break could drop
+  the newest command from the page entirely).
+- **Gates**: worker suite **496 passed** (was 495 + the new case), `tsc --noEmit` clean.
+- **CI is green** on `e1b5b72`: `CI`, `Lint`, `CodeQL`.
+- **Beyond the test**: any consumer of that endpoint could read a stale command as the newest — including
+  the dashboard's command list — so this is a product fix, not a test fix.
 
 ### Fog remaining
 
-- **A fresh login session is still the durable fix**; `newgrp` is the per-command workaround. Until the
-  next login, every docker-dependent command must be wrapped, and anything spawned from an old session
-  still sees the old group set.
-- **`Dependabot Updates`** still fails with `write access to the repository is required` (PRs #1/#2 went
-  stale because of it).
-- **The weekly audit's `cron` path is still unexercised**; the pyright advisory pair stands.
-- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
-  `RequestAccessAsync` (untested), the pre-push hook being per-clone state, and the four ledger items
-  (all hardware- or credential-blocked).
+- **The flake's absence is not yet proven over time** — the test is now deterministic by construction, so
+  the next few CI runs are the confirmation, not this one.
+- **Two other `.sort()` sites were not changed**: `worker.ts:913` (already correct by construction) and
+  `:2388` (artifacts list, sorts by `created_at` then `id`, so it already has a deterministic tie-break).
+- **`Dependabot Updates`** still needs the two owner settings (workflow write permission, auto-merge).
+- **The weekly audit's `cron` path** is still unexercised; the pyright advisory pair stands; the four open
+  ledger items remain hardware- or credential-blocked.
 
 ### Debt items closed
 
@@ -95,35 +91,36 @@ D-120, D-129, D-130, D-134.
 
 ### Blockers
 
-- **None in the environment any more** — the docker group is the user's; `newgrp` bridges the session.
+- None.
 
 ### Session artifacts
 
-- `AGENTS.md` (green sweep result, `newgrp` recipe, pg-smoke's independence); logs
-  `/tmp/fv-all-green.log`, `/tmp/pgsmoke2.txt`, `/tmp/repro.sh` (the migration isolation).
+- `serverless/worker.ts` (`newestFirst`), `serverless/worker.test.ts` (the deterministic collision test) —
+  `e1b5b72`. CI evidence: `CI`, `Lint`, `CodeQL` success.
 
 ### Failure attribution
 
-- **Layer 3 (execution environment), diagnosed rather than assumed.** Two failures had the same surface
-  ("permission denied", "connection terminated") and neither was about the code: one was a group set
-  frozen at process start, the other a container's first start. Both were separated from code defects by
-  reproducing the inner step in isolation — the migrations on a hand-started PG — which is the difference
-  between "it failed" and "it failed because of X".
+- **Layer 4 (verification feedback), in its most valuable form**: an intermittent red that was already
+  labelled "known flake" in this repo's own history. The label was the risk — a flake invites a retry, and
+  a retry hides a real ordering bug in a read path the dashboard and the agent both consume. Reading the
+  handler for the *only* 409 on that path, and reproducing the tie-break with a three-line Node
+  expression, turned "flaky test" into "wrong sort key" in a few minutes.
+- **Layer 2 (context provision)**: nothing documented that `created_at` is not a unique ordering key. The
+  helper now says so at the definition site, which is where the next person will look.
 
 ### VERIFY
 
-- `getent group docker` → `docker:x:968:unccllin`; `id -nG` in the inherited shell → no docker (expected).
-- `printf 'docker ps\nexit\n' | newgrp docker` → `IN_GROUP` + `DOCKER_USABLE`.
-- `agent/.venv/bin/python -m pytest scripts/test_tls_floor.py -q` under newgrp → **2 passed**.
-- `make pg-smoke` under newgrp → **66 PASS / 0 FAIL**, `[OK] pg-smoke passed`.
-- `make -k full-verify` under newgrp → **FV_EXIT=0**, `✓ All invariants pass`, `RESULT: PASS (all E2E
-  tests succeeded)`, `PASS: 57 FAIL: 0 SKIP: 4`, `All artifacts present and non-empty`.
+- Locally, before: `npx vitest run` → 495 passed, exit 0 (so it was never reproducible here).
+- CI `aae8ce8`: `Serverless Worker Tests` failed, `AssertionError: expected 409 to be 200`.
+- With the fix: `vitest run worker.test.ts -t "same-millisecond"` → 1 passed; full worker suite 496 passed;
+  `tsc --noEmit -p .` exit 0.
+- With the fix stashed: the same test fails with the older command first — the exact defect.
+- CI on `e1b5b72` → **CI success · Lint success · CodeQL success**.
 
 ### Next session opening
 
-Confirm the first CI-style sweep from a genuinely fresh login session (not `newgrp`) so the group is in
-the session itself, then fix `Dependabot Updates`' write access so the three open dependency PRs stop
-going stale.
+Watch the next two or three CI runs on `master` for `Serverless Worker Tests` — the ordering test is now
+deterministic, so a repeat of the 409 would mean a second, different cause worth its own investigation.
 
 ---
 

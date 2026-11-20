@@ -7310,3 +7310,91 @@ the session itself, then fix `Dependabot Updates`' write access so the three ope
 going stale.
 
 ---
+
+---
+
+## Session 340 — 2026-11-20 (the "flaky" worker test was a real ordering bug)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: the CI failure itself (`worker.test.ts > ADR-006 > release deletes both per-device keys`,
+  `expected 409 to be 200`) instead of trusting "flaky", and confirmed locally the suite passes
+  (495/495, with and without coverage) — so the intermittency was environmental, not a regression.
+- **Read**: `worker.ts:1231` — the only 409 on that path is `Cannot release a device in '<status>' state`,
+  i.e. the device was still `recovering` when release was called.
+- **Read**: `worker.test.ts:6077` `queuedCommandId()` — takes `commands[0].id` with no status/type filter,
+  and `worker.ts:1064` sorts that list newest-first by `created_at` alone.
+
+**Findings**: two commands created in the same millisecond compare equal, V8's sort is stable, so the
+**older** command sorts first — the test ACKs the flag instead of the unlock, the device never leaves
+`recovering`, and release answers 409. It only happens on runners fast enough to land both commands in one
+millisecond, which is why local runs never saw it.
+
+### Fog cleared
+
+- **Root cause fixed, not papered over**: `newestFirst()` breaks ties by array index (the KV append
+  order), so a later-appended record always wins; applied to the device-commands list and the
+  BIOS-password list, which had the same latent defect. The third similar sort was already correct (it
+  sorts ascending and takes the last element).
+- **The regression test is proven to have teeth**: with the fix `1 passed`; with the fix stashed
+  `1 failed — expected [ 'tie-older', 'tie-newer' ] to deeply equal [ 'tie-newer', 'tie-older' ]`. It
+  seeds two commands at a fixed identical `created_at`, so the collision is deterministic, and it also
+  asserts `limit=1` returns the newest (the slice happens after the sort, so a bad tie-break could drop
+  the newest command from the page entirely).
+- **Gates**: worker suite **496 passed** (was 495 + the new case), `tsc --noEmit` clean.
+- **CI is green** on `e1b5b72`: `CI`, `Lint`, `CodeQL`.
+- **Beyond the test**: any consumer of that endpoint could read a stale command as the newest — including
+  the dashboard's command list — so this is a product fix, not a test fix.
+
+### Fog remaining
+
+- **The flake's absence is not yet proven over time** — the test is now deterministic by construction, so
+  the next few CI runs are the confirmation, not this one.
+- **Two other `.sort()` sites were not changed**: `worker.ts:913` (already correct by construction) and
+  `:2388` (artifacts list, sorts by `created_at` then `id`, so it already has a deterministic tie-break).
+- **`Dependabot Updates`** still needs the two owner settings (workflow write permission, auto-merge).
+- **The weekly audit's `cron` path** is still unexercised; the pyright advisory pair stands; the four open
+  ledger items remain hardware- or credential-blocked.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `serverless/worker.ts` (`newestFirst`), `serverless/worker.test.ts` (the deterministic collision test) —
+  `e1b5b72`. CI evidence: `CI`, `Lint`, `CodeQL` success.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), in its most valuable form**: an intermittent red that was already
+  labelled "known flake" in this repo's own history. The label was the risk — a flake invites a retry, and
+  a retry hides a real ordering bug in a read path the dashboard and the agent both consume. Reading the
+  handler for the *only* 409 on that path, and reproducing the tie-break with a three-line Node
+  expression, turned "flaky test" into "wrong sort key" in a few minutes.
+- **Layer 2 (context provision)**: nothing documented that `created_at` is not a unique ordering key. The
+  helper now says so at the definition site, which is where the next person will look.
+
+### VERIFY
+
+- Locally, before: `npx vitest run` → 495 passed, exit 0 (so it was never reproducible here).
+- CI `aae8ce8`: `Serverless Worker Tests` failed, `AssertionError: expected 409 to be 200`.
+- With the fix: `vitest run worker.test.ts -t "same-millisecond"` → 1 passed; full worker suite 496 passed;
+  `tsc --noEmit -p .` exit 0.
+- With the fix stashed: the same test fails with the older command first — the exact defect.
+- CI on `e1b5b72` → **CI success · Lint success · CodeQL success**.
+
+### Next session opening
+
+Watch the next two or three CI runs on `master` for `Serverless Worker Tests` — the ordering test is now
+deterministic, so a repeat of the 409 would mean a second, different cause worth its own investigation.
+
+---
