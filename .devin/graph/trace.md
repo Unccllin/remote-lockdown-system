@@ -6908,3 +6908,90 @@ Ask the operator for docker group membership (then re-login) so `test_tls_floor.
 — the only two gates in this repository still blocked on the environment rather than on code.
 
 ---
+
+---
+
+## Session 335 — 2026-11-19 (PR #3, pytest 9.0.3: verified, rebased, green — awaiting a UI merge)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/requirements-dev.txt` — `pytest==8.2.0`, `pytest-cov==5.0.0`, `pytest-timeout==2.3.1`,
+  and the installed venv (8.2.0), before changing anything.
+- **Read**: PR #3 — it bumps **only** `pytest` to 9.0.3 and leaves both plugins, so plugin compatibility
+  with a major pytest bump was the question worth testing rather than the version number.
+- **Read**: `scripts/run-agent-tests.sh` — which interpreter the documented runner picks, so "the suite
+  passed on 9.0.3" would be a fact about the right interpreter (`run-agent-tests.sh --version` →
+  `pytest 9.0.3`).
+
+**Findings**: the risk in this PR is not pytest itself but two old plugins against it, and the only
+credible check is the suite.
+
+### Fog cleared
+
+- **pytest 9.0.3 works with the existing plugins, measured**: collection exit 0 with no plugin errors,
+  full suite **990 tests / 0 failures**, and the coverage gate **66.01% vs `fail_under` 59** — all on
+  9.0.3 while `pytest-cov 5.0.0` and `pytest-timeout 2.3.1` stayed put.
+- **The venv was restored to the pinned 8.2.0** afterwards, so local matches `requirements-dev.txt` until
+  the PR actually lands — leaving 9.0.3 in place would have made local and CI disagree.
+- **PR #3's only failing check was unrelated to pytest**: `SAST (Semgrep)` failed with
+  `47 findings … 2 unclassified, 1 stale exception`, dated **2026-11-17** — the pre-S312 baseline whose
+  exceptions S312 fixed on master. `gh pr update-branch 3` updated the branch and every check now passes,
+  including SAST, PostgreSQL Smoke and Load Smoke. `mergeable=MERGEABLE`.
+- **Why it cannot be merged from here**: one active branch ruleset (**"EFFORT"**) requires linear history,
+  signatures, CodeQL alert thresholds and coverage; **auto-merge is disabled repository-wide**
+  (`enablePullRequestAutoMerge`), and the only CLI remedies are `--auto` (unavailable) or `--admin`
+  (a bypass). The owner is merging it in the UI.
+
+### Fog remaining
+
+- **PR #3 is open and green**, awaiting that UI merge. After it lands the local venv must move to 9.0.3 to
+  keep local == pinned, and the next CI run on master should be watched for the `Lint Agent (ruff)` job,
+  which installs from that same file.
+- **`pytest-cov` (5.0.0 vs 7.1.0) and `pytest-timeout` (2.3.1 vs 2.4.0) are behind**, and were only proven
+  at their old versions. They deserve their own bump, separately — three bumps in one PR make a failure
+  ambiguous.
+- **The ruleset's CodeQL/signature requirements mean a CLI merge will keep being blocked** for anyone but
+  the owner; that is a repository setting, not a defect.
+- Unchanged: the two docker-blocked gates (`test_tls_floor.py`, `pg-smoke`), `Dependabot Updates` write
+  access, the weekly audit's unexercised `cron`, the pyright advisory pair, and the four open ledger items.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134 — all blocked on hardware or an operator credential.
+
+### Blockers
+
+- **A UI merge by the owner** for PR #3; **docker group membership** for the two blocked gates.
+
+### Session artifacts
+
+- Logs: `/tmp/pt9-collect.txt`, `/tmp/pt9-run.txt` (990 tests on 9.0.3), `/tmp/pt9-cov.txt` (66.01%).
+- No repo change: the venv was restored to 8.2.0 and the tree is clean.
+
+### Failure attribution
+
+- **Layer 2 (context provision)**: the PR looked like a routine bump, and the two things that actually
+  mattered — a stale SAST baseline on the branch and a ruleset that blocks non-owner merges — were only
+  visible by running the checks and reading the protection rules. A dependency PR's review is incomplete
+  without "what else does this branch carry" and "what does the branch policy require".
+
+### VERIFY
+
+- `scripts/run-agent-tests.sh --version` → `pytest 9.0.3` (the interpreter the suite actually used).
+- Full suite on 9.0.3 → 990 passed, 0 failures, exit 0; collection exit 0.
+- `pytest --cov --cov-fail-under=59` → `66.01%`, exit 0.
+- `gh pr checks 3` after the update → all pass, including SAST (which failed pre-rebase with the
+  2026-11-17 baseline); `gh pr view 3` → `mergeable=MERGEABLE`, `mergeStateStatus=BLOCKED` (ruleset).
+- `agent/.venv/bin/python -m pytest --version` → `pytest 8.2.0` (restored); `git status` clean.
+
+### Next session opening
+
+After PR #3 is merged in the UI, install `pytest==9.0.3` into `agent/.venv` so local matches the new pin,
+watch the first `CI`/`Lint` run on master, and only then take `pytest-cov` and `pytest-timeout` as their
+own PR so a failure points at one bump.
+
+---
