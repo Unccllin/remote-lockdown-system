@@ -7543,3 +7543,119 @@ Watch the next scheduled `Dependabot Updates` run and confirm it no longer fails
 rather than the log's "write access" boilerplate.
 
 ---
+
+---
+
+## Session 342 — 2026-11-20 (the belief store lost half its writes; now it is a store that can be trusted)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `.devin/skills/brain/SKILL.md` (the store contract, the evidence ladder, "edit via CLI, not
+  by hand") and `.devin/graph/current-state.md` (S341's opening — the race, deliberately left unfixed).
+- **Read**: `scripts/brain.py:52-101` — `atomic_write` (tmp + rename), `load_store`, `save_store`,
+  `gen_belief_id` (max-id + 1 from the store it just read) — and every `save_store` call site:
+  `cmd_init:133`, `cmd_assert:157`, `cmd_confirm:179`, `cmd_refute:228`. All four are the same
+  read-modify-write shape, and `cmd_refute` allocates an id *and* mutates a second record.
+- **Read**: `scripts/test_memory.py`'s `__main__` runner (the S150 lesson: a test file with no runner is
+  a no-op) and `scripts/test_prepush_secrets.py`'s hand-rolled `check()` style, before choosing which
+  convention a new script suite should follow.
+- **Read**: `Makefile:131-135` (`test-scripts` runs each `scripts/test_*.py` directly) and
+  `scripts/test_check_firmware_todos.py`'s `test_every_script_test_suite_has_a_runner`.
+
+**Finding**: `atomic_write` prevents a *torn* file and never prevented a *lost update*. Two `assert`
+calls both read the store, both compute the same next id from the same max, and both rename a complete
+file — the second discards the first belief while printing `[OK] Asserted B-186`, exactly as observed in
+S341. Nothing pinned it: `scripts/test_brain.py` did not exist, while `test_memory.py` next door had 44.
+
+### Fog cleared
+
+- **The race is fixed and the fix cannot be forgotten per-command.** `store_lock()` (flock; `msvcrt` on
+  Windows) is applied by a `@mutating` decorator to `init`/`assert`/`confirm`/`refute` — one wrapper
+  instead of four `with` blocks, and the next mutating command inherits it. No command calls another, so
+  the lock never nests.
+- **The defect was far worse than the one lost belief S341 happened to see.** Twelve concurrent writers
+  produced **6–8 beliefs in 5/5 rounds** — a third to a half of all writes discarded, with ids stopping
+  short exactly as max-id allocation predicts. With the lock: 12/12 in every round.
+- **`scripts/test_brain.py` exists** — 7 tests, 16 checks, hand-rolled runner (no pytest import, so it
+  runs under any interpreter), each test driving the **real CLI** against a throwaway repo root where
+  `brain.py`'s `__file__`-relative store lands in a temp tree. The project's own beliefs are untouched.
+- **One test in the first draft asserted something the CLI cannot do**, and the fix improved the test:
+  `confirm --id B-001` is rejected by **argparse** (rc=2), not by the command's own `[ERROR]` branch, so
+  `cmd_confirm`/`cmd_refute`'s "a missing `--x`" refusals are unreachable from the CLI. The test now pins
+  the property that matters — a refusal *inside* the `with` releases the lock and the next writer still
+  gets its own id — rather than an exit code that cannot occur.
+
+### Fog remaining
+
+- **`scripts/memory.py` has the identical gap and is still unlocked.** Same read-modify-write for
+  capture id allocation, no lock, and (per its own docstring) no CLI-level concurrency test. The argument
+  proved here transfers unchanged; it was not done in this session.
+- **`cmd_confirm`/`cmd_refute` contain unreachable refusal branches** (`--evidence-level`,
+  `--provenance`, `--replacement` are argparse-required). Harmless, but they read as enforced policy
+  that the parser already enforces. Not removed — deleting them is a behaviour-visible change on the
+  error path and deserves its own look.
+- **Pre-existing in `scripts/brain.py`, untouched**: `EXE001` (shebang, not executable — repo-wide class
+  across `scripts/`), `ISC004` at `:341`, `PLW1510` at `:392`; `ruff format` would reformat the file
+  wholesale. All were present at `HEAD` (3 findings before this session, 3 after). The new
+  `scripts/test_brain.py` is ruff-clean and formatted, and was `chmod +x` so its shebang stops being a
+  finding.
+- **Not covered by this suite**: `gen-view`, `stale`, `retrieve`, `list`, `check` beyond the integrity
+  assertion after a concurrent round; and nothing here tests the Windows `msvcrt` branch (POSIX host).
+- **`.devin/brain/beliefs.yaml` reports 73 style findings (line-length, indentation) whenever a
+  linter looks at it.** It is a GENERATED store — `save_store` rewrites it from `yaml.dump(width=100)`
+  — so editing it to satisfy a linter is undone by the next `assert`, and the SKILL says to edit via
+  CLI. Style-only, no correctness or secret finding; the actionable fix, if anyone wants it, is the
+  dumper's width/sorting, not the file.
+- **Pre-existing, unchanged**: the weekly audit's `cron` path; the pyright advisory pair; the four open
+  ledger items (hardware/credential-blocked); the `prepush_secrets.py --all` historical findings that
+  must not be allow-listed.
+
+### Debt items closed
+
+None. This closed a defect the ledger does not track.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- None.
+
+### Session artifacts
+
+- `scripts/brain.py` (`store_lock`, `mutating`), `scripts/test_brain.py` (new, 7 tests / 16 checks,
+  executable) — evidence `docs/artifacts/s342-brain-store-lock.txt`.
+- `AGENTS.md` — the harness-audit bullet now records the fix and names `memory.py` as still carrying it.
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), the cleanest instance in this repo's history**: a mandatory
+  subsystem had **zero tests** while the sibling harness next to it had 44. The gap was invisible because
+  every invocation in an agent session is sequential — the CLI looks perfect until two calls overlap, and
+  agents issue parallel tool calls by default. A store that silently drops a third of its writes is worse
+  than one that fails, because the surviving record reads as complete.
+- **Layer 2 (context provision)**: nothing in `.devin/skills/brain/SKILL.md` said the store was
+  single-writer or that concurrent asserts are unsafe. It now cannot matter, but the class is worth
+  naming: **a doc that describes a store without stating its concurrency contract invites exactly this.**
+
+### VERIFY
+
+- `python3 scripts/test_brain.py` → **7 tests, 16 checks, all pass**.
+- Teeth: with the four `@mutating` decorators removed, **5/5 rounds failed** ("12 concurrent asserts keep
+  12 beliefs — store holds 6/6/6/7/8"), restoring them → all pass. The failing ids stop at B-005..B-008,
+  the max-id collision by construction.
+- `make test-scripts` (run under `newgrp docker`) → **MAKE_EXIT=0**, 17 suites, `test_brain.py` included,
+  no failures. (`test_tls_floor.py` **2 passed** with docker access.)
+- `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**. `make graph-check` → all invariants pass.
+- `ruff check` on the new file → clean; `ruff format --check` → already formatted; `chmod +x` removed its
+  `EXE001`. `scripts/lint-agent.sh` unaffected (it covers `agent/`).
+- `brain.py check` → 188 beliefs, integrity clean.
+
+### Next session opening
+
+Give `scripts/memory.py` the same lock and the same treatment — it has the identical read-modify-write
+for `capture` id allocation, no lock, and its only tests call functions in-process rather than running the
+CLI as subprocesses.
+
+---

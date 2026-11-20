@@ -53,68 +53,54 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 341 — 2026-11-20 (two red gates were asking the wrong question; both now ask theirs)
+## Latest session: 342 — 2026-11-20 (the belief store lost half its writes; now it is a store that can be trusted)
 
 ### Fog cleared
 
-- **S340's opening is closed with evidence, not optimism.** Three consecutive post-fix CI runs on `master`
-  (`44700427139`, `44700863573`, `44701772997`) are **13/13 jobs green each** — `Serverless Worker Tests`
-  included in all three. The ordering bug has not recurred in 3/3 runs.
-- **The `Dependabot Updates` failure was misdiagnosed in `1f0cb64`, and the fix is not a setting.**
-  `default_workflow_permissions` is `write`, `allow_auto_merge` is `true`, `delete_branch_on_merge` is
-  `true` — yet the job failed twice on `npm_and_yarn in /electron for glob, minimatch`. The step log names
-  the real cause: the updater refuses a path that would **downgrade jest 30.5.2 → 29.7.0**, because glob's
-  patched release (14.0.2+, GHSA-3g3m-2fjr-6pw4 covers `>=9.0.0 <=14.0.1`) is outside jest's `^13.0.6`.
-  The phrase "write access to the repository is required" is also GitHub's boilerplate link text for the
-  private updates log, which is what made the doc row wrong rather than merely incomplete.
-- **electron's 23 moderate advisories are gone** (glob + minimatch, both dev/build-only — the packaged app
-  ships neither jest nor electron-builder). Fixed with **version-scoped** overrides.
-- **A blanket override would have been worse than the advisories, and that is measured, not argued.**
-  `@electron/asar`'s `crawlfs` calls `util.promisify(glob.glob)`; glob v9+ dropped callbacks, so the
-  promisified call **never settles** (measured on glob 14.0.6 in a scratch dir: `RESULT: HANG`). A blanket
-  `"glob": "^14.0.6"` — exactly the form `server/package.json` uses safely, since it has no such consumer —
-  would make `electron-builder` stall with no error. The scoped form leaves `glob@7.2.3` and
-  `minimatch@3.1.5/5.1.9` in place because those versions are outside the vulnerable ranges.
-- **The secret scanner no longer dies on the full-history path.** `git show -p` with the default strict
-  decoder raised `UnicodeDecodeError` on commit `85ede32` — an artifact that captured a mangled console
-  byte (`0x83` at offset 20582). Only the `--all` / unresolvable-base path was affected, i.e. the fallback
-  the range scan degrades to and the one CI takes when it cannot resolve a base: the guard was weakest
-  exactly where S317 had hardened it. Now `errors="replace"`.
-- **Both regression tests are proven to have teeth.** The scanner test puts the secret in a file that sorts
-  *after* the bad bytes, so a truncate-at-the-bad-byte "fix" would still pass a crash-only test and still
-  leak; with the strict decode restored it fails with the traceback. The override change is verified by
-  four independent measurements, not by `npm audit` alone (below).
+- **The race is fixed and the fix cannot be forgotten per-command.** `store_lock()` (flock; `msvcrt` on
+  Windows) is applied by a `@mutating` decorator to `init`/`assert`/`confirm`/`refute` — one wrapper
+  instead of four `with` blocks, and the next mutating command inherits it. No command calls another, so
+  the lock never nests.
+- **The defect was far worse than the one lost belief S341 happened to see.** Twelve concurrent writers
+  produced **6–8 beliefs in 5/5 rounds** — a third to a half of all writes discarded, with ids stopping
+  short exactly as max-id allocation predicts. With the lock: 12/12 in every round.
+- **`scripts/test_brain.py` exists** — 7 tests, 16 checks, hand-rolled runner (no pytest import, so it
+  runs under any interpreter), each test driving the **real CLI** against a throwaway repo root where
+  `brain.py`'s `__file__`-relative store lands in a temp tree. The project's own beliefs are untouched.
+- **One test in the first draft asserted something the CLI cannot do**, and the fix improved the test:
+  `confirm --id B-001` is rejected by **argparse** (rc=2), not by the command's own `[ERROR]` branch, so
+  `cmd_confirm`/`cmd_refute`'s "a missing `--x`" refusals are unreachable from the CLI. The test now pins
+  the property that matters — a refusal *inside* the `with` releases the lock and the next writer still
+  gets its own id — rather than an exit code that cannot occur.
 
 ### Fog remaining
 
-- **Whether Dependabot's next scheduled run goes green is unproven.** The overrides remove the resolution
-  dead end the updater was complaining about, but the job runs on its own schedule — the next run is the
-  measurement, not this session.
-- **`electron` is still absent from the CI audit gate.** It accumulated 23 moderate findings precisely
-  because `--audit-level=high` covers only server + dashboard. Adding it at `--audit-level=moderate` would
-  make a future dev-dependency advisory red CI, which is a policy decision, not a bug fix — left as a
-  recommendation rather than done unilaterally. `AGENTS.md` now tells a reader to run it locally.
-- **`prepush_secrets.py --all` exits 1 on this repository and always will** without a history rewrite: the
-  4 findings are the S301/S312 session blocks quoting an already-dead token. CI's fallback path would go
-  red on them. **Deliberately not silenced** — the allow-list has no commit scoping, so an entry would be a
-  permanent hole in the two files most likely to hold a quoted secret. The next session that sees this
-  should not "fix" it with an allow-list entry.
-- **`brain.py assert` loses a belief when two asserts run concurrently — reproduced this session.**
-  Two `assert` calls issued in one parallel tool block both returned `[OK] Asserted B-186` and only the
-  second statement survived in `beliefs.yaml`; the other had to be re-asserted (B-187) sequentially. The
-  next id is computed from max-id with no lock, so both writers choose the same one and the last write
-  wins. This is the *same* known gap the harness audit lists for `memory.py` ("no file locking or atomic
-  writes"), now proven in the brain layer — and `scripts/test_brain.py` does not exist, so nothing pins
-  it. Sequential use is unaffected, which is why it stayed invisible. Written into `AGENTS.md`; not fixed
-  here because it is a write-path change to a mandatory subsystem and deserves its own tests.
-- **Pre-existing, untouched:** the weekly audit's `cron` path is still unexercised; the pyright advisory
-  pair stands; `ruff check`/`format` report 3 findings and 2 unformatted files under `scripts/`, all
-  present at `HEAD` before this session (nothing new added); the four open ledger items remain
-  hardware- or credential-blocked.
+- **`scripts/memory.py` has the identical gap and is still unlocked.** Same read-modify-write for
+  capture id allocation, no lock, and (per its own docstring) no CLI-level concurrency test. The argument
+  proved here transfers unchanged; it was not done in this session.
+- **`cmd_confirm`/`cmd_refute` contain unreachable refusal branches** (`--evidence-level`,
+  `--provenance`, `--replacement` are argparse-required). Harmless, but they read as enforced policy
+  that the parser already enforces. Not removed — deleting them is a behaviour-visible change on the
+  error path and deserves its own look.
+- **Pre-existing in `scripts/brain.py`, untouched**: `EXE001` (shebang, not executable — repo-wide class
+  across `scripts/`), `ISC004` at `:341`, `PLW1510` at `:392`; `ruff format` would reformat the file
+  wholesale. All were present at `HEAD` (3 findings before this session, 3 after). The new
+  `scripts/test_brain.py` is ruff-clean and formatted, and was `chmod +x` so its shebang stops being a
+  finding.
+- **Not covered by this suite**: `gen-view`, `stale`, `retrieve`, `list`, `check` beyond the integrity
+  assertion after a concurrent round; and nothing here tests the Windows `msvcrt` branch (POSIX host).
+- **`.devin/brain/beliefs.yaml` reports 73 style findings (line-length, indentation) whenever a
+  linter looks at it.** It is a GENERATED store — `save_store` rewrites it from `yaml.dump(width=100)`
+  — so editing it to satisfy a linter is undone by the next `assert`, and the SKILL says to edit via
+  CLI. Style-only, no correctness or secret finding; the actionable fix, if anyone wants it, is the
+  dumper's width/sorting, not the file.
+- **Pre-existing, unchanged**: the weekly audit's `cron` path; the pyright advisory pair; the four open
+  ledger items (hardware/credential-blocked); the `prepush_secrets.py --all` historical findings that
+  must not be allow-listed.
 
 ### Debt items closed
 
-None. This session closed no ledger item; it fixed two gates that were red, which the ledger does not track.
+None. This closed a defect the ledger does not track.
 
 ### Debt items still open
 
@@ -126,54 +112,39 @@ D-120, D-129, D-130, D-134.
 
 ### Session artifacts
 
-- `electron/package.json` (scoped `glob`/`minimatch` overrides) + lockfile — `fdfceab`; evidence
-  `docs/artifacts/s341-electron-overrides.txt`.
-- `scripts/prepush_secrets.py` (`errors="replace"`) + `scripts/test_prepush_secrets.py` (21 checks, the
-  non-UTF-8 case added) — `1255ece`; evidence `docs/artifacts/s341-prepush-secrets-utf8.txt`.
-- `AGENTS.md` (corrected Dependabot row + the resolution-dead-end section + electron in the audit block) —
-  `168618a`.
+- `scripts/brain.py` (`store_lock`, `mutating`), `scripts/test_brain.py` (new, 7 tests / 16 checks,
+  executable) — evidence `docs/artifacts/s342-brain-store-lock.txt`.
+- `AGENTS.md` — the harness-audit bullet now records the fix and names `memory.py` as still carrying it.
 
 ### Failure attribution
 
-- **Layer 5 (state management), for the Dependabot row**: `1f0cb64` recorded a causal chain it had not
-  verified end-to-end — "read-only permission ⇒ this error text" — one session before this one found the
-  permission already correct. The cost is asymmetric: a wrong entry in a table titled "verify with the
-  commands, not by memory" sends the next agent to check a setting that is fine, and the error text it cites
-  is ambiguous boilerplate. The doc precedent held (the setting is still worth documenting); only the
-  symptom claim was wrong. Fixed by writing what the text actually is and what the real failure was.
-- **Layer 4 (verification feedback)**: a security gate whose failure mode is a *traceback* is not a gate —
-  it reports a stack frame instead of a finding, and it did so only on the path the workflow falls back to.
-  Both fixes here are pinned by tests observed failing with the fix reverted, which is the only form of
-  "verified" this repo accepts.
+- **Layer 4 (verification feedback), the cleanest instance in this repo's history**: a mandatory
+  subsystem had **zero tests** while the sibling harness next to it had 44. The gap was invisible because
+  every invocation in an agent session is sequential — the CLI looks perfect until two calls overlap, and
+  agents issue parallel tool calls by default. A store that silently drops a third of its writes is worse
+  than one that fails, because the surviving record reads as complete.
+- **Layer 2 (context provision)**: nothing in `.devin/skills/brain/SKILL.md` said the store was
+  single-writer or that concurrent asserts are unsafe. It now cannot matter, but the class is worth
+  naming: **a doc that describes a store without stating its concurrency contract invites exactly this.**
 
 ### VERIFY
 
-- CI, post-S340 fix, 3 runs (`44700427139`, `44700863573`, `44701772997`): **13/13 jobs success each**.
-- electron before → after: `npm audit` **23 moderate → 0** (`--audit-level=moderate` exit 0).
-  `npm ci --ignore-scripts` in a scratch dir reproduces the identical tree from the committed lockfile.
-  `npm test` **30 passed**; `test:coverage` **39.4 / 47.36 / 30.95 / 39.3** vs floors 37 / 45 / 29 / 37.
-  `@electron/asar` packs **105886 bytes** before and after (the `glob@7` path a blanket override hangs);
-  `app-builder-lib` `FileMatcher` still includes `main.js`, excludes `node_modules/**`.
-- `scripts/test_prepush_secrets.py`: all checks pass; with the strict decode restored, **1 check FAILED**
-  with the traceback — the exact defect.
-- `python3 scripts/prepush_secrets.py --all` on this repo: **4 FAIL / 10 WARN / 0 traceback** (was a
-  traceback and no report). Publish-range scan `--base origin/master --head HEAD`: exit 0, no output.
+- `python3 scripts/test_brain.py` → **7 tests, 16 checks, all pass**.
+- Teeth: with the four `@mutating` decorators removed, **5/5 rounds failed** ("12 concurrent asserts keep
+  12 beliefs — store holds 6/6/6/7/8"), restoring them → all pass. The failing ids stop at B-005..B-008,
+  the max-id collision by construction.
+- `make test-scripts` (run under `newgrp docker`) → **MAKE_EXIT=0**, 17 suites, `test_brain.py` included,
+  no failures. (`test_tls_floor.py` **2 passed** with docker access.)
 - `make verify-env` → **56 PASS / 0 FAIL / 5 SKIP**. `make graph-check` → all invariants pass.
-- `make test-scripts` → every suite green **except** `scripts/test_tls_floor.py`, which is the stale-group
-  condition AGENTS.md documents; under `newgrp docker` it is **2 passed**. Not a regression from this
-  session's changes.
-- `scripts/lint-agent.sh` → ruff clean + formatted.
-- CI / Lint / CodeQL on `ccfe644` → **all three success** (13/13 CI jobs, `Script Tests` and
-  `Electron Tests` included). Dependabot open alerts on the default branch: **0** (was 23 npm-audit
-  findings across the tree; the last GitHub-side alert flipped to `fixed` at 12:26Z on this push).
-- `python3 scripts/brain.py assert` ×2 **in parallel** → both print `B-186`; `beliefs.yaml` holds one.
-  Re-asserted sequentially → `B-187`, `grep -c` → 2. `brain.py check` → 187 beliefs, integrity clean.
+- `ruff check` on the new file → clean; `ruff format --check` → already formatted; `chmod +x` removed its
+  `EXE001`. `scripts/lint-agent.sh` unaffected (it covers `agent/`).
+- `brain.py check` → 188 beliefs, integrity clean.
 
 ### Next session opening
 
-Watch the next scheduled `Dependabot Updates` run and confirm it no longer fails on
-`npm_and_yarn in /electron for glob, minimatch`; if it fails again, read the updater's `explanation` field
-rather than the log's "write access" boilerplate.
+Give `scripts/memory.py` the same lock and the same treatment — it has the identical read-modify-write
+for `capture` id allocation, no lock, and its only tests call functions in-process rather than running the
+CLI as subprocesses.
 
 ---
 

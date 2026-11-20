@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-20 15:25:46 — 187 beliefs
+Generated: 2026-11-20 15:41:18 — 188 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -484,6 +484,12 @@ mkfs.fat 4.2 (2021-01-31)
 |---|--------|----------|-----------|
 | B-105 | confirmed | code-read | Semgrep's OSS JSON report sets extra.lines and extra.fingerprint to the literal string 'requires login' for registry (p/default) rules, so no gate can key findings on either field; the only trustworthy identity is the source line read from disk at start.line. |
 | B-106 | confirmed | emulated | The javascript path-join-resolve-traversal rule flags ANY function parameter that reaches path.join/resolve; path.basename(), whitelist-table lookups and literal-returning config helpers do not act as sanitizers (measured with a probe file, S251). Clearing that finding therefore requires removing the parameter from the join or suppressing, not hardening the value. |
+
+## tooling/brain
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-188 | proposed | assumed | scripts/brain.py serialises every store-mutating command under store_lock() (flock; msvcrt on Windows) via a @mutating decorator, so concurrent asserts no longer collide on the same max-id. Measured: 12 concurrent writers kept 6-8 of 12 beliefs without the lock in 5/5 rounds, 12/12 with it. scripts/test_brain.py pins it. |
 
 ## tooling/sast
 

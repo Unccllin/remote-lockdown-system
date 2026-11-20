@@ -1023,13 +1023,15 @@ work — pick up here tomorrow.
 #### 7. Memory (129 memories) — 9 improvements
 - "Every 5/10 sessions" not enforced (consolidate/decay are manual)
 - No file locking or atomic writes (race conditions in ID generation)
-  - **Proven in `scripts/brain.py` in S341, not just suspected.** Two concurrent `brain.py assert`
-    calls compute the same next id from the same max-id and both write it — last write wins, so one
-    belief is lost with a `[OK] Asserted B-186` on both calls. Reproduced: two asserts in one parallel
-    tool block returned the identical id and only the second statement survived in `beliefs.yaml`; the
-    lost one had to be re-asserted. There is also **no `scripts/test_brain.py` at all**, so nothing pins
-    the store's write path. Fix = an `fcntl.flock` around the read-modify-write in `assert` plus a
-    two-process regression test; sequential calls are unaffected, which is why the CLI looks fine.
+  - **`scripts/brain.py`: found in S341, fixed in S342.** Two concurrent `assert` calls computed the same
+    next id from the same max-id and both wrote it — last write wins, so one belief vanished while both
+    calls printed `[OK] Asserted B-186`. `atomic_write` (tmp + rename) prevents a *torn* file, never a
+    *lost update*. Fixed with `store_lock()` (flock, msvcrt on Windows) applied by a `@mutating`
+    decorator to `init`/`assert`/`confirm`/`refute`, plus `scripts/test_brain.py` (7 tests, 16 checks).
+    Measured: 12 concurrent writers without the lock kept **6-8 of 12** beliefs, 5/5 rounds; with it,
+    12/12. Evidence: `docs/artifacts/s342-brain-store-lock.txt`.
+  - **`scripts/memory.py` still has this gap** — same read-modify-write shape for capture
+    id allocation, no lock, so the argument above applies there unchanged. Untested as of S342.
 - Floating-point confidence artifacts (0.6000000000000001 in files)
 - Deduplication brittle (first 5 words only — false positives/negatives)
 - Retrieve is keyword-only (no stemming, stopwords, semantic, typo tolerance)
