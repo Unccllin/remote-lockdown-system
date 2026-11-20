@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements-dev.txt
 ruff==0.17.5
 pytest==9.0.3
-pytest-cov==5.0.0
+pytest-cov==7.1.0
 pytest-timeout==2.3.1
 # pyyaml is needed by test_graph_assertions.py, which imports
 # graph_assert.py → graph_loader.py (the node graph loader).
