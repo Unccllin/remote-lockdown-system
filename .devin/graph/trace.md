@@ -7151,3 +7151,73 @@ Bump `pytest-timeout` to 2.4.0 in its own commit — the last of the three agent
 confirm the suite still finishes under the `--timeout=30` addopts rather than hanging on a slow test.
 
 ---
+
+---
+
+## Session 338 — 2026-11-20 (pytest-timeout 2.4.0: the last of the three toolchain bumps)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: `agent/pyproject.toml:3` — `addopts = "-q --timeout=30"`, because a timeout plugin's failure
+  mode is the opposite of a coverage plugin's: not a number moving, but a slow test being cut off, or the
+  addopts failing to bind against the new plugin.
+- **Read**: `agent/requirements-dev.txt` after S336/S337 — pytest 9.0.3, pytest-cov 7.1.0, pytest-timeout
+  2.3.1 — so this is the last of the three and can land alone.
+
+**Findings**: the evidence for a timeout bump is a suite that finishes under a bound, not an exit code.
+
+### Fog cleared
+
+- **pytest-timeout 2.4.0 passes under `--timeout=30`**: full suite exit 0, **no timeout warnings**, and a
+  clean `pip install -r` reports 2.4.0 (`dac0c19`).
+- **`agent/requirements-dev.txt` is current on all three**: `pytest==9.0.3`, `pytest-cov==7.1.0`,
+  `pytest-timeout==2.4.0`; `scripts/lint-agent.sh` exit 0.
+- **CI is green on `dac0c19`**: `CI`, `Lint`, `CodeQL`, `Dependency Graph` — `Agent Tests` runs in the
+  same `--timeout=30` configuration, so a silently cut-off test would have surfaced there.
+
+### Fog remaining
+
+- **The agent toolchain thread is finished**; nothing in it is outstanding.
+- **Two gates remain un-runnable on this host**: `test_tls_floor.py` and `pg-smoke`, both needing docker
+  group membership (`sudo usermod -aG docker $USER`) plus a fresh login.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` and will keep
+  producing stale PRs until that setting changes (PRs #1/#2 were already closed/superseded, S337).
+- **The weekly audit's `cron` path is still unexercised**; the pyright `advisory` pair stands; the four
+  open ledger items need hardware or an operator credential.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120, D-129, D-130, D-134.
+
+### Blockers
+
+- **Docker group membership** (two gates) and **repository settings** (Dependabot write access).
+
+### Session artifacts
+
+- `agent/requirements-dev.txt` (pytest-timeout 2.4.0) — `dac0c19`; log `/tmp/to24.txt`.
+
+### Failure attribution
+
+- No failure this session. Worth naming why: the three bumps were each verified by the measure that
+  actually moves in that plugin (coverage number for cov, bound-and-finish for timeout), which is the
+  practice S333–S337 were building.
+
+### VERIFY
+
+- `scripts/run-agent-tests.sh -q` → exit 0, no timeout warnings; `pip show pytest-timeout` → 2.4.0.
+- `agent/requirements-dev.txt` → 9.0.3 / 7.1.0 / 2.4.0; `scripts/lint-agent.sh` → exit 0.
+- CI on `dac0c19` → **CI · Lint · CodeQL · Dependency Graph all success**.
+- `make graph-check` → `✓ All invariants pass`; tree clean.
+
+### Next session opening
+
+Add this login session to the `docker` group (`sudo usermod -aG docker $USER`, then re-login) and run
+`make -k full-verify` — that unblocks `test_tls_floor.py` and `pg-smoke`, the last two gates in the
+repository that cannot run here.
+
+---
