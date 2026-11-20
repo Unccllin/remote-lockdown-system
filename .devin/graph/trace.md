@@ -6583,3 +6583,87 @@ Run `make -k full-verify` once, end to end, so the sweep produces a single compl
 environment — confirming in practice what S330 documented, and leaving only the docker-socket red.
 
 ---
+
+---
+
+## Session 331 — 2026-11-19 (`make -k full-verify` confirmed in practice: one pass, one red)
+
+### RULE-ZERO — understanding logged before each change
+
+- **Read**: S330's block and the AGENTS.md paragraph it wrote — the claim "use `make -k full-verify` when
+  you want one run to report everything instead of stopping at the known red", which had been proven only
+  on a throwaway Makefile, not on this target.
+- **Read**: `/tmp/full-verify-s330.log` — the un-`-k` run that stopped at `test-scripts` with
+  `Error 1` and left `test-e2e`, `verify-env` and `check-artifacts` unexecuted.
+
+**Findings**: the `-k` claim was a reasonable extrapolation, which is exactly the kind of statement this
+arc keeps finding unverified. Running it costs ten minutes; asserting it costs a later session.
+
+### Fog cleared
+
+- **`make -k full-verify` completes in one pass** (log `/tmp/full-verify-k-s331.log`): every target ran and
+  reported — graph-check `✓ All invariants pass` · lint `All checks passed!` (both the agent and the new
+  graph lint) · server **885** · electron **30** (3 suites) · `test-e2e` **RESULT: PASS** · `verify-env`
+  **56 PASS / 0 FAIL / 5 SKIP** · check-artifacts `All artifacts present`.
+- **The only failure is the documented one**: `test-scripts` → `scripts/test_tls_floor.py`
+  (`1 failed, 1 passed`), followed by `make: Target 'full-verify' not remade because of errors` and exit 2.
+  So `-k` does what the documentation now says, and the exit code still reports the failure honestly rather
+  than being swallowed.
+- **The two-run story is retired**: previously a sweep meant one aborted run plus three hand-run targets;
+  now it is one command whose single red is the environment, and the numbers match S330's measurement.
+
+### Fog remaining
+
+- **The red itself is unchanged and is an operator action**: `/var/run/docker.sock` is `root:docker 0660`,
+  this login session is in no docker group, and `sudo -n` needs a password. Adding the user to `docker`
+  and starting a new login session is the only way to make this sweep fully green here.
+- **Four gates were still not re-measured**: `make pg-smoke`, `make sast` (semgrep absent locally),
+  `make firmware-host-tests`, and the five-component `make test-coverage`.
+- **`Dependabot Updates`** still fails with `write access to the repository is required` (same text as
+  2026-11-12) — a repository setting, not code.
+- **The weekly audit's `cron` path is still unexercised**; the pyright `reportMissingImports` pair remains
+  an advisory; `harness-template/` remains documented drift awaiting the owner's decision (S329).
+- Unchanged: offline key custody, HP UEFI BIOS password, per-executable consent keying (unverified),
+  `RequestAccessAsync` (untested), the pre-push hook being per-clone state.
+
+### Debt items closed
+
+None.
+
+### Debt items still open
+
+D-120 (BitLocker lock state on real media), D-129 (no real hardware validation for PBL), D-130 (no code
+signing for PblApp.efi), D-134 (PBL TPM NV indices under the platform hierarchy).
+
+### Blockers
+
+- **`/var/run/docker.sock` unreadable from this login session** — the sweep's only red, and not a code defect.
+
+### Session artifacts
+
+- `/tmp/full-verify-k-s331.log` — one-pass sweep with every target's output and `MAKE_K_EXIT=2`.
+- No repo change beyond this record: the claim under test was already written in AGENTS.md (S330).
+
+### Failure attribution
+
+- **Layer 4 (verification feedback), on myself**: S330 documented `-k` from a synthetic Makefile and
+  called it "proven", which proved the *mechanism* and not the *target*. This session closed that gap —
+  and the distinction is worth keeping: a mechanism demonstrated on a toy is evidence about the mechanism,
+  never about the real command.
+
+### VERIFY
+
+- `make -k full-verify` → every target reported; `make: *** [Makefile:132: test-scripts] Error 1`;
+  `make: Target 'full-verify' not remade because of errors.`; `MAKE_K_EXIT=2`.
+- Per-target evidence in that log: `✓ All invariants pass` (1) · `All checks passed!` (2) ·
+  `Tests: 885 passed` · `Tests: 30 passed` (electron) · `RESULT: PASS (all E2E tests succeeded)` ·
+  `PASS: 56 FAIL: 0 SKIP: 5` · `All artifacts present and non-empty`.
+- `make graph-check` → `✓ All invariants pass`; tree clean before and after.
+
+### Next session opening
+
+Ask the operator to add this login session to the `docker` group (then re-login) so
+`scripts/test_tls_floor.py` can run — that is the only thing between this tree and a fully green
+`make -k full-verify`, and everything else in the sweep is measured.
+
+---
