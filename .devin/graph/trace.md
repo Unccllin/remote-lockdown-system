@@ -8016,7 +8016,7 @@ attempt while `consolidate` holds the lock.
 - Stale doc paths fixed in AGENTS.md and docs/BACKUP.md.
 
 ### Fog remaining
-- Full server suite cannot run on this host's Node 26 due to pglite ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG (pre-existing, unrelated to this diff).
+- None — full server suite runs green on this host (55 suites, 896 tests) under Node 26.13.1.
 
 ### Debt items closed
 - None this session.
@@ -8028,21 +8028,22 @@ attempt while `consolidate` holds the lock.
 - D-134
 
 ### Blockers
-- Node 26 lacks --experimental-vm-modules needed by pglite tests (environment, not code).
+- None.
 
 ### Session artifacts
 - docs/artifacts/s346-sqlite-path-seed-guard.txt
 
 ### Failure attribution
-- Layer 3 (execution environment): Node version mismatch prevents pglite tests; not a code defect.
+- None — the apparent environment failure was a misinvocation (bare `npx jest` instead of `cd server && npm test`, which passes `--experimental-vm-modules`); the suite is 55/55, 896/896 green on Node 26.13.1.
 
 ### VERIFY
+- cd server && npm test: 55 suites, 896 tests passed (Node 26.13.1)
 - npx jest (targeted 3 suites): 11 passed
 - npx eslint .: exit 0
 - bash -n scripts/*.sh: clean
 - make graph-check: all invariants pass
 
 ### Next session opening
-- Run full server suite under Node 22 to confirm no regression from seedData extraction.
+- S346 is closed and fully green; next session should pick the next open debt item (D-120/D-129/D-130/D-134) and run RULE-ZERO before editing.
 
 ---

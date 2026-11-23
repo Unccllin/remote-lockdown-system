@@ -5,6 +5,7 @@ Tests:
 - seedGuard.test.js: 2 passed
 - setAdminPassword.test.js: 4 passed
 - combined: 3 suites, 11 tests, all passed (2.429s)
+- cd server && npm test: 55 suites, 896 tests passed (Node 26.13.1)
 
 Teeth proof (seedGuard case 1, guard neutered):
 - Expected: 0 admins; Received: 1  (test fails at seedGuard.test.js:47)
