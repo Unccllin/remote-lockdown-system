@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-20 16:34:32 — 191 beliefs
+Generated: 2026-11-23 08:44:33 — 192 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -405,6 +405,7 @@ mkfs.fat 4.2 (2021-01-31)
 | B-119 | confirmed | code-read | The hardware harness read only Defender's ExclusionProcess list while agent/installer.py added no exclusion at all and installer_gui.py/deploy.ps1 add ExclusionPath — so the two 'defender_exclusion: null' hardware readings meant 'wrong metric + missing step', not 'Defender is excluding nothing'. |
 | B-128 | confirmed | code-read | A database pool whose end() closes the handle without waiting for in-flight queries can crash the process uncatchably: sqlite3 raises SQLITE_MISUSE from its native error callback, which is an uncaught throw rather than a promise rejection, so the test runner dies with exit 2 and no test-level failure. The fix belongs at the pool layer — the pg.Pool.end() contract: refuse new work with a catchable error and drain in-flight statements before closing — not a per-suite teardown drain, because suites built on supertest have no listening server to drain. |
 | B-129 | confirmed | code-read | A documented verification count is not evidence that the gate passes. In S267 the AGENTS.md sweep list claimed nine numbers no recent run had produced, including 'API+agent E2E 10/10 green' for a suite that actually contains 14 tests and was dying intermittently with exit 2. Every quoted count must be re-measured by running the owning command, and a gate that can exit non-zero without failing a test needs a mutation-checked regression test. |
+| B-192 | confirmed | code-read | One canonical SQLite path resolved from server/ (never cwd); a dev launch must not seed an existing database with a super-admin. |
 
 ## harness/coverage
 

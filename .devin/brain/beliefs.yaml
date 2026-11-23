@@ -4201,3 +4201,19 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-192
+  statement: One canonical SQLite path resolved from server/ (never cwd); a dev launch must not seed an
+    existing database with a super-admin.
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: server/src/db/dbPath.js + server/tests/dbPath.test.js (5) + server/tests/seedGuard.test.js
+    (2)
+  source: server/src/db/dbPath.js
+  asserted: '2026-11-23'
+  last_verified: '2026-11-23'
+  commit_ref: 7ca2039
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
