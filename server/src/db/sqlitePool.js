@@ -20,6 +20,7 @@
 const sqlite = require('sqlite');
 const sqlite3 = require('sqlite3');
 const path = require('path');
+const { resolveDbPath } = require('./dbPath');
 
 let _db = null;
 let _ready = null;
@@ -320,7 +321,9 @@ function getCommand(sql) {
  */
 async function getDb() {
   if (!_db) {
-    const dbPath = process.env.SQLITE_PATH || path.join(process.cwd(), '.sqlite-data', 'lockdown.db');
+    // Path comes from dbPath.js so it cannot drift from the dev entry's default,
+    // and cannot follow the cwd into a different (empty) database.
+    const dbPath = resolveDbPath();
     // Ensure directory exists for file-based DBs
     if (dbPath !== ':memory:') {
       const fs = require('fs');
