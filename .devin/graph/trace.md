@@ -8034,7 +8034,13 @@ attempt while `consolidate` holds the lock.
 - docs/artifacts/s346-sqlite-path-seed-guard.txt
 
 ### Failure attribution
-- None — the apparent environment failure was a misinvocation (bare `npx jest` instead of `cd server && npm test`, which passes `--experimental-vm-modules`); the suite is 55/55, 896/896 green on Node 26.13.1.
+- **Layer 4 (verification feedback)**: a real command failure — bare `npx jest`, which returned
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` — was recorded as an environment limit ("seven PGlite
+  suites cannot run on Node 26") without checking that `server/package.json`'s own `npm test` script
+  supplies `--experimental-vm-modules`. The suite was green the whole time: 55 suites / 896 tests on
+  Node 26.13.1. **Harness change**: when a suite command fails with a Node-flag-shaped error, read the
+  package script before concluding anything about the environment — in this repo the documented
+  invocation carries flags the bare tool does not, so `npx <tool>` is not the gate.
 
 ### VERIFY
 - cd server && npm test: 55 suites, 896 tests passed (Node 26.13.1)
