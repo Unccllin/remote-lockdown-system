@@ -8001,3 +8001,48 @@ parallel, revisit the coarse Windows `LK_LOCK` retry, which makes a blocked writ
 attempt while `consolidate` holds the lock.
 
 ---
+
+---
+
+## Session 346 — 2026-11-23
+
+### RULE-ZERO
+**Read**: AGENTS.md session rules, .devin/graph/current-state.md, .devin/skills/memory/SKILL.md, .devin/skills/brain/SKILL.md, the seven changed/new files, ADR-001.
+**Finding**: dbPath.js is the single source of truth; seedData guard refuses existing adminless DBs; set-admin-password CLI exists. Ledger prose did not contradict.
+
+### Fog cleared
+- Canonical SQLite path now resolves from server/ independent of cwd.
+- Dev seed refuses to mint a super-admin on an existing adminless DB.
+- Stale doc paths fixed in AGENTS.md and docs/BACKUP.md.
+
+### Fog remaining
+- Full server suite cannot run on this host's Node 26 due to pglite ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG (pre-existing, unrelated to this diff).
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+
+### Blockers
+- Node 26 lacks --experimental-vm-modules needed by pglite tests (environment, not code).
+
+### Session artifacts
+- docs/artifacts/s346-sqlite-path-seed-guard.txt
+
+### Failure attribution
+- Layer 3 (execution environment): Node version mismatch prevents pglite tests; not a code defect.
+
+### VERIFY
+- npx jest (targeted 3 suites): 11 passed
+- npx eslint .: exit 0
+- bash -n scripts/*.sh: clean
+- make graph-check: all invariants pass
+
+### Next session opening
+- Run full server suite under Node 22 to confirm no regression from seedData extraction.
+
+---
