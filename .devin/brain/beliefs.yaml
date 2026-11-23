@@ -4217,3 +4217,20 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-193
+  statement: Node 26.13.1 can run the full server Jest suite (55 suites, 896 tests green); the ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG
+    failure recorded in S343 is a misinvocation (bare npx jest), not an environment limit, because server/package.json's
+    npm test passes --experimental-vm-modules.
+  domain: general
+  status: confirmed
+  evidence_level: code-read
+  provenance: 'measured S346 2026-11-23 on this host: cd server && npm test -> 55 suites / 896 tests passed,
+    28.1s, Node 26.13.1; bare npx jest -> ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG'
+  source: server/package.json (test script), docs/artifacts/s346-sqlite-path-seed-guard.txt
+  asserted: '2026-11-23'
+  last_verified: '2026-11-23'
+  commit_ref: 1a2f3cd
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
