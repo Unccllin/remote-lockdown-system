@@ -1,0 +1,20 @@
+S346 — canonical SQLite path + dev-seed refusal guard (measured output)
+
+Tests:
+- dbPath.test.js: 5 passed
+- seedGuard.test.js: 2 passed
+- setAdminPassword.test.js: 4 passed
+- combined: 3 suites, 11 tests, all passed (2.429s)
+
+Teeth proof (seedGuard case 1, guard neutered):
+- Expected: 0 admins; Received: 1  (test fails at seedGuard.test.js:47)
+- Test Suites: 1 failed, 1 total; Tests: 1 failed, 1 passed
+After restoring guard: 2 passed.
+
+Lint: npx eslint . -> exit 0 (clean).
+bash -n scripts/*.sh -> exit 0.
+make graph-check -> All invariants pass.
+node --check (5 files) -> OK.
+
+Fact: bcrypt cost-12 compare in spawned CLI test suite completes in ~2.1s total.
+Fact: refusal warns "Not seeding: this database already existed and has no admin accounts." and names POST /api/setup/create-admin.

@@ -170,7 +170,7 @@ securely** — without it the backup cannot be decrypted.
 
 ```bash
 export USE_SQLITE=true
-export SQLITE_PATH="$HOME/.lockdown/lockdown.db"
+export SQLITE_PATH="$HOME/.lockdown/lockdown-dev.db"  # unset => server/.sqlite-data/lockdown-dev.db via server/src/db/dbPath.js
 ./scripts/backup.sh --encrypt-key "passphrase" --output ~/backups/lockdown.tar.gz.enc
 ```
 
