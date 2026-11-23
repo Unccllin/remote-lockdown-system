@@ -193,11 +193,16 @@ resolve_pg_url() {
 }
 
 # --- Resolve SQLite path ----------------------------------------------------
+# Canonical path comes from server/src/db/dbPath.js, the same module the server
+# uses. This block used to hardcode `lockdown.db`, a file the server never writes
+# for dev, so a SQLite restore targeted a database that did not exist.
 resolve_sqlite_path() {
   if [[ -n "${SQLITE_PATH:-}" && "${SQLITE_PATH}" != ":memory:" ]]; then
     printf '%s' "${SQLITE_PATH}"; return
   fi
-  printf '%s' "${PROJECT_ROOT}/server/.sqlite-data/lockdown.db"
+  local resolved
+  resolved="$(node --print "require('${PROJECT_ROOT}/server/src/db/dbPath').resolveDbPath()" 2>/dev/null || true)"
+  printf '%s' "${resolved:-${PROJECT_ROOT}/server/.sqlite-data/lockdown-dev.db}"
 }
 
 # --- 3. Detect existing DB & guard with --force -----------------------------
