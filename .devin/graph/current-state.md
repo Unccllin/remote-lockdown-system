@@ -53,15 +53,18 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 346 — 2026-11-23
+## Latest session: 355 — 2026-11-24
 
 ### Fog cleared
-- Canonical SQLite path now resolves from server/ independent of cwd.
-- Dev seed refuses to mint a super-admin on an existing adminless DB.
-- Stale doc paths fixed in AGENTS.md and docs/BACKUP.md.
+- **The update chain is intact.** The key that signs releases is the same key MOLE pins, and the live release signature verifies against it. There was never a need to re-enrol a device; the only gap is that the published release (1.0.3) is older than the source (1.0.4) while MOLE already runs 1.0.4.
+- **TPM sealing has never worked on Windows.** Three defects, measured: a nonexistent enum (fatal on every check-in), an error logged from the wrong stream (so it read as an empty message), and an approach the provider rejects — raw `CngKey.Create` against `Microsoft Platform Crypto Provider` returns *"The requested operation is not supported"* even with TPM 2.0 present, ready, enabled and activated. `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider'` succeeds on the same machine, which is what the module's docstring always claimed it did.
+- **Every device has been protected by the DPAPI fallback**, silently, including the one machine that has a working TPM. The seal path failing was invisible because it fails soft and logs nothing useful.
 
 ### Fog remaining
-- None — full server suite runs green on this host (55 suites, 896 tests) under Node 26.13.1.
+- **The cert-based sealing rewrite is not done.** Addressing a TPM-backed key by certificate thumbprint instead of by name is a change to security-critical code, and it cannot be verified from this machine — it needs a Windows test capability. Writing it untested would violate the same rule the rest of this work follows.
+- **Release 1.0.4 is unblocked but unbuilt** — signing is available again; the agent still needs a Windows build and staging to R2.
+- **`GOOGLE_API_KEY` is still `ROT-TEST-1795082341`.**
+- **D1 cutover not started.**
 
 ### Debt items closed
 - None this session.
@@ -73,29 +76,27 @@
 - D-134
 
 ### Blockers
-- None.
+- None. The remaining items are a Windows build, a Windows test harness, and one placeholder key.
 
 ### Session artifacts
-- docs/artifacts/s346-sqlite-path-seed-guard.txt
+- docs/artifacts/s355-update-key-and-tpm.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback)**: a real command failure — bare `npx jest`, which returned
-  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` — was recorded as an environment limit ("seven PGlite
-  suites cannot run on Node 26") without checking that `server/package.json`'s own `npm test` script
-  supplies `--experimental-vm-modules`. The suite was green the whole time: 55 suites / 896 tests on
-  Node 26.13.1. **Harness change**: when a suite command fails with a Node-flag-shaped error, read the
-  package script before concluding anything about the environment — in this repo the documented
-  invocation carries flags the bare tool does not, so `npx <tool>` is not the gate.
+- **Layer 2 (context provision)**: "no key found" was concluded from searching `secrets/` — the directory the repository documents — while the actual location is `~/.lockdown-secrets/`, which only the signing script knows. A negative result from one search path was recorded as a fact and then repeated across three sessions and a handover document. **Harness change**: a claim of the form "X does not exist" must name the paths searched, so the next reader can see the gap instead of inheriting the conclusion.
+- **Layer 4 (verification feedback)**: the TPM path had a failure branch that produced an empty message, so 990 passing tests and months of production logs both said nothing useful. **Harness change**: a failure branch that logs a value must be covered by a test that asserts the *content* reaches the log, not merely that the branch returns False — now pinned for both the script body and the log line.
 
 ### VERIFY
-- cd server && npm test: 55 suites, 896 tests passed (Node 26.13.1)
-- npx jest (targeted 3 suites): 11 passed
-- npx eslint .: exit 0
-- bash -n scripts/*.sh: clean
-- make graph-check: all invariants pass
+- release signature: `openssl pkeyutl -verify` over `v1:1.0.3:<sha256>` with the recovered public key → **Signature Verified Successfully**
+- key fingerprints: derived / escrow / backup / MOLE pin all `78609c8b…34f39e8`
+- `openssl pkey -in … -pubout` derivation and `sha256sum` on DER: 4/4 identical
+- MOLE `Get-Tpm`: Present/Ready/Enabled/Activated all True; `Win32_Tpm` SpecVersion 2.0, IFX
+- MOLE `CngKey.Create` with PCP provider: `The requested operation is not supported`
+- MOLE `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider'`: CREATED (thumbprint `F4BB9916…C30C18`, HasPrivateKey True)
+- `scripts/lint-agent.sh`: ruff check + format clean
+- `pytest agent/tests`: all passed; `test_tpm_seal.py` 21 tests
 
 ### Next session opening
-- S346 is closed and fully green; next session should pick the next open debt item (D-120/D-129/D-130/D-134) and run RULE-ZERO before editing.
+- Decide whether the TPM sealing rewrite (certificate-addressed PCP key, replacing the raw CNG path) is worth doing now, since it needs a Windows test harness before it can be called working — and meanwhile publish a 1.0.4 release, which is unblocked again.
 
 ---
 
