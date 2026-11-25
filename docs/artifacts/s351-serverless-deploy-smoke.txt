@@ -1,0 +1,52 @@
+# S351 — serverless deploy checklist + post-deploy smoke, measured 2026-11-24T13:55:11Z
+
+Target: local workerd (wrangler dev) on 127.0.0.1:8812 — the smoke script is the same one
+that runs against a deployed Worker; only the URL and token change.
+
+## read-only run
+[smoke] target http://127.0.0.1:8812 (read-only)
+[OK]   GET /api/health -> 200
+[OK]   GET /api/setup/status -> 200 — needsSetup=true admins=0
+[SKIP] super-admin exists — needsSetup=true: only the break-glass token works until the first admin is created
+[OK]   GET /api/devices without a token -> 401
+[OK]   GET /api/devices with a bogus token -> 401
+[OK]   GET /api/devices with the admin token -> 200 — 0 device(s)
+[OK]   POST /v1/verdict -> 400 — routed
+[OK]   GET /v1/policy/1 -> 200 — routed
+[SKIP] GET /api/download/agent — no binary staged yet — the fleet cannot self-update until one is
+[OK]   GET /api/admin/backups -> 200 — 0 object(s)
+[SKIP] POST /api/admin/backups — read-only run; pass --allow-writes
+[OK]   POST /api/admin/restore (missing key) -> 404
+[SKIP] replay protection end to end — read-only run; pass --allow-writes
+
+[smoke] 9 passed, 0 failed, 4 skipped
+[smoke] PASSED
+EXIT=0
+
+## --allow-writes run
+[smoke] target http://127.0.0.1:8812 (write checks enabled)
+[OK]   GET /api/health -> 200
+[OK]   GET /api/setup/status -> 200 — needsSetup=true admins=0
+[SKIP] super-admin exists — needsSetup=true: only the break-glass token works until the first admin is created
+[OK]   GET /api/devices without a token -> 401
+[OK]   GET /api/devices with a bogus token -> 401
+[OK]   GET /api/devices with the admin token -> 200 — 0 device(s)
+[OK]   POST /v1/verdict -> 400 — routed
+[OK]   GET /v1/policy/1 -> 200 — routed
+[SKIP] GET /api/download/agent — no binary staged yet — the fleet cannot self-update until one is
+[OK]   GET /api/admin/backups -> 200 — 0 object(s)
+[SKIP] POST /api/admin/backups — refused: no BACKUPS bucket bound
+[OK]   POST /api/admin/restore (missing key) -> 404
+[OK]   signed check-in accepted once, identical replay rejected — device 1675be317060a97b73ddb6e46df1e096
+[note] smoke device 1675be317060a97b73ddb6e46df1e096 was enrolled and left in place; remove it in the dashboard
+
+[smoke] 10 passed, 0 failed, 3 skipped
+[smoke] PASSED
+EXIT=0
+
+## no-token run (must fail closed)
+[SKIP] replay protection end to end — read-only run; pass --allow-writes
+
+[smoke] 6 passed, 4 failed, 4 skipped
+[smoke] FAILED
+EXIT=1

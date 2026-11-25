@@ -57,6 +57,7 @@ help:
 	@echo "  make check-structure      check dist dirs exist (non-fatal)"
 	@echo "  make verify-env           verify all environment items (agent, NSIS, Docker, signing, etc.)"
 	@echo "  make graph-check          run graph invariant sweep (I1-I7)"
+	@echo "  make handover-check       verify the handover inventory (keys, accounts, owners, acceptances)"
 	@echo "  make lint-graph           ruff over .devin/graph (the code that enforces I1-I7)"
 	@echo "  make audit-teeth          would each verified-in-unit-test suite notice a regression?"
 	@echo "  make graph-status         print convergence report (phases, debt, enforcement gaps)"
@@ -443,6 +444,25 @@ graph-check:
 
 audit-teeth:
 	@python3 scripts/audit_test_teeth.py
+
+# ---------------------------------------------------------------------------
+# Handover inventory — the non-code half of the product: key custody, account
+# ownership, physical assets, named obligations and written acceptances.
+# docs/handover-registry.json is the source of truth; docs/HANDOVER.md explains
+# and prices it. Fails when a secret-shaped variable appears in an env example
+# with no custody entry, when a `critical` key is also marked regenerable (a
+# contradiction), or when a cited path does not exist. --strict is the
+# post-transfer gate: every obligation needs a named person and every acceptance
+# must be signed. Fast (<1 s), so it is safe to run on every push.
+# ---------------------------------------------------------------------------
+.PHONY: handover-check handover-check-strict
+
+handover-check:
+	@python3 scripts/check_handover.py
+	@python3 scripts/check_handover.py --self-test | tail -1
+
+handover-check-strict:
+	@python3 scripts/check_handover.py --strict
 
 # Graph convergence report — surfaces the real remaining work (phases, debt,
 # enforcement paths). Unlike graph-check (which asserts invariants), this

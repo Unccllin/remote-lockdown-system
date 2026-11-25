@@ -48,6 +48,11 @@ Every document is listed below with a one-line description and a relative link.
 | [DR_RUNBOOK.md](DR_RUNBOOK.md) | Disaster recovery runbook — concrete recovery procedures for likely production failure scenarios. |
 | [PBA_RECOVERY_RUNBOOK.md](PBA_RECOVERY_RUNBOOK.md) | Step-by-step runbook for recovering a device with Pre-Boot Authentication (PBA) active after a reboot. |
 | [AUDIT_KB.md](AUDIT_KB.md) | System audit knowledge base and remediation plan — every finding verified by running actual test suites. |
+| [HANDOVER.md](HANDOVER.md) | Product handover package — the non-code half: key custody, account ownership, physical assets, named obligations, written acceptances and what each costs. Machine-readable companion: [handover-registry.json](handover-registry.json), gated by `scripts/check_handover.py`. |
+| [SERVERLESS-DEPLOY.md](SERVERLESS-DEPLOY.md) | Deploy runbook for the Worker: stores, secrets and their escrow, configuration that must match the privacy notice, binary staging, smoke, first device, rollback. |
+| [SERVERLESS-BACKUP.md](SERVERLESS-BACKUP.md) | Encrypted backup and restore: what a backup contains, why it refuses to write without a key, the quarterly drill and its exit condition, and the limits (RPO, merge-not-replace, no off-account copy). |
+| [SERVERLESS-D1-CUTOVER.md](SERVERLESS-D1-CUTOVER.md) | Staged plan for moving state to a relational store, with the exit condition and rollback for each stage, and the migration items that are easy to lose. |
+| [SERVERLESS-COST.md](SERVERLESS-COST.md) | What a fully serverless deployment costs by fleet size, in shillings, including the per-poll cost driver and the crossover against a local VM. |
 
 ## Research
 

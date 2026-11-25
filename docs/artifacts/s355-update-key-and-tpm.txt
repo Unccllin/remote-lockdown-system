@@ -1,0 +1,79 @@
+# S355 — update-signing key recovered; TPM sealing root-caused — 2026-11-24T14:48:30Z
+
+## CORRECTION: the update-signing private key is NOT lost
+```
+location   ~/.lockdown-secrets/update_signing.key  (+ backup/update_signing.key.20261118T131800Z)
+
+public-key fingerprint (sha256 of DER), all four identical 78609c8b…34f39e8:
+  derived from the private key
+  ~/.lockdown-secrets/update_signing.pub
+  ~/.lockdown-secrets/backup/update_signing.pub   (2026-11-18)
+  C:\ProgramData\LockdownAgent\update_signing.pub  (MOLE, the pin the device verifies against)
+
+live release metadata in KV: agent_release
+  latest_version 1.0.3 | sha256 902a1af3… | signature_alg ed25519
+  openssl pkeyutl -verify over 'v1:1.0.3:902a1af3…' -> Signature Verified Successfully
+```
+
+Earlier sessions reported this key as lost. It was searched for in secrets/ (the repo's
+gitignored dir) and in Cloudflare secrets, but not in ~/.lockdown-secrets/ where it lives.
+
+## CORRECTION: the Worker never reads UPDATE_SIGNING_KEY
+```
+grep UPDATE_SIGNING_KEY serverless/*.ts -> no matches
+Release signing is offline: scripts/sign-release-metadata.py signs 'v1:{version}:{sha256}',
+and the pre-computed signature is published to KV as agent_release. A Worker secret for it
+would be inert. docs/SERVERLESS-DEPLOY.md told operators to set it; corrected.
+```
+
+## MOLE has a working TPM — the failure is in code
+```
+Get-Tpm: TpmPresent True, TpmReady True, TpmEnabled True, TpmActivated True
+         Win32_Tpm: SpecVersion 2.0, ManufacturerIdTxt IFX (Infineon)
+
+defect 1 (fatal, every check-in):
+  the generated PowerShell referenced [System.Security.Cryptography.CngKeyFlags]
+  reproduces: 'Unable to find type [System.Security.Cryptography.CngKeyFlags]'
+  that type does not exist on Windows PowerShell 5.1 / .NET Framework, so the script threw
+  before any TPM call.
+
+defect 2 (why nobody saw it):
+  the script writes 'ERROR: <reason>' to STDOUT and returns non-zero; the caller logged
+  result.stderr.strip(), which is empty -> the log line read 'TPM key creation failed: '
+  with nothing after it, on every check-in, for every device.
+
+defect 3 (the approach itself):
+  with the enum line removed, CngKey.Create against 'Microsoft Platform Crypto Provider'
+  still fails: 'The requested operation is not supported.' (verified on MOLE)
+  the supported path works: New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto
+  Provider' -KeyAlgorithm RSA -KeyLength 2048 -CertStoreLocation Cert:\LocalMachine\My
+  -> CREATED F4BB9916…C30C18, HasPrivateKey True
+  (that is what the module's own docstring says it does; the code did not)
+```
+
+## Fixed in source this session
+```
+agent/tpm_seal.py
+  - removed the nonexistent CngKeyFlags reference; the script says why in a comment
+  - failure now logs stdout (falling back to stderr, then 'no output') and the rc:
+    'TPM key creation failed (rc=1): ERROR: ...'
+agent/tests/test_tpm_seal.py
+  - pins that the generated script has no $keyParams.Flags and no 'CngKeyFlags]::' usage
+  - pins that a failing run surfaces stdout and rc in the log
+```
+
+## Verification
+```
+scripts/lint-agent.sh     ruff check + format clean
+pytest agent/tests        all passed (21 in test_tpm_seal.py)
+```
+
+## Still open
+```
+- TPM sealing has never worked on Windows, so state has been protected by the DPAPI fallback
+  on every device. A cert-based rewrite (New-SelfSignedCertificate + thumbprint addressing)
+  needs a Windows test capability before it can be claimed working.
+- Published release is 1.0.3 while the source is 1.0.4 and MOLE already runs 1.0.4; signing
+  and publishing a 1.0.4 release is now unblocked (key in hand) but the agent must be rebuilt.
+- GOOGLE_API_KEY is still the ROT-TEST placeholder.
+```

@@ -1,0 +1,769 @@
+{
+  "meta": {
+    "product": "Remote Lockdown System",
+    "purpose": "Machine-readable inventory of everything that must move when the product changes hands, excluding the source history itself.",
+    "generated": "2026-11-24",
+    "status": "pre-transfer",
+    "read_by": "scripts/check_handover.py",
+    "human_doc": "docs/HANDOVER.md",
+    "notes": [
+      "status is 'pre-transfer' until every obligation has a named_person and every acceptance is signed; scripts/check_handover.py --strict enforces exactly that.",
+      "Prices live in docs/HANDOVER.md, not here: they change, and this file is a custody record."
+    ]
+  },
+  "env_ignore": [
+    "DB_PASSWORD_NOTE"
+  ],
+  "keys": [
+    {
+      "id": "K-JWT",
+      "name": "JWT signing secret",
+      "env_vars": [
+        "JWT_SECRET"
+      ],
+      "where": [
+        "server/.env.example",
+        "secrets/jwt_secret.txt",
+        ".env.prod.example"
+      ],
+      "purpose": "Signs admin session tokens for the dashboard API.",
+      "regenerable": "yes",
+      "severity": "medium",
+      "loss_impact": "All admins are logged out once. No data is lost, no device is affected.",
+      "transfer_action": "Generate fresh with `openssl rand -hex 32` in the receiving environment. Never transfer the value.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-AGENT-SHARED",
+      "name": "Legacy shared agent key",
+      "env_vars": [
+        "AGENT_SHARED_KEY",
+        "AGENT_SHARED_KEY_FILE"
+      ],
+      "where": [
+        "server/.env.example",
+        ".env.prod.example"
+      ],
+      "purpose": "Transitional fallback auth for devices that have no per-device API key hash yet.",
+      "regenerable": "yes-with-reenrolment",
+      "severity": "high",
+      "loss_impact": "Any device still on the legacy path stops authenticating until it is re-enrolled; devices with per-device keys are unaffected.",
+      "transfer_action": "Count legacy devices first (`api_key_hash IS NULL`). If zero, generate fresh and drop the variable entirely.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-AGENT-PEPPER",
+      "name": "Per-device API key pepper",
+      "env_vars": [
+        "AGENT_KEY_PEPPER",
+        "AGENT_KEY_PEPPER_FILE"
+      ],
+      "where": [
+        "server/.env.example",
+        "secrets/agent_key_pepper.txt",
+        ".env.prod.example"
+      ],
+      "purpose": "Peppers the hash of every per-device agent API key.",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "Every stored api_key_hash becomes unverifiable: the entire fleet fails authentication and must be re-enrolled in person.",
+      "transfer_action": "Travels with the database. If the DB does not transfer, generate fresh and re-enrol.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-FIELD-ENC",
+      "name": "Field encryption key (at rest)",
+      "env_vars": [
+        "FIELD_ENCRYPTION_KEY",
+        "FIELD_ENCRYPTION_KEY_FILE"
+      ],
+      "where": [
+        "server/.env.example",
+        "secrets/field_encryption_key.txt",
+        ".env.prod.example"
+      ],
+      "purpose": "Encrypts sensitive columns at rest (FA2).",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "Encrypted columns are unreadable permanently. There is no recovery path \u2014 not even a DB restore helps.",
+      "transfer_action": "Travels with the database, in a sealed escrow, never in a chat or a commit.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-LOCATION",
+      "name": "Location field key",
+      "env_vars": [
+        "LOCATION_FIELD_KEY",
+        "LOCATION_FIELD_KEY_FILE"
+      ],
+      "where": [
+        "server/.env.example",
+        "secrets/location_field_key.txt",
+        ".env.prod.example"
+      ],
+      "purpose": "Separate at-rest key for location reports (FA5) \u2014 deliberately a different blast radius from K-FIELD-ENC.",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "All historical location data is unreadable. Because this is personal data under GDPR, losing the key is a deletion event that also has to be recordable.",
+      "transfer_action": "Travels with the database. Do not merge it into K-FIELD-ENC to simplify the handover.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-BACKUP",
+      "name": "Backup encryption key",
+      "env_vars": [
+        "BACKUP_ENCRYPT_KEY"
+      ],
+      "where": [
+        ".env.prod.example",
+        "docs/BACKUP.md"
+      ],
+      "purpose": "AES-256-CBC key for every backup the server writes (service is on by default).",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "Every existing backup becomes an unreadable blob. The DR runbook stops being executable.",
+      "transfer_action": "Travels with the backup set OR is shared out-of-band before the first restore drill.",
+      "references": [
+        "docs/BACKUP.md",
+        "docs/DR_RUNBOOK.md"
+      ]
+    },
+    {
+      "id": "K-UPDATE-SIGN",
+      "name": "Agent update signing key (Ed25519) + pinned public key",
+      "env_vars": [
+        "UPDATE_SIGNING_KEY",
+        "UPDATE_PUBLIC_KEY_PEM"
+      ],
+      "where": [
+        "server/.env.example",
+        "docs/CODE_SIGNING.md"
+      ],
+      "purpose": "Signs `/api/agent/update` metadata (`v1:{version}:{sha256}`). Agents pin the public key, so a SHA-256 alone is not self-certifying.",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "Every deployed agent already trusts this exact key. Lose the private key and no agent can be updated again; rotate it and every agent must be re-enrolled to accept the new pin.",
+      "transfer_action": "The only secret that must transfer even when the database does not. Escrow both halves; record the key id in the acceptance table.",
+      "references": [
+        "docs/CODE_SIGNING.md",
+        "scripts/generate-update-keys.sh",
+        "scripts/sign-release-metadata.py"
+      ]
+    },
+    {
+      "id": "K-RECOVERY-ESCROW",
+      "name": "Recovery escrow keypair",
+      "env_vars": [],
+      "where": [
+        "scripts/generate-recovery-keys.sh"
+      ],
+      "purpose": "Out-of-band unlock path for a locked device. Deliberately a different key domain from K-UPDATE-SIGN.",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "A locked device in the field has no software unlock path left; recovery becomes a physical/BIOS exercise.",
+      "transfer_action": "Two-person custody. Never store alongside K-UPDATE-SIGN \u2014 the separation is the point.",
+      "references": [
+        "scripts/generate-recovery-keys.sh"
+      ]
+    },
+    {
+      "id": "K-SECUREBOOT",
+      "name": "Secure Boot / PBL platform keys",
+      "env_vars": [],
+      "where": [
+        "scripts/gen-secureboot-keys.sh",
+        "scripts/sign-pbl.sh",
+        "docs/SECURE-BOOT-PROVISIONING.md"
+      ],
+      "purpose": "Signs PblApp.efi and the persist capsule; owns the db enrollment that makes firmware trust the platform.",
+      "regenerable": "no",
+      "severity": "critical",
+      "loss_impact": "Firmware stops trusting the platform. Recovery is a manual enrolment visit per machine \u2014 the exact cost PBL exists to avoid.",
+      "transfer_action": "Transfers with the signing authority ruling (see `.devin/PENDING-RULING.md`, D-130). Losing it also invalidates the claim that fleet firmware trust is provisioned.",
+      "references": [
+        "docs/SECURE-BOOT-PROVISIONING.md",
+        "scripts/gen-secureboot-keys.sh"
+      ]
+    },
+    {
+      "id": "K-CI-AZURE-SIGNING",
+      "name": "Azure Artifact Signing account + certificate profile",
+      "env_vars": [
+        "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME",
+        "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE",
+        "AZURE_TRUSTED_SIGNING_TENANT_ID"
+      ],
+      "where": [
+        ".github/workflows/windows-artifacts.yml",
+        ".github/workflows/release.yml"
+      ],
+      "purpose": "Signs the Windows agent/installer binaries so Windows trusts them without a SmartScreen reputation reset.",
+      "regenerable": "yes-with-reenrolment",
+      "severity": "high",
+      "loss_impact": "Release pipeline cannot produce signed Windows artifacts; SmartScreen reputation restarts from zero for every distributed build.",
+      "transfer_action": "Identity validation is tied to a legal entity. Either the Azure account transfers inside that entity or the company re-validates and re-signs; either way hashes change.",
+      "references": [
+        ".github/workflows/windows-artifacts.yml"
+      ]
+    },
+    {
+      "id": "K-CI-APPLE",
+      "name": "Apple Developer ID (p12 + app-specific password)",
+      "env_vars": [
+        "APPLE_CERTIFICATE_P12",
+        "APPLE_CERTIFICATE_PASSWORD",
+        "APPLE_ID",
+        "APPLE_APP_SPECIFIC_PASSWORD",
+        "APPLE_TEAM_ID"
+      ],
+      "where": [
+        ".github/workflows/release.yml"
+      ],
+      "purpose": "Signs and notarizes the Electron desktop shell for macOS.",
+      "regenerable": "yes-with-reenrolment",
+      "severity": "high",
+      "loss_impact": "macOS builds stop being notarized; Gatekeeper blocks them on the target machine.",
+      "transfer_action": "Enrollment belongs to a legal entity. Transfer the team or re-enroll under the company's Apple Developer Program.",
+      "references": [
+        ".github/workflows/release.yml"
+      ]
+    },
+    {
+      "id": "K-GH-TOKEN",
+      "name": "GitHub token for release downloads",
+      "env_vars": [
+        "GITHUB_TOKEN"
+      ],
+      "where": [
+        ".env.prod.example",
+        ".github/workflows"
+      ],
+      "purpose": "Lets the server download cross-platform agent binaries from GitHub Releases when the repo is private.",
+      "regenerable": "yes",
+      "severity": "medium",
+      "loss_impact": "Cross-platform installer generation fails with a 404 or a rate-limit; the fleet is unaffected.",
+      "transfer_action": "Issue a fresh fine-grained token scoped to the release repo. Never transfer a user PAT.",
+      "references": [
+        ".env.prod.example"
+      ]
+    },
+    {
+      "id": "K-CLOUDFLARE",
+      "name": "Cloudflare Workers account + wrangler token",
+      "env_vars": [],
+      "where": [
+        "serverless/"
+      ],
+      "purpose": "Hosts the serverless transport/API surface when the product is deployed without a local server.",
+      "regenerable": "yes",
+      "severity": "medium",
+      "loss_impact": "The serverless deployment cannot be updated or rolled back; the running Worker keeps serving until the token is needed.",
+      "transfer_action": "Transfer the account (not the token) so billing and the Worker's own secrets move with it.",
+      "references": [
+        "serverless"
+      ]
+    },
+    {
+      "id": "K-DB",
+      "name": "PostgreSQL superuser/application password",
+      "env_vars": [
+        "POSTGRES_PASSWORD",
+        "DB_PASSWORD"
+      ],
+      "where": [
+        ".env.prod.example",
+        "server/.env.example"
+      ],
+      "purpose": "Database access for the API.",
+      "regenerable": "yes",
+      "severity": "high",
+      "loss_impact": "Downtime for a password rotation; no permanent loss if rotated with `ALTER ROLE`.",
+      "transfer_action": "Rotate after transfer. The receiving team must own the database host, not just the credential.",
+      "references": [
+        ".env.prod.example"
+      ]
+    },
+    {
+      "id": "K-GEO-API",
+      "name": "Google Geolocation API key",
+      "env_vars": [
+        "GOOGLE_API_KEY"
+      ],
+      "where": [
+        "server/.env.example"
+      ],
+      "purpose": "WiFi triangulation (~20-50 m) instead of IP fallback (~10-50 km). Baked into generated agent installers.",
+      "regenerable": "yes",
+      "severity": "medium",
+      "loss_impact": "Tracking silently degrades to the IP fallback \u2014 accuracy drops by orders of magnitude and the dashboard still looks functional, which is the dangerous part.",
+      "transfer_action": "Billing is attached to the key's project. Transfer the GCP project or re-issue and re-generate installers for every device.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-GRAPH",
+      "name": "Microsoft Graph (Intune) app registration",
+      "env_vars": [
+        "GRAPH_TENANT_ID",
+        "GRAPH_CLIENT_ID",
+        "GRAPH_CLIENT_SECRET",
+        "GRAPH_SCOPE"
+      ],
+      "where": [
+        "server/.env.example",
+        "docs/adr/INTEGRATION-OWNERSHIP.md"
+      ],
+      "purpose": "Read-only device inventory import. The connector never issues lockdowns.",
+      "regenerable": "yes",
+      "severity": "low",
+      "loss_impact": "Inventory import stops; nothing else degrades.",
+      "transfer_action": "Consent belongs to the receiving tenant \u2014 it must be granted by them, not transferred.",
+      "references": [
+        "docs/adr/INTEGRATION-OWNERSHIP.md"
+      ]
+    },
+    {
+      "id": "K-MESHCENTRAL",
+      "name": "MeshCentral login token/credentials",
+      "env_vars": [
+        "MESHCENTRAL_TOKEN",
+        "MESHCENTRAL_USER",
+        "MESHCENTRAL_PASS"
+      ],
+      "where": [
+        "server/.env.example",
+        "docs/adr/INTEGRATION-OWNERSHIP.md"
+      ],
+      "purpose": "Optional read-only inventory upstream. Off by default; 1.3.x has no REST API, so the connector cannot read inventory yet.",
+      "regenerable": "yes",
+      "severity": "low",
+      "loss_impact": "An optional integration stops.",
+      "transfer_action": "Prefer revoking and issuing a new token on the receiving side.",
+      "references": [
+        "docs/adr/INTEGRATION-OWNERSHIP.md"
+      ]
+    },
+    {
+      "id": "K-SMTP",
+      "name": "SMTP alert credentials",
+      "env_vars": [
+        "SMTP_USER",
+        "SMTP_PASS"
+      ],
+      "where": [
+        "server/.env.example",
+        ".env.prod.example"
+      ],
+      "purpose": "Email alerts for stolen-device, lockdown-confirmed, stale-device, deadman and DB-degradation events.",
+      "regenerable": "yes",
+      "severity": "medium",
+      "loss_impact": "Alerting stops. The product still locks devices, but nobody is told \u2014 a silent failure in the one flow that matters most.",
+      "transfer_action": "The receiving company should send from its own domain (SPF/DKIM alignment), which means new credentials, not transferred ones.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-NOTIFY-WEBHOOKS",
+      "name": "Slack / generic notification webhooks",
+      "env_vars": [
+        "SLACK_WEBHOOK_URL",
+        "NOTIFICATION_WEBHOOK_URL"
+      ],
+      "where": [
+        "server/.env.example",
+        ".env.prod.example"
+      ],
+      "purpose": "Alert delivery into the company's chat/SOC pipeline.",
+      "regenerable": "yes",
+      "severity": "low",
+      "loss_impact": "Alerts are logged to console only.",
+      "transfer_action": "Always re-create in the receiving workspace; a transferred webhook URL is a live posting credential.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "K-GRAFANA",
+      "name": "Monitoring admin credentials",
+      "env_vars": [
+        "GRAFANA_ADMIN_USER",
+        "GRAFANA_ADMIN_PASSWORD"
+      ],
+      "where": [
+        ".env.prod.example",
+        "monitoring/"
+      ],
+      "purpose": "Grafana admin login for the optional monitoring profile.",
+      "regenerable": "yes",
+      "severity": "low",
+      "loss_impact": "Dashboards are read-only until reset. Note the shipped default is `admin/admin`.",
+      "transfer_action": "Reset on first login, which `docs/DEPLOYMENT.md` already requires.",
+      "references": [
+        "monitoring",
+        "docs/DEPLOYMENT.md"
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "id": "A-GITHUB",
+      "service": "GitHub org + repo + Actions secrets + release artifacts",
+      "why": "Source, CI, release binaries, and the update-download source the server calls.",
+      "transfer_action": "Transfer repository ownership into the company org; re-create all 10 Actions secrets rather than exporting them.",
+      "references": [
+        ".github/workflows"
+      ]
+    },
+    {
+      "id": "A-AZURE",
+      "service": "Azure subscription (Artifact Signing)",
+      "why": "Windows code signing identity + certificate profile.",
+      "transfer_action": "Move the subscription or re-validate identity inside the company's tenant.",
+      "references": [
+        ".github/workflows/windows-artifacts.yml"
+      ]
+    },
+    {
+      "id": "A-APPLE",
+      "service": "Apple Developer Program",
+      "why": "Developer ID signing + notarization for the Electron desktop shell.",
+      "transfer_action": "Enrollment is per legal entity; re-enroll under the company.",
+      "references": [
+        ".github/workflows/release.yml"
+      ]
+    },
+    {
+      "id": "A-CLOUDFLARE",
+      "service": "Cloudflare account (Workers)",
+      "why": "Serverless transport deployment and its secrets.",
+      "transfer_action": "Transfer account ownership; re-issue wrangler tokens.",
+      "references": [
+        "serverless"
+      ]
+    },
+    {
+      "id": "A-DOMAIN",
+      "service": "Domain registrar + DNS zone",
+      "why": "The admin URL baked into installers, plus ACME/Caddy certificate issuance.",
+      "transfer_action": "Transfer the registration and keep the DNS zone; ACME re-issues without cost.",
+      "references": [
+        "Caddyfile",
+        "docs/DEPLOYMENT.md"
+      ]
+    },
+    {
+      "id": "A-GCP",
+      "service": "Google Cloud project (Geolocation API)",
+      "why": "WiFi triangulation key with billing attached.",
+      "transfer_action": "Move the project or re-issue the key and regenerate every installer.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "A-EMAIL",
+      "service": "Transactional email provider",
+      "why": "Alert delivery to the security team.",
+      "transfer_action": "New account under the company's domain.",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "A-M365",
+      "service": "Microsoft Entra tenant + Graph app registration",
+      "why": "Optional read-only Intune inventory import (consent is tenant-scoped).",
+      "transfer_action": "Receiving tenant grants its own consent.",
+      "references": [
+        "docs/adr/INTEGRATION-OWNERSHIP.md"
+      ]
+    },
+    {
+      "id": "A-SERVER-HOST",
+      "service": "Linux host (Docker 24+ / compose v2, 2 GB RAM, 20 GB disk) or cloud equivalent",
+      "why": "Runs the API, PostgreSQL and Caddy.",
+      "transfer_action": "The company must own the host, the volume and the backup target \u2014 not just receive an image.",
+      "references": [
+        "docs/DEPLOYMENT.md",
+        "docker-compose.prod.yml"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "P-FRANKENSTEIN",
+      "what": "FRANKENSTEIN \u2014 first production device (HP EliteBook, Win 11, service install)",
+      "why": "Carries the hardware verification evidence for 11 of 13 enforcement paths and is the reference service install.",
+      "transfer_action": "Re-image or hand over with documented BIOS state; the site licence/BIOS password must be recorded with it.",
+      "references": [
+        ".devin/graph/current-state.md"
+      ]
+    },
+    {
+      "id": "P-HP-TEST",
+      "what": "HP test unit (DESKTOP-RUDJGI6 enrollment history)",
+      "why": "Second hardware target covering the HP Sure Admin / UEFI path.",
+      "transfer_action": "Same as P-FRANKENSTEIN; record the Sure Admin credential location, never the value.",
+      "references": [
+        "docs/D-129-HARDWARE-RUNBOOK.md"
+      ]
+    },
+    {
+      "id": "P-SACRIFICIAL",
+      "what": "A named sacrificial machine for E-BCD and E-HP-UEFI",
+      "why": "The two enforcement paths are NOT hardware-verified precisely because a failed run rewrites boot config or sets a firmware password needing a manual BIOS visit.",
+      "transfer_action": "Must be supplied by the receiving company, with a written recovery plan, or the two paths stay unit-test-only in writing.",
+      "references": [
+        "docs/D-129-HARDWARE-RUNBOOK.md",
+        ".devin/graph/current-state.md"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "O-LOCKDOWN",
+      "obligation": "Authority to issue a remote lockdown/recover command",
+      "cadence": "per event",
+      "role": "Incident commander (named, with a deputy)",
+      "named_person": null,
+      "evidence": "audit ledger entry + dashboard actor id",
+      "references": [
+        "docs/RBAC_ACCESS_MATRIX.md",
+        "server/src/routes/audit.js"
+      ]
+    },
+    {
+      "id": "O-UPDATE-SIGN",
+      "obligation": "Authority to sign and publish an agent update",
+      "cadence": "per release",
+      "role": "Release engineer + second approver (two-person rule)",
+      "named_person": null,
+      "evidence": "signed update metadata + verify-signing.sh transcript",
+      "references": [
+        "docs/CODE_SIGNING.md",
+        "scripts/verify-signing.sh"
+      ]
+    },
+    {
+      "id": "O-KEY-CUSTODY",
+      "obligation": "Custody of the four critical key domains (pepper, field, location, backup) and the two trust roots (update-sign, recovery-escrow)",
+      "cadence": "continuous",
+      "role": "Key custodian (sealed escrow, two-person access)",
+      "named_person": null,
+      "evidence": "escrow inventory + quarterly access review",
+      "references": [
+        "docs/handover-registry.json"
+      ]
+    },
+    {
+      "id": "O-ONCALL",
+      "obligation": "On-call response to a locked/stolen device event",
+      "cadence": "continuous",
+      "role": "Security operations",
+      "named_person": null,
+      "evidence": "alert acknowledgement latency",
+      "references": [
+        "server/.env.example"
+      ]
+    },
+    {
+      "id": "O-RESTORE",
+      "obligation": "Backup restore drill (encrypted backups, verify they decrypt)",
+      "cadence": "quarterly",
+      "role": "Platform owner",
+      "named_person": null,
+      "evidence": "restore transcript against a fresh DB",
+      "references": [
+        "docs/BACKUP.md",
+        "docs/DR_RUNBOOK.md"
+      ]
+    },
+    {
+      "id": "O-HARDWARE-WINDOW",
+      "obligation": "Hardware verification window on real devices",
+      "cadence": "per release that touches an enforcement path",
+      "role": "Hardware test owner",
+      "named_person": null,
+      "evidence": "hw_test_artifact_*.json accepted by make hw-artifact",
+      "references": [
+        "docs/D-129-HARDWARE-RUNBOOK.md",
+        "agent/hw_test_harness.py"
+      ]
+    },
+    {
+      "id": "O-VERIFY",
+      "obligation": "Green full-verify on a clean machine after any environment change",
+      "cadence": "per release",
+      "role": "Release engineer",
+      "named_person": null,
+      "evidence": "make full-verify transcript, FV_EXIT=0",
+      "references": [
+        "Makefile"
+      ]
+    },
+    {
+      "id": "O-PRIVACY",
+      "obligation": "Employee-monitoring notice, lawful basis and works-council consultation (where applicable)",
+      "cadence": "per deployment/jurisdiction",
+      "role": "Data protection officer / HR legal",
+      "named_person": null,
+      "evidence": "signed policy + DPIA in the company's name",
+      "references": [
+        "docs/GDPR_LIA.md",
+        "docs/PRIVACY_POLICY.md"
+      ]
+    },
+    {
+      "id": "O-IR",
+      "obligation": "Incident response plan and security contact",
+      "cadence": "continuous",
+      "role": "Security lead",
+      "named_person": null,
+      "evidence": "IR runbook + published disclosure address",
+      "references": [
+        "docs/SECURITY.md"
+      ]
+    }
+  ],
+  "acceptances": [
+    {
+      "id": "ACC-LICENCE",
+      "item": "Hippocratic Licence 2.1 usage restriction on react-leaflet / @react-leaflet/core (not OSI-approved, restricts use)",
+      "status": "unsigned",
+      "signed_by": null,
+      "note": "Either replace the two dependencies or sign an explicit acceptance. Stated as an open product decision in LICENSE.",
+      "references": [
+        "LICENSE",
+        "THIRD-PARTY-NOTICES.md"
+      ]
+    },
+    {
+      "id": "ACC-HW-CEILING",
+      "item": "E-BCD and E-HP-UEFI remain verified-in-unit-test only",
+      "status": "unsigned",
+      "signed_by": null,
+      "note": "Accept in writing, or supply a sacrificial machine and recovery plan so they can be promoted to verified-on-hardware.",
+      "references": [
+        ".devin/graph/current-state.md"
+      ]
+    },
+    {
+      "id": "ACC-SSO-GAP",
+      "item": "No SSO/SAML/OIDC and no MFA on admin accounts at transfer",
+      "status": "unsigned",
+      "signed_by": null,
+      "note": "Accept the gap with a dated remediation plan, or decline the transfer.",
+      "references": [
+        "server/src/routes/auth.js"
+      ]
+    },
+    {
+      "id": "ACC-MONITORING-POLICY",
+      "item": "Who is authorised to use covert tracking / lockdown against an individual, and under what policy",
+      "status": "unsigned",
+      "signed_by": null,
+      "note": "The audit ledger and RBAC matrix are the technical answer; the company must adopt the policy answer.",
+      "references": [
+        "docs/RBAC_ACCESS_MATRIX.md",
+        "docs/GDPR_LIA.md"
+      ]
+    },
+    {
+      "id": "ACC-DATA-FLOW",
+      "item": "Whether the existing database transfers (keys K-AGENT-PEPPER, K-FIELD-ENC, K-LOCATION, K-BACKUP travel with it)",
+      "status": "unsigned",
+      "signed_by": null,
+      "note": "A transfer of personal data is a controller change with its own notice obligations.",
+      "references": [
+        "docs/GDPR_LIA.md"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G-SSO",
+      "gap": "No SSO/SAML/OIDC provider support; admins are local username/password.",
+      "blocks": "Enterprise procurement",
+      "remedy": "Add an OIDC/SAML identity provider path behind the existing auth middleware.",
+      "references": [
+        "server/src/routes/auth.js"
+      ]
+    },
+    {
+      "id": "G-MFA",
+      "gap": "No MFA/TOTP/WebAuthn for admin accounts.",
+      "blocks": "Enterprise procurement, pen-test clearance",
+      "remedy": "TOTP enrolment on admin records + recovery codes.",
+      "references": [
+        "server/src/routes/auth.js"
+      ]
+    },
+    {
+      "id": "G-ENTITLEMENT",
+      "gap": "No licence/entitlement mechanism (no activation, seat count or expiry).",
+      "blocks": "Commercial pricing model",
+      "remedy": "Decide the commercial model before building it; an offline activation file fits the on-prem shape.",
+      "references": [
+        "LICENSE"
+      ]
+    },
+    {
+      "id": "G-MULTITENANCY",
+      "gap": "Single-tenant by construction; one company per deployment.",
+      "blocks": "SaaS delivery model",
+      "remedy": "Not a small change: tenant scoping on every table plus a tenant-aware pool. On-prem avoids it entirely.",
+      "references": [
+        "server/src/db"
+      ]
+    },
+    {
+      "id": "G-AUDIT-EXPORT",
+      "gap": "No audit export (CSV/JSON) or DSAR tooling.",
+      "blocks": "Works-council and subject-access requests",
+      "remedy": "A read-only export route over the existing audit ledger.",
+      "references": [
+        "server/src/routes/audit.js"
+      ]
+    },
+    {
+      "id": "G-SBOM",
+      "gap": "No SBOM generation in the release pipeline.",
+      "blocks": "Security review",
+      "remedy": "syft/cyclonedx at release time; both are free and offline-capable.",
+      "references": [
+        ".github/workflows/release.yml"
+      ]
+    },
+    {
+      "id": "G-IR",
+      "gap": "No incident-response plan and no published vulnerability-disclosure policy.",
+      "blocks": "Procurement questionnaire",
+      "remedy": "Write both; `docs/SECURITY.md` is the raw material.",
+      "references": [
+        "docs/SECURITY.md"
+      ]
+    },
+    {
+      "id": "G-DOC-DRIFT",
+      "gap": "AGENTS.md claims 37 OPEN PBL debt items; the ledger has 5 status markers OPEN.",
+      "blocks": "Trust in the documentation set at transfer",
+      "remedy": "Reconcile the count before handover, or the receiving team stops trusting the rest.",
+      "references": [
+        "AGENTS.md",
+        "docs/adr/PBL-DEBT-LEDGER.md"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+# S348 — serverless scale + retention, measured 2026-11-24T13:19:06Z
+
+## 1. typecheck
+tsc: exit 0
+
+## 2. worker suite
+
+ Test Files  5 passed (5)
+      Tests  504 passed (504)
+   Start at  16:19:08
+   Duration  3.12s (transform 1.74s, setup 0ms, import 1.71s, tests 4.99s, environment 1ms)
+
+
+## 3. new scale/retention tests
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+
+## 4. bundle + route verification (make verify-worker)
+[OK]    bundle built: 228K worker.js
+[OK]    bundle contains /v1/verdict
+[OK]    bundle contains /api/agent/checkin
+[OK]    bundle contains /api/enroll
+[OK]    bundle contains /api/download/agent
+[OK]    workerd serving
+[OK]    GET /api/setup/status -> 200
+[OK]    GET /api/devices without a token -> 401
+[OK]    GET /api/devices with the break-glass ADMIN_TOKEN -> 200
+[OK]    GET /api/devices with a bogus token -> 401
+[OK]    GET /this-route-does-not-exist -> 404
+[OK]    POST /v1/verdict with a junk body -> 400 (routed, rejected cleanly)
+[OK]    GET /v1/policy/1 -> 200 (routed; a policy blob is served from local KV or the built-in default)
+[OK]    GET /api/download/agent -> 404 (routed; no binary in local KV)
+[OK]    worker verification PASSED — the bundle builds and every checked route answers
+[OK]    publishing is the one step left, and it needs your `wrangler login`:
+[OK]      cd serverless && npx wrangler deploy
+
+## 5. cron declared
+[triggers]
+crons = ["0 3 * * *"]
+
+## 6. per-device index in the store
+554:export const COMMAND_DEVICE_INDEX_PREFIX = 'command_index:';
+563:  return `${COMMAND_DEVICE_INDEX_PREFIX}${deviceId}`;
+639:export async function listCommandIdsForDevice(env: Env, deviceId: string): Promise<string[]> {
+1167:export async function purgeExpiredLocations(

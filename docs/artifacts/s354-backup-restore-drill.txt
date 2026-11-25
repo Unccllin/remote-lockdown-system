@@ -1,0 +1,74 @@
+# S354 — production backup/restore drill, and the restore bug it found — 2026-11-24T14:35:09Z
+
+## Auth for the drill
+```
+admin account: uncletom (super-admin) — a username alone cannot authenticate.
+ADMIN_TOKEN is a Cloudflare secret and its value cannot be read back.
+Path used: a short-lived HS256 session token minted from the JWT_SECRET that this session
+generated and pushed (held in secrets/serverless-secrets-2026-11-24.env, mode 600).
+That also proves the JWT signing secret is the one the Worker holds.
+Token TTL 900 s, never printed, temp file 600, deleted after use.
+```
+
+## Attempt 1 — backup OK, restore FAILED
+```
+POST /api/admin/backups   -> 201  backups/2026-11-24T14-31-06-809Z.rmlb
+  40659 bytes, counts {devices 2, commands 8, locations 79, audit 29, admins 1}
+GET  /api/admin/backups   -> 200  1 object
+POST /api/admin/restore   -> 400  'restore failed: KV PUT failed: 429 Too Many Requests'
+```
+
+## Root cause
+```
+restoreBackup() called createCommand()/addLocationReport() per record, and each of those
+rewrites an index key. Workers KV allows ONE WRITE PER SECOND to the same key, so restoring a
+device with 79 reports issued 79 back-to-back writes to location_index:<device> and the whole
+restore failed. The smallest real fleet (2 devices, 79 reports) was enough to trigger it.
+```
+
+## Fix
+```
+serverless/backup.ts
+  commands: records in one pass -> command_index once, command_index:<device> once per device
+  locations: records in one pass -> saveLocationIndex() once per device
+  the per-device merge reads the raw key instead of listCommandIdsForDevice(), which persists
+  on a miss and would have been the second write in the same second
+serverless/serverless-backup.test.ts
+  new regression test: 25 locations + 25 commands -> each index written EXACTLY once,
+  and both lists still come back complete
+```
+
+## Tests
+```
+npx tsc --noEmit -p .      exit 0
+npx vitest run             7 files, 537 tests passed (was 536)
+serverless-backup.test.ts  18 passed
+```
+
+## Attempt 2 — after the fix, deployed as c152c352
+```
+POST /api/admin/backups   -> 201  backups/2026-11-24T14-34-31-462Z.rmlb
+  44025 bytes, counts {devices 2, commands 8, locations 90, audit 29, admins 1}
+POST /api/admin/restore   -> 200  {"restored":true,"counts":{devices 2, commands 8, locations 90,
+                                  audit 29, admins 1}}
+GET  /api/devices         -> 200  FRANKENSTEIN active, MOLE active   (data intact after restore)
+GET  /api/audit           -> 200  backup_restored 2026-11-24T14:34:47Z
+```
+
+## Correction to the MOLE report
+```
+agent.log was NOT dead: it resumed at 17:27 local when the machine woke, and had grown from
+586,753 to 747,815 bytes. The 11/19 mtime was the suspension, not a logging fault. The earlier
+note in s353-mole-check.txt calling it an observability gap was wrong on that point.
+```
+
+## New finding on MOLE (from the resumed log)
+```
+2026-11-24 17:27:07,766 [WARNING] TPM key creation failed:
+2026-11-24 17:27:07,766 [ERROR]   Could not create/open TPM seal key
+2026-11-24 17:28:15,921 [WARNING] TPM key creation failed:
+2026-11-24 17:28:15,921 [ERROR]   Could not create/open TPM seal key
+-> repeats every check-in (300 s). MOLE has no usable TPM (its firmware audit reports
+   tpm_enabled: null), so TPM sealing of agent state is unavailable there and the agent falls
+   back. Worth deciding whether that is expected for this machine or a provisioning gap.
+```

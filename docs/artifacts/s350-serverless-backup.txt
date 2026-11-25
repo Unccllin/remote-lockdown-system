@@ -1,0 +1,40 @@
+# S350 — serverless backup and restore — measured 2026-11-24T13:47:51Z
+
+## 1. typecheck
+tsc: exit 0
+
+## 2. full worker suite
+ Test Files  7 passed (7)
+      Tests  534 passed (534)
+   Duration  3.10s (transform 2.81s, setup 0ms, import 2.40s, tests 5.77s, environment 2ms)
+
+## 3. backup suite
+ Test Files  1 passed (1)
+      Tests  15 passed (15)
+
+## 4. bundle + routes (make verify-worker)
+[OK]    bundle built: 244K worker.js
+[OK]    GET /api/setup/status -> 200
+[OK]    GET /api/devices without a token -> 401
+[OK]    GET /api/devices with the break-glass ADMIN_TOKEN -> 200
+[OK]    GET /api/devices with a bogus token -> 401
+[OK]    POST /v1/verdict with a junk body -> 400 (routed, rejected cleanly)
+[OK]    GET /api/download/agent -> 404 (routed; no binary in local KV)
+[OK]    worker verification PASSED — the bundle builds and every checked route answers
+
+## 5. cron passes
+1742:      const retention = await purgeExpiredLocations(env);
+1753:      const nonces = await purgeExpiredNonces(env);
+1762:      const alerts = await runAlertTick(env);
+1774:      const backup = await writeBackup(env);
+2861:  const result = await writeBackup(env);
+
+## 6. backup routes registered
+1830:    if (path === '/api/admin/backups' && method === 'GET') {
+1833:    if (path === '/api/admin/backups' && method === 'POST') {
+1836:    if (path === '/api/admin/restore' && method === 'POST') {
+
+## 7. refusal rules present
+127:    throw new Error('backup is truncated');
+130:    if (blob[i] !== MAGIC_BYTES[i]) throw new Error('not a backup file (bad magic)');
+199:    return { ok: false, reason: 'BACKUP_ENCRYPT_KEY missing or not 64 hex characters — refusing to write a plaintext backup' };

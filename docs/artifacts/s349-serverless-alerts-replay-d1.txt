@@ -1,0 +1,42 @@
+# S349 — serverless alerting, replay protection, D1 schema — measured 2026-11-24T13:31:41Z
+
+## 1. typecheck
+tsc: exit 0
+
+## 2. full worker suite
+ Test Files  6 passed (6)
+      Tests  519 passed (519)
+   Duration  3.04s (transform 2.46s, setup 0ms, import 2.09s, tests 5.61s, environment 2ms)
+
+## 3. new suites
+ Test Files  2 passed (2)
+      Tests  23 passed (23)
+
+## 4. bundle + routes (make verify-worker)
+[OK]    bundle built: 232K worker.js
+[OK]    bundle contains /v1/verdict
+[OK]    bundle contains /api/agent/checkin
+[OK]    bundle contains /api/enroll
+[OK]    bundle contains /api/download/agent
+[OK]    GET /api/setup/status -> 200
+[OK]    GET /api/devices without a token -> 401
+[OK]    GET /api/devices with the break-glass ADMIN_TOKEN -> 200
+[OK]    GET /api/devices with a bogus token -> 401
+[OK]    GET /this-route-does-not-exist -> 404
+[OK]    POST /v1/verdict with a junk body -> 400 (routed, rejected cleanly)
+[OK]    GET /v1/policy/1 -> 200 (routed; a policy blob is served from local KV or the built-in default)
+
+## 5. cron + optional D1 binding declared
+[triggers]
+crons = ["0 3 * * *"]
+1
+
+## 6. D1 schema objects
+16
+
+## 7. scheduled passes wired
+1708:import { runAlertTick } from './alerts';
+1741:      const retention = await purgeExpiredLocations(env);
+1752:      const nonces = await purgeExpiredNonces(env);
+1761:      const alerts = await runAlertTick(env);
+2833:  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredLocations, purgeExpiredNonces, saveCheckinMetadata, saveHwArtifacts,

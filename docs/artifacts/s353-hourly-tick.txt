@@ -1,0 +1,44 @@
+# S353 — hourly tick, daily backup gate — 2026-11-24T14:25:35Z
+
+## Change
+```
+wrangler.toml   crons = ["0 3 * * *"] -> ["0 * * * *"]   (hourly)
+worker.ts       shouldRunBackup(controller): backup only when UTC hour == BACKUP_HOUR_UTC (3)
+                unknown scheduledTime -> run (a silently-stopped backup is the worse failure)
+reason          a stale-device alert up to 24 h late is the wrong trade for a lockdown product;
+                a full export every hour is the wrong trade at scale (it walks the whole store)
+```
+
+## Tests
+```
+npx tsc --noEmit -p .            exit 0
+npx vitest run                   7 files, 536 tests passed (was 534)
+serverless-backup.test.ts        17 passed, including:
+  - gates the backup on the 03:00 UTC tick (03 -> true, 04 -> false, 15 -> false, unknown -> true)
+  - writes a backup on the 03:00 tick and not on others (R2 object count 0 then 1)
+```
+
+## Deploy
+```
+version 5f7feadc-e294-4518-ad5b-2ffa1824693c
+bindings LOCKDOWN_KV, BINARIES, BACKUPS
+schedule: 0 * * * *
+```
+
+## Live verification after the deploy
+```
+200  GET  /api/health
+401  GET  /api/admin/backups
+401  POST /api/admin/restore
+200  GET  /api/download/agent
+200  GET  /v1/policy/1
+```
+
+## The agent survived it (second deploy of the day)
+```
+MOLE device_checkin  last_checkin 2026-11-24T14:23:44.391Z   (48 s before this check)
+                     agent 1.0.4, update_verification signature
+deploys today        14:06Z and 14:22Z, both with REPLAY_PROTECTION on by default
+-> an agent polling every 300 s has now crossed two deployments without a rejected request,
+   so the replay-protection risk flagged in S352 is closed by observation, not by argument.
+```

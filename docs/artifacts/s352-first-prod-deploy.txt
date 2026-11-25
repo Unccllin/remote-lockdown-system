@@ -1,0 +1,55 @@
+# S352 — first production deploy of the S348–S350 serverless work — 2026-11-24T14:08:30Z
+
+No credential values appear in this artifact: only names, status codes and timestamps.
+
+## Account state before the change
+```
+auth: OAuth mainacollins196@gmail.com, account eb7daee7153944d8aa34aac1c3f6d5f3
+KV: LOCKDOWN_KV 84b24c0c1b9e4896b6c6fa41548ac636 (matches wrangler.toml)
+R2: lockdown-binaries (present); lockdown-backups (ABSENT before this session)
+D1: none
+secrets: ADMIN_TOKEN, GOOGLE_API_KEY (JWT_SECRET, BACKUP_ENCRYPT_KEY, PBL_*, UPDATE_SIGNING_KEY absent)
+worker: deployed 2026-11-19 build; GET /api/admin/backups -> 404 (pre-S348 code)
+devices: 2 (FRANKENSTEIN 1.0.0, MOLE 1.0.4); both report update_verification: signature
+```
+
+## Actions taken
+```
+1. npx wrangler r2 bucket create lockdown-backups -> created
+2. wrangler.toml: [[r2_buckets]] binding = "BACKUPS" enabled (was commented)
+3. Secrets pushed via the Cloudflare API (PUT /workers/scripts/lockdown-serverless/secrets):
+   JWT_SECRET -> success ; BACKUP_ENCRYPT_KEY -> success
+   (wrangler secret put cannot read a pipe in 4.162 and needs a TTY prompt; API PUT was used.
+    First attempt failed with 10215 until the new version was deployed.)
+4. npx wrangler deploy -> version d29ecf84-6821-4cd4-bcf7-8f5b887e23c1, 240.42 KiB / gzip 50.33
+   bindings: LOCKDOWN_KV, BINARIES, BACKUPS; schedule: 0 3 * * *
+5. PBL signing keys EXPORTED to escrow, NOT rotated (they already existed in KV:
+   pbl_signing_key:current, pbl_policy_signing_key:current, both 184-char PKCS8 base64)
+```
+
+## Live verification after deploy
+```
+200  GET  /api/health
+200  GET  /api/setup/status      (setupComplete, 1 admin)
+401  GET  /api/admin/backups     <- was 404: the new routes are live
+401  POST /api/admin/restore     <- GET 404 is correct, the route is POST-only
+401  GET  /api/devices           (auth still enforced)
+200  GET  /api/download/agent    (16,852,082 B, sha256 902a1af3…, PE build 2026-11-18T11:00Z)
+200  GET  /api/download/installer
+200  GET  /v1/policy/1
+404  GET  /this-does-not-exist
+```
+
+## Open risks found by this session
+```
+1. UPDATE_SIGNING_KEY private key NOT FOUND: absent from CF secrets and from secrets/.
+   agent_release (KV) is ed25519-signed, and BOTH devices verify 'signature', so they hold a
+   pin whose private half no longer exists anywhere on this machine -> new releases cannot be
+   signed for them. Publishing a new key means both devices fail closed and re-enrol.
+2. Published release is 1.0.3 (built 2026-11-18T11:00Z); MOLE runs 1.0.4, FRANKENSTEIN 1.0.0.
+3. Neither device has checked in since the deploy (14:06Z); last check-ins 13:26Z / 04:42Z.
+   Replay protection therefore shipped without a live agent check-in to confirm compatibility.
+   Rollback if agents start 401ing: set REPLAY_PROTECTION=off in [vars] and redeploy.
+4. Backup path is configured but unproven in production until the 03:00Z cron or an
+   authenticated POST /api/admin/backups.
+```

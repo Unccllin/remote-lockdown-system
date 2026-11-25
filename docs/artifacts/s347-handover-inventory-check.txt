@@ -1,0 +1,58 @@
+# S347 — handover inventory gate, measured 2026-11-24T12:54:11Z
+
+## 1. python3 scripts/check_handover.py
+[handover] registry: docs/handover-registry.json (status=pre-transfer)
+[handover] keys: 20 (7 critical) · accounts: 9 · assets: 3
+[handover] obligations: 0/9 with a named person · acceptances: 0/5 signed
+[handover] unowned critical keys: K-AGENT-PEPPER, K-FIELD-ENC, K-LOCATION, K-BACKUP, K-UPDATE-SIGN, K-RECOVERY-ESCROW, K-SECUREBOOT
+[handover] WARN O-LOCKDOWN: no named person yet (allowed pre-transfer)
+[handover] WARN O-UPDATE-SIGN: no named person yet (allowed pre-transfer)
+[handover] WARN O-KEY-CUSTODY: no named person yet (allowed pre-transfer)
+[handover] WARN O-ONCALL: no named person yet (allowed pre-transfer)
+[handover] WARN O-RESTORE: no named person yet (allowed pre-transfer)
+[handover] WARN O-HARDWARE-WINDOW: no named person yet (allowed pre-transfer)
+[handover] WARN O-VERIFY: no named person yet (allowed pre-transfer)
+[handover] WARN O-PRIVACY: no named person yet (allowed pre-transfer)
+[handover] WARN O-IR: no named person yet (allowed pre-transfer)
+[handover] OK — inventory is complete and internally consistent
+EXIT=0
+
+## 2. python3 scripts/check_handover.py --self-test
+[self-test] ok: a dropped key entry makes its env var unregistered (expected fail, got fail)
+[self-test] ok: critical + regenerable contradiction is caught (expected fail, got fail)
+[self-test] ok: obligation with no role is caught (expected fail, got fail)
+[self-test] ok: missing reference path is caught (expected fail, got fail)
+[self-test] ok: duplicate id is caught (expected fail, got fail)
+[self-test] ok: unknown severity is caught (expected fail, got fail)
+[self-test] ok: the real registry is accepted (expected pass, got pass)
+[self-test] ok: --strict rejects an unassigned registry (got fail)
+[self-test] ok: fully assigned registry passes --strict
+[self-test] all checks have teeth
+EXIT=0
+
+## 3. --strict must refuse a pre-transfer registry (expected: non-zero)
+  - ACC-MONITORING-POLICY: signed acceptance has no signed_by
+  - ACC-DATA-FLOW: acceptance is 'unsigned' (strict mode requires signed)
+  - ACC-DATA-FLOW: signed acceptance has no signed_by
+
+## 4. every repo path cited in docs/HANDOVER.md resolves
+OK   docs/adr/PBL-DEBT-LEDGER.md
+OK   docs/BACKUP.md
+OK   docs/CODE_SIGNING.md
+OK   docs/DR_RUNBOOK.md
+OK   docs/GDPR_LIA.md
+OK   docs/SECURITY.md
+OK   scripts/check_handover.py
+OK   scripts/check_licenses.py
+OK   scripts/generate-recovery-keys.sh
+OK   scripts/gen-secureboot-keys.sh
+OK   scripts/verify-signing.sh
+
+## 5. inventory counts
+keys         20
+accounts     9
+assets       3
+obligations  9
+acceptances  5
+gaps         8
+critical keys: K-AGENT-PEPPER, K-FIELD-ENC, K-LOCATION, K-BACKUP, K-UPDATE-SIGN, K-RECOVERY-ESCROW, K-SECUREBOOT

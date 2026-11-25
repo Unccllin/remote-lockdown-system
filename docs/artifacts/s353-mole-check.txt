@@ -1,0 +1,119 @@
+# MOLE — device health check — 2026-11-24T14:14:22Z
+
+Source: live KV in the deployed Worker (LOCKDOWN_KV 84b24c0c…), read 2026-11-24T14:12Z.
+
+## Identity
+```
+id            14e7dafb9d7a289237f2a095e22c2c65
+hostname      MOLE
+serial        5CG0398GCN
+hardware UUID BE10009B-5867-337C-5024-E390E760DA74
+mac           DC:71:96:20:4D:4B
+model         HP EliteBook 830 G6  (BIOS R70 Ver. 01.36.00)
+```
+
+## Liveness
+```
+last_checkin        2026-11-24T04:42:14.574Z   (~9h 30m ago)
+stale threshold     600 s  -> STALE
+agent_version       1.0.4
+update_verification signature (pinned public key present and verifying)
+status in dashboard active   <- not a liveness field; a quiet device still reads 'active'
+```
+
+## Work
+```
+commands       5, all status=executed, all on 2026-11-18
+  lockdown  12:09:34 -> executed 12:11:44
+  unlock    12:10:46 -> executed 12:12:33
+  lockdown  12:13:34 -> executed 12:15:44
+  unlock    12:16:27 -> executed 12:16:30
+  unlock    12:17:13 (confirmed)
+pending        0
+audit          last 8 entries in the whole system are MOLE's, newest 2026-11-18T12:17:13Z
+```
+
+## Posture
+```
+secure_boot   false   (firmware_audit.note = secure_boot_off)
+tpm_enabled   null    (not reported)
+-> the firmware/PBL enforcement path cannot apply on this machine while Secure Boot is off;
+   control is software-level only.
+```
+
+## Comparison
+```
+FRANKENSTEIN  last_checkin 2026-11-24T13:26:20Z, agent 1.0.0, secure_boot false
+-> fleet is split across 1.0.0 and 1.0.4, and both machines have Secure Boot off.
+```
+
+## Conclusion
+```
+MOLE went quiet at 04:42Z — 5h24m BEFORE the S348-S350 deploy at 14:06Z — so neither the
+deploy nor the new replay protection explains it. It was idle before the change.
+Next cron tick (03:00Z) will emit exactly one device_stale alert for MOLE and one for
+FRANKENSTEIN, deduped for ALERT_REPEAT_HOURS. Absence of alert: markers in KV confirms the
+cron has not run since the deploy.
+```
+
+## Addendum — reached over SSH, 2026-11-24T14:16Z
+
+The route was in the memory store, not in ~/.ssh/config (again — the same mistake is recorded
+as m-1474): `ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249`.
+
+```
+MOLE reachable, ping 2/2, rtt 2-63 ms
+hostname            MOLE
+user                mole\labadmin
+last boot           2026-11-17 12:58:27 local (UTC+3) — no reboot since install
+LockdownAgent       Running, StartType Automatic
+processes           2 x lockdown-agent.exe (pid 2320, 16732) from 11/19 13:03 local
+                    -> bootloader + child, which is one agent (documented behaviour)
+Worker reachable    HTTPS 200 from MOLE itself
+```
+
+## The check-in was live, and replay protection is proven in production
+
+```
+KV device_checkin:MOLE   last_checkin 2026-11-24T14:15:52.474Z
+                         agent 1.0.4, update_verification signature
+deploy                   2026-11-24T14:06Z
+```
+
+The check-in landed **~10 minutes after the new code went live**, so the first agent request
+through replay protection was accepted. The 9h30m gap was local: the agent process has run since
+11/19 13:03 and the machine never rebooted, so the host was suspended (heartbeat/checkin files
+resume together at 17:15 local). The SSH connection itself may have woken the NIC — plausible,
+not proven.
+
+## The S348 cost fix is now visibly applied to a real device
+
+```
+command_index:14e7dafb…  ["05c6bfda…","173fd733…","baacf3d5…","c8c72e07…","6f9900e3…"]
+```
+
+The per-device index did not exist on this deployment before (old code); the check-in created it
+with exactly MOLE's 5 commands. The next poll reads 5 ids instead of the fleet-wide index.
+
+## New defect found: the geolocation key is a test placeholder
+
+```
+C:\ProgramData\LockdownAgent\.runtime_settings
+{"google_api_key": "ROT-TEST-1795082341", "revision": "d8bf5ae6ff123fc3"}
+```
+
+The Worker's `GOOGLE_API_KEY` secret is therefore set to `ROT-TEST-*` — a rotation test that was
+never replaced. Consequence: WiFi triangulation cannot work on any device; location silently falls
+back to IP (~10-50 km). The agent reports it, so the value is provably what the Worker serves.
+
+## Also observed
+
+```
+agent.log           last written 11/19 13:04 — the running process is not writing its log
+.last_checkin_ok    11/24 17:15:52 local (14:15:52Z) — fresh
+.deadman            written every check-in
+config.json         unchanged since 11/18
+4 x lockdown-agent.exe.bak*   staged rollbacks of 1.0.0/1.0.3/1.0.4 builds
+```
+A field device whose log stopped 5 days ago cannot be diagnosed remotely; that is a real
+observability gap independent of its health.
