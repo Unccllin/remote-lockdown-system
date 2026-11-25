@@ -4234,3 +4234,20 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-194
+  statement: The only Windows test and build capability this project has is MOLE on the lab LAN; it is
+    unreachable from a non-lab network, so the TPM sealing rewrite and the 1.0.4 Windows build are blocked
+    by reachability, not by design.
+  domain: agent/tpm
+  status: proposed
+  evidence_level: assumed
+  provenance: 'S356: ssh labadmin@192.168.1.249 timed out and ping showed 100% loss; ip -4 addr showed
+    10.131.72.111/24; tailscale/wg/zerotier absent; agent/dist has only Linux binaries.'
+  source: docs/artifacts/s356-git-push.txt
+  asserted: '2026-11-25'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

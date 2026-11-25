@@ -8580,3 +8580,59 @@ attempt while `consolidate` holds the lock.
 - Decide whether the TPM sealing rewrite (certificate-addressed PCP key, replacing the raw CNG path) is worth doing now, since it needs a Windows test harness before it can be called working — and meanwhile publish a 1.0.4 release, which is unblocked again.
 
 ---
+
+---
+
+## Session 356 — 2026-11-25
+
+### RULE-ZERO
+**Read**: `.devin/graph/current-state.md`, the S354/S355 blocks in `trace.md`, `AGENTS.md`, `agent/tpm_seal.py`, `agent/tests/test_tpm_seal.py`, `scripts/prepush_secrets.py`, `scripts/check_handover.py`, and the interrupted pi session log (2026-11-24T11:49Z).
+**Finding**: the interrupted turn had already finished S355's work; what was missing was the git update and the three items S355 named as left. The tree held 58 entries and `origin/master` was nine commits behind, so the crash cost the commit step, not the work. The first push was blocked by the repository's own secret gate, not by the remote.
+
+### IMPLEMENT
+- Committed S347-S355 as four logical commits instead of one: serverless (alerts, backups, D1 schema, scale guards), the TPM error-surfacing fix, the runbooks/handover package/artifacts, and the graph+memory state.
+- `.gitignore`: `serverless/backups/`. The S354 drill left a real 40 KB backup in the tree — devices, commands, locations, audit and admin records in one object. It was never staged, and the rule now stops a future drill from adding one.
+- `scripts/serverless-smoke.mjs`: the deliberately bogus token used to prove 401 was replaced with `'invalid-example-token'` after the pre-push scanner flagged it as an assigned secret. The fix was to make the value a recognised placeholder, not to add an exception.
+- `Makefile`: restored the two-line `gen-state` comment that an earlier edit had joined into one.
+- `docs/artifacts/s356-git-push.txt`: the before/after tree state, the blocked push, and the reachability probe.
+
+### Fog cleared
+- **S347-S355 are published.** `git push` moved `4663f39..c748e72` (13 commits: the nine S346 commits that had never left the machine plus these four), and the tree is clean.
+- **The gate that blocked the push was right about the shape and wrong about the value.** An `assigned-secret` match in a smoke script was a literal `token: '...'` used to assert 401. Rewriting it as a placeholder is the honest fix; an exception would have taught the scanner to ignore the next one.
+
+### Fog remaining
+- **The TPM sealing rewrite is still not written**, and it is still the right call: MOLE is unreachable from this network, so a cert-addressed PCP key would ship unverified. The probe is in the artifact (`ssh` timed out; local address `10.131.72.111/24`; no VPN).
+- **Release 1.0.4 is still unbuilt** — `agent/dist` holds only Linux binaries from 2026-11-20 and no `.exe`. Wrangler is authenticated, so only the Windows build is missing.
+- **`GOOGLE_API_KEY` is still `ROT-TEST-1795082341`.**
+- **D1 cutover not started** (documented as optional below ~325 devices).
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+
+### Blockers
+- **MOLE / the lab LAN is unreachable** (host on `192.168.1.0/24`, laptop on `10.131.72.0/24`, no VPN interface). It blocks both remaining engineering items: the sealing rewrite needs a Windows run to be called working, and 1.0.4 needs a Windows build.
+
+### Session artifacts
+- docs/artifacts/s356-git-push.txt
+
+### Failure attribution
+- **Layer 3 (execution environment)**: the project's only Windows capability is a machine on a LAN the laptop is not currently on, and `current-state.md` did not record that dependency — so "continue" was planned as if MOLE were reachable. **Harness change**: name the network dependency in the next-session opening whenever the work needs Windows, and probe reachability before promising it.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 7 files, 537 tests passed
+- `pytest agent/tests/test_tpm_seal.py` -> 21 passed
+- `scripts/lint-agent.sh` -> ruff check + format clean
+- `make handover-check` -> OK, self-test "all checks have teeth"
+- `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` -> exit 0
+- `git push origin master` -> 4663f39..c748e72
+- `ssh labadmin@192.168.1.249` -> connect timed out; `ip -4 addr` -> 10.131.72.111/24
+
+### Next session opening
+- From the lab LAN (or with MOLE reachable), implement the certificate-addressed TPM seal key and prove it with a seal/unseal round trip on MOLE before calling it working; then build and publish 1.0.4.

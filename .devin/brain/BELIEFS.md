@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-23 08:52:26 — 193 beliefs
+Generated: 2026-11-25 08:08:02 — 194 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -45,6 +45,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-040 | confirmed | code-read | On S3 resume the TPM restartCount bumps (TPM2_Startup STATE) but resetCount (boot_id) does not, AND PBL never runs — so the OS agent (not firmware) must report restartCount. resetCount==restartCount baseline + stale last_boot_at = bypass; restartCount>resetCount = resume. |
+| B-194 | proposed | assumed | The only Windows test and build capability this project has is MOLE on the lab LAN; it is unreachable from a non-lab network, so the TPM sealing rewrite and the 1.0.4 Windows build are blocked by reachability, not by design. |
 
 ## agent/uefi
 

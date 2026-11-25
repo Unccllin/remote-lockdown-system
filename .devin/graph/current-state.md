@@ -53,18 +53,17 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 355 — 2026-11-24
+## Latest session: 356 — 2026-11-25
 
 ### Fog cleared
-- **The update chain is intact.** The key that signs releases is the same key MOLE pins, and the live release signature verifies against it. There was never a need to re-enrol a device; the only gap is that the published release (1.0.3) is older than the source (1.0.4) while MOLE already runs 1.0.4.
-- **TPM sealing has never worked on Windows.** Three defects, measured: a nonexistent enum (fatal on every check-in), an error logged from the wrong stream (so it read as an empty message), and an approach the provider rejects — raw `CngKey.Create` against `Microsoft Platform Crypto Provider` returns *"The requested operation is not supported"* even with TPM 2.0 present, ready, enabled and activated. `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider'` succeeds on the same machine, which is what the module's docstring always claimed it did.
-- **Every device has been protected by the DPAPI fallback**, silently, including the one machine that has a working TPM. The seal path failing was invisible because it fails soft and logs nothing useful.
+- **S347-S355 are published.** `git push` moved `4663f39..c748e72` (13 commits: the nine S346 commits that had never left the machine plus these four), and the tree is clean.
+- **The gate that blocked the push was right about the shape and wrong about the value.** An `assigned-secret` match in a smoke script was a literal `token: '...'` used to assert 401. Rewriting it as a placeholder is the honest fix; an exception would have taught the scanner to ignore the next one.
 
 ### Fog remaining
-- **The cert-based sealing rewrite is not done.** Addressing a TPM-backed key by certificate thumbprint instead of by name is a change to security-critical code, and it cannot be verified from this machine — it needs a Windows test capability. Writing it untested would violate the same rule the rest of this work follows.
-- **Release 1.0.4 is unblocked but unbuilt** — signing is available again; the agent still needs a Windows build and staging to R2.
+- **The TPM sealing rewrite is still not written**, and it is still the right call: MOLE is unreachable from this network, so a cert-addressed PCP key would ship unverified. The probe is in the artifact (`ssh` timed out; local address `10.131.72.111/24`; no VPN).
+- **Release 1.0.4 is still unbuilt** — `agent/dist` holds only Linux binaries from 2026-11-20 and no `.exe`. Wrangler is authenticated, so only the Windows build is missing.
 - **`GOOGLE_API_KEY` is still `ROT-TEST-1795082341`.**
-- **D1 cutover not started.**
+- **D1 cutover not started** (documented as optional below ~325 devices).
 
 ### Debt items closed
 - None this session.
@@ -76,27 +75,26 @@
 - D-134
 
 ### Blockers
-- None. The remaining items are a Windows build, a Windows test harness, and one placeholder key.
+- **MOLE / the lab LAN is unreachable** (host on `192.168.1.0/24`, laptop on `10.131.72.0/24`, no VPN interface). It blocks both remaining engineering items: the sealing rewrite needs a Windows run to be called working, and 1.0.4 needs a Windows build.
 
 ### Session artifacts
-- docs/artifacts/s355-update-key-and-tpm.txt
+- docs/artifacts/s356-git-push.txt
 
 ### Failure attribution
-- **Layer 2 (context provision)**: "no key found" was concluded from searching `secrets/` — the directory the repository documents — while the actual location is `~/.lockdown-secrets/`, which only the signing script knows. A negative result from one search path was recorded as a fact and then repeated across three sessions and a handover document. **Harness change**: a claim of the form "X does not exist" must name the paths searched, so the next reader can see the gap instead of inheriting the conclusion.
-- **Layer 4 (verification feedback)**: the TPM path had a failure branch that produced an empty message, so 990 passing tests and months of production logs both said nothing useful. **Harness change**: a failure branch that logs a value must be covered by a test that asserts the *content* reaches the log, not merely that the branch returns False — now pinned for both the script body and the log line.
+- **Layer 3 (execution environment)**: the project's only Windows capability is a machine on a LAN the laptop is not currently on, and `current-state.md` did not record that dependency — so "continue" was planned as if MOLE were reachable. **Harness change**: name the network dependency in the next-session opening whenever the work needs Windows, and probe reachability before promising it.
 
 ### VERIFY
-- release signature: `openssl pkeyutl -verify` over `v1:1.0.3:<sha256>` with the recovered public key → **Signature Verified Successfully**
-- key fingerprints: derived / escrow / backup / MOLE pin all `78609c8b…34f39e8`
-- `openssl pkey -in … -pubout` derivation and `sha256sum` on DER: 4/4 identical
-- MOLE `Get-Tpm`: Present/Ready/Enabled/Activated all True; `Win32_Tpm` SpecVersion 2.0, IFX
-- MOLE `CngKey.Create` with PCP provider: `The requested operation is not supported`
-- MOLE `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider'`: CREATED (thumbprint `F4BB9916…C30C18`, HasPrivateKey True)
-- `scripts/lint-agent.sh`: ruff check + format clean
-- `pytest agent/tests`: all passed; `test_tpm_seal.py` 21 tests
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 7 files, 537 tests passed
+- `pytest agent/tests/test_tpm_seal.py` -> 21 passed
+- `scripts/lint-agent.sh` -> ruff check + format clean
+- `make handover-check` -> OK, self-test "all checks have teeth"
+- `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` -> exit 0
+- `git push origin master` -> 4663f39..c748e72
+- `ssh labadmin@192.168.1.249` -> connect timed out; `ip -4 addr` -> 10.131.72.111/24
 
 ### Next session opening
-- Decide whether the TPM sealing rewrite (certificate-addressed PCP key, replacing the raw CNG path) is worth doing now, since it needs a Windows test harness before it can be called working — and meanwhile publish a 1.0.4 release, which is unblocked again.
+- From the lab LAN (or with MOLE reachable), implement the certificate-addressed TPM seal key and prove it with a seal/unseal round trip on MOLE before calling it working; then build and publish 1.0.4.
 
 ---
 

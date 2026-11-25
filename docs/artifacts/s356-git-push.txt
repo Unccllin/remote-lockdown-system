@@ -1,0 +1,62 @@
+S356 — the interrupted git update, completed, and why the rest is blocked
+2026-11-25
+
+Context: the pi session working this repo on 2026-11-24 17:51 EAT died in V8's
+garbage collector mid-turn (SIGSEGV in MarkCompactCollector::ProcessMarkingWorklist,
+Node 26.13.1). Its last user instruction was "complete everything and dont forget to
+update on git". The working tree held sessions S347-S355, nine unpushed commits from
+S346, and no session block for the interrupted turn.
+
+1. Working tree at start
+   git status --short  -> 58 entries (14 modified, 44 untracked)
+   git log origin/master..HEAD -> 9 commits (S346 work, never pushed)
+
+2. Secret gate
+   An untracked production backup was found at
+   serverless/backups/2026-11-24T14-31-06-809Z.rmlb (40,659 bytes, high-entropy
+   binary). It is the S354 drill backup: devices, commands, locations, audit and
+   admins in one object. It was NOT committed; .gitignore now covers
+   serverless/backups/ so a future drill cannot add one by accident.
+
+   First push attempt was blocked by the pre-push scanner:
+     [FAIL] assigned-secret: scripts/serverless-smoke.mjs (decbdae)
+   The literal was the deliberately bogus token used to prove 401 on
+   /api/devices. It was replaced with 'invalid-example-token' (a shape the
+   scanner's placeholder rule recognises), the commit was amended with
+   --fixup/--autosquash, and the range re-scanned:
+     python3 scripts/prepush_secrets.py --base origin/master --head HEAD  -> exit 0
+
+3. Commits created
+   decbdae feat(serverless): cron alerts, encrypted backups, D1 schema and scale guards
+   47ebda1 fix(agent): surface TPM seal failures and drop the nonexistent CngKeyFlags
+   7de4d41 docs: serverless runbooks, handover package and the S347-S355 evidence
+   c748e72 docs(state): record sessions 347-355 and the memory captures they produced
+
+   Also fixed in the same range: Makefile's gen-state comment had been joined into
+   one line by an earlier edit ("GRAPH-SPEC.yaml.# current-state.md"), restored to two.
+
+4. Verification run before committing
+   serverless: npx tsc --noEmit -p .            -> exit 0
+               npx vitest run                   -> 7 files, 537 tests passed
+   agent:      pytest agent/tests/test_tpm_seal.py -> 21 passed
+               scripts/lint-agent.sh            -> ruff check + format clean
+   handover:   make handover-check              -> OK, self-test teeth
+   push:       git push origin master           -> 4663f39..c748e72 (13 commits)
+
+5. Remaining items and the blocker
+   - TPM sealing rewrite (certificate-addressed PCP key): NOT written. It cannot be
+     verified from Linux, and the Windows machine is unreachable:
+       ssh labadmin@192.168.1.249  -> connect to host 192.168.1.249 port 22: timed out
+       ping 192.168.1.249          -> 100% packet loss
+       local address               -> 10.131.72.111/24 (yesterday: 192.168.1.43/24)
+       VPN interfaces              -> none (tailscale/wg/zerotier absent)
+     Writing security-critical sealing code without a Windows run is the rule S355
+     deliberately did not break.
+   - Release 1.0.4: still needs a Windows PyInstaller build (agent/build.ps1).
+     agent/dist holds only Linux binaries (lockdown-agent, lockdown-recovery,
+     lockdown-watchdog, 2026-11-20); no .exe exists locally.
+   - GOOGLE_API_KEY: still the ROT-TEST placeholder; needs the owner's key.
+   - D1 cutover: still not started; documented as optional below ~325 devices.
+
+   Wrangler is authenticated (Cloudflare API reachable), so the Cloudflare side of a
+   release is available the moment a Windows binary exists.
