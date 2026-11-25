@@ -123,7 +123,10 @@ try {{
         $keyParams.Provider = $provider
         $keyParams.ExportPolicy = [System.Security.Cryptography.CngExportPolicies]::NonExportable
         $keyParams.KeyUsage = [System.Security.Cryptography.CngKeyUsages]::AllUsages
-        $keyParams.Flags = [System.Security.Cryptography.CngKeyFlags]::None
+        # NOTE: no Flags line. [System.Security.Cryptography.CngKeyFlags] does not exist on
+        # Windows PowerShell 5.1 / .NET Framework, and referencing it threw
+        # "Unable to find type" before the TPM was touched — on every check-in, on every machine
+        # (measured on MOLE, 2026-11-24, TPM 2.0 Infineon present and ready).
         $algorithm = New-Object System.Security.Cryptography.CngAlgorithm(
             '{NCRYPT_RSA_ALGORITHM}')
         [System.Security.Cryptography.CngKey]::Create(
@@ -153,7 +156,11 @@ try {{
             else:
                 log.warning("TPM key creation unexpected output: %s", output)
         else:
-            log.warning("TPM key creation failed: %s", result.stderr.strip())
+            # The script writes its error to STDOUT (`Write-Output "ERROR: $_"`) and returns
+            # non-zero; logging stderr alone printed "TPM key creation failed: " with nothing
+            # after it, which is why this stayed invisible in production logs.
+            detail = result.stdout.strip() or result.stderr.strip() or "no output"
+            log.warning("TPM key creation failed (rc=%s): %s", result.returncode, detail)
     except (
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,

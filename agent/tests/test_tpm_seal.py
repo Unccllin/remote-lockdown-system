@@ -177,3 +177,65 @@ class TestDeleteTPMKey:
     def test_delete_returns_false_on_non_windows(self):
         with patch.object(tpm_seal, "_is_windows", return_value=False):
             assert tpm_seal.delete_tpm_key() is False
+
+
+class TestTpmKeyCreationDiagnostics:
+    """The key-creation failure was invisible for a reason that is now pinned.
+
+    Two defects, both measured on MOLE (Windows, TPM 2.0 Infineon present and ready) on
+    2026-11-24:
+
+    1. The generated script referenced [System.Security.Cryptography.CngKeyFlags], which does not
+       exist on Windows PowerShell 5.1 / .NET Framework. It threw "Unable to find type" before any
+       TPM call, on every check-in.
+    2. The script writes its error to STDOUT and the caller logged STDERR, so the production log
+       read "TPM key creation failed: " with nothing after it.
+    """
+
+    @staticmethod
+    def _capture_script(monkeypatch) -> str:
+        captured = {}
+
+        class _Result:
+            returncode = 0
+            stdout = "EXISTS"
+            stderr = ""
+
+        def _fake_run(args, **kwargs):
+            captured["args"] = args
+            return _Result()
+
+        monkeypatch.setattr(tpm_seal, "_is_windows", lambda: True)
+        monkeypatch.setattr(tpm_seal.subprocess, "run", _fake_run)
+        tpm_seal._cng_create_key()
+        # argv is ["powershell", "-NoProfile", "-Command", body]; the body is index 3
+        return captured["args"][3]
+
+    def test_script_does_not_reference_a_nonexistent_enum(self, monkeypatch):
+        # Assert on the type USAGE, not on the word: the script now carries a comment explaining
+        # why the line is gone, and a substring check would flag its own documentation.
+        script = self._capture_script(monkeypatch)
+        assert "$keyParams.Flags" not in script
+        assert "CngKeyFlags]::" not in script, (
+            "CngKeyFlags does not exist on PowerShell 5.1; referencing it throws "
+            "before the TPM is touched"
+        )
+        assert "Platform Crypto Provider" in script
+
+    def test_failure_surfaces_stdout_not_only_stderr(self, monkeypatch, caplog):
+        class _Result:
+            returncode = 1
+            stdout = "ERROR: Unable to find type [System.Security.Cryptography.CngKeyFlags]."
+            stderr = ""
+
+        monkeypatch.setattr(tpm_seal, "_is_windows", lambda: True)
+        monkeypatch.setattr(tpm_seal.subprocess, "run", lambda *a, **k: _Result())
+
+        with caplog.at_level("WARNING"):
+            assert tpm_seal._cng_create_key() is False
+
+        message = " ".join(r.getMessage() for r in caplog.records)
+        assert "Unable to find type" in message, (
+            "the reason must reach the log; logging stderr alone produced an empty message"
+        )
+        assert "rc=1" in message
