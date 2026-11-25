@@ -510,6 +510,67 @@ export async function saveCheckinMetadata(env: Env, deviceId: string, metadata: 
   await env.LOCKDOWN_KV.put(`${CHECKIN_KEY_PREFIX}${deviceId}`, JSON.stringify(metadata));
 }
 
+/** KV key for one seen signed-request nonce. */
+export const NONCE_KEY_PREFIX = 'nonce:';
+
+/**
+ * Remember a signed request's nonce; false means it was already seen (a replay).
+ *
+ * The Node server keeps this in a process-local Map (or a database table, with
+ * USE_DB_NONCE_CACHE). A Worker has no process memory, so the marker lives in KV and expires
+ * with the signature window — a nonce that outlives the window protects nothing, because the
+ * timestamp check refuses the request first.
+ *
+ * Honest limitation, also stated at the call site: KV is eventually consistent across colos, so
+ * two replays arriving in different locations simultaneously can both be accepted. This narrows
+ * the replay window; the authoritative fix is a unique index (see docs/SERVERLESS-COST.md).
+ */
+export async function rememberNonce(
+  env: Env,
+  deviceId: string,
+  nonce: string,
+  ttlSeconds: number,
+): Promise<boolean> {
+  // KV rejects expirationTtl below 60 s; the ceiling only guards against a nonsense config.
+  const ttl = Math.min(Math.max(ttlSeconds, 60), 86_400);
+
+  // Preferred path: a relational store makes rejection authoritative. A UNIQUE constraint sees
+  // every concurrent writer; a key-value store does not, because a write in one location is not
+  // visible everywhere at once. Falls through to KV when no binding exists.
+  if (env.DB) {
+    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+    const result = await env.DB
+      .prepare(
+        'INSERT INTO nonces (device_id, nonce, expires_at) VALUES (?, ?, ?) '
+          + 'ON CONFLICT (device_id, nonce) DO NOTHING',
+      )
+      .bind(deviceId, nonce, expiresAt)
+      .run();
+    // 0 changed rows means the constraint refused the insert: this nonce was already used.
+    return Number(result?.meta?.changes ?? 0) > 0;
+  }
+
+  const key = `${NONCE_KEY_PREFIX}${deviceId}:${nonce}`;
+  if ((await env.LOCKDOWN_KV.get(key)) !== null) return false;
+  await env.LOCKDOWN_KV.put(key, '1', { expirationTtl: ttl });
+  return true;
+}
+
+/**
+ * Delete nonces past their expiry. No-op without a relational binding.
+ *
+ * Called from the cron tick rather than on the write path: a delete per request would double the
+ * write cost to save a column that an index already keeps cheap.
+ */
+export async function purgeExpiredNonces(env: Env, now: number = Date.now()): Promise<number> {
+  if (!env.DB) return 0;
+  const result = await env.DB
+    .prepare('DELETE FROM nonces WHERE expires_at < ?')
+    .bind(new Date(now).toISOString())
+    .run();
+  return Number(result?.meta?.changes ?? 0);
+}
+
 // Merge checkin metadata into a device object for admin API responses.
 // Falls back to the device's own fields if no checkin metadata exists
 // (e.g., for devices enrolled before the KV-RACE-001 fix).
@@ -541,9 +602,26 @@ export function mergeCheckinMetadata(device: Device, metadata: CheckinMetadata |
 export const COMMAND_INDEX_KEY = 'command_index';
 export const COMMAND_KEY_PREFIX = 'command:';
 
+/**
+ * Per-device command index prefix.
+ *
+ * The global index exists for admin listings ("every command, newest first"). It must NOT be
+ * on the agent poll path: a check-in only cares about its own device's commands, and reading
+ * the global index costs one read per command in the system on every poll. Measured on this
+ * code path (S348): a 100-command history turned a 4-read check-in into a 104-read check-in,
+ * which is 1,000 devices costing about KES 63,000 a month instead of about KES 10,000 — see
+ * docs/SERVERLESS-COST.md. Both indexes are maintained; this one is the hot one.
+ */
+export const COMMAND_DEVICE_INDEX_PREFIX = 'command_index:';
+
 /** KV key for one command record (ADR-002). */
 export function commandKey(id: string): string {
   return `${COMMAND_KEY_PREFIX}${id}`;
+}
+
+/** KV key for one device's command-id index. */
+export function commandDeviceIndexKey(deviceId: string): string {
+  return `${COMMAND_DEVICE_INDEX_PREFIX}${deviceId}`;
 }
 
 /** One command record, or null when the key is absent or unreadable. */
@@ -611,22 +689,68 @@ export async function listCommands(env: Env): Promise<Command[]> {
   return records.filter((c): c is Command => c !== null);
 }
 
+/**
+ * Ids of one device's commands.
+ *
+ * Hot path: the agent's check-in calls this every poll. A device enrolled before the
+ * per-device index existed has no key yet, so a miss rebuilds it once from the global index
+ * (the old, expensive read) and stores it — the first poll pays the old price, every later
+ * poll pays 1 + (this device's commands).
+ */
+export async function listCommandIdsForDevice(env: Env, deviceId: string): Promise<string[]> {
+  const key = commandDeviceIndexKey(deviceId);
+  const raw = await env.LOCKDOWN_KV.get(key);
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+      }
+    } catch {
+      // Corrupt index: rebuild from the global one below rather than failing the poll.
+    }
+  }
+
+  const ids = await listCommandIds(env);
+  const mine: string[] = [];
+  for (const id of ids) {
+    const command = await getCommand(env, id);
+    if (command && command.device_id === deviceId) mine.push(id);
+  }
+  // Persist even when empty: an empty array is the signal "indexed, nothing pending", and it
+  // is what stops every poll re-running the rebuild above.
+  await env.LOCKDOWN_KV.put(key, JSON.stringify(mine));
+  return mine;
+}
+
+/** One device's commands. Same tolerance as listCommands: a missing record is skipped. */
+export async function listCommandsForDevice(env: Env, deviceId: string): Promise<Command[]> {
+  const ids = await listCommandIdsForDevice(env, deviceId);
+  const records = await Promise.all(ids.map((id) => getCommand(env, id)));
+  return records.filter((c): c is Command => c !== null);
+}
+
 /** Remove every command belonging to a device, one record at a time. */
 export async function deleteCommandsForDevice(env: Env, deviceId: string): Promise<number> {
-  const ids = await listCommandIds(env);
-  const keep: string[] = [];
+  // The per-device index is the authoritative list for this device; a device that predates it
+  // triggers the one-time rebuild inside listCommandIdsForDevice.
+  const mine = await listCommandIdsForDevice(env, deviceId);
+  const mineSet = new Set(mine);
   let removed = 0;
-  for (const id of ids) {
+  for (const id of mine) {
     const command = await getCommand(env, id);
     if (command && command.device_id === deviceId) {
       await env.LOCKDOWN_KV.delete(commandKey(id));
       removed += 1;
-    } else {
-      keep.push(id);
     }
   }
-  if (removed > 0) {
-    await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify(keep));
+  if (mine.length > 0) {
+    const all = await listCommandIds(env);
+    await env.LOCKDOWN_KV.put(
+      COMMAND_INDEX_KEY,
+      JSON.stringify(all.filter((id) => !mineSet.has(id))),
+    );
+    await env.LOCKDOWN_KV.delete(commandDeviceIndexKey(deviceId));
   }
   return removed;
 }
@@ -682,6 +806,15 @@ export async function createCommand(env: Env, command: Command): Promise<void> {
   const ids = await listCommandIds(env);
   if (!ids.includes(command.id)) {
     await env.LOCKDOWN_KV.put(COMMAND_INDEX_KEY, JSON.stringify([...ids, command.id]));
+  }
+  // Both indexes, always. The per-device one is what the agent's poll reads; forgetting it
+  // here would strand the command behind a rebuild that only happens on a miss.
+  const deviceIds = await listCommandIdsForDevice(env, command.device_id);
+  if (!deviceIds.includes(command.id)) {
+    await env.LOCKDOWN_KV.put(
+      commandDeviceIndexKey(command.device_id),
+      JSON.stringify([...deviceIds, command.id]),
+    );
   }
 }
 
@@ -1064,6 +1197,72 @@ export async function deleteLocationsForDevice(env: Env, deviceId: string): Prom
     await env.LOCKDOWN_KV.delete(locationIndexKey(deviceId));
   }
   return ids.length;
+}
+
+/** Retention policy default and ceiling, matching the Node server's contract. */
+export const DEFAULT_LOCATION_RETENTION_DAYS = 90;
+export const MAX_LOCATION_RETENTION_DAYS = 180;
+
+/**
+ * The configured retention window, clamped.
+ *
+ * A non-numeric or non-positive value falls back to the default rather than meaning "keep
+ * forever": on a privacy control, a typo must not silently disable the policy.
+ */
+export function locationRetentionDays(env: Env): number {
+  const raw = Number.parseInt(String(env.LOCATION_RETENTION_DAYS ?? ''), 10);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LOCATION_RETENTION_DAYS;
+  return Math.min(raw, MAX_LOCATION_RETENTION_DAYS);
+}
+
+/**
+ * Delete location reports older than the retention window.
+ *
+ * The per-device history cap in saveLocationIndex is a size limit, not a retention policy: it
+ * evicts the oldest once a device exceeds the cap, which on a quiet device means personal data
+ * sits for as long as nothing new arrives. The Node server runs a retention scheduler to
+ * enforce the policy; a Worker has no process to host one, so this is what the cron trigger
+ * calls. Returns counts so the caller can put them in the audit trail — a deletion nobody
+ * recorded is indistinguishable from a deletion nobody did.
+ */
+export async function purgeExpiredLocations(
+  env: Env,
+  now: number = Date.now(),
+): Promise<{ devices: number; deleted: number; retentionDays: number }> {
+  const retentionDays = locationRetentionDays(env);
+  const cutoff = now - retentionDays * 86_400_000;
+  const devices = await listDevices(env);
+  let deleted = 0;
+  let touched = 0;
+
+  for (const device of devices) {
+    const ids = await listLocationIdsRaw(env, device.id);
+    if (ids.length === 0) continue;
+
+    const reports = await Promise.all(ids.map((id) => getLocationReport(env, id)));
+    const kept: string[] = [];
+    const expired: string[] = [];
+    for (let i = 0; i < ids.length; i += 1) {
+      const report = reports[i];
+      // A dangling id is dropped from the index rather than kept forever.
+      if (!report) continue;
+      const taken = Date.parse(String(report.created_at));
+      if (Number.isFinite(taken) && taken < cutoff) expired.push(ids[i]);
+      else kept.push(ids[i]);
+    }
+    if (expired.length === 0) continue;
+
+    for (const id of expired) {
+      await env.LOCKDOWN_KV.delete(locationKey(id));
+    }
+    // Re-writing the index also re-applies the history cap, so a device that accumulated
+    // beyond it during an outage is trimmed in the same pass.
+    await saveLocationIndex(env, device.id, kept);
+    deleted += expired.length;
+    touched += 1;
+  }
+
+  return { devices: touched, deleted, retentionDays };
 }
 
 export async function saveHwArtifacts(env: Env, artifacts: HwTestArtifact[]): Promise<void> {

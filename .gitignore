@@ -156,6 +156,11 @@ update_signing.pub
 firmware/PblPkg/host-tests/include/*.generated.h
 firmware/PblPkg/host-tests/build/
 
+# Production KV backups written by the backup/restore drill (S350/S354). A backup
+# holds every device, command and admin record at once — password hashes included —
+# so it is never committed; the encrypted copies belong in the BACKUPS R2 bucket.
+serverless/backups/
+
 # Runtime lock files for the file-based stores. scripts/brain.py and scripts/memory.py
 # create them on first use (flock/mismatch: one empty file beside the store), which means
 # they are per-checkout state, not content. One of them was committed by accident in S342

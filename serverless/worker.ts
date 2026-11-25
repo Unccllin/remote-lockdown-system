@@ -946,9 +946,9 @@ async function handleRecover(
   // Cancel any other pending command for this device. A stale queued `track` firing
   // one poll after an unlock is a real observed failure (S269): recovery must leave
   // the device with exactly one instruction, the unlock.
-  const pending = await listCommands(env);
+  const pending = await listCommandsForDevice(env, deviceId);
   for (const c of pending) {
-    if (c.device_id === deviceId && c.status === 'pending') {
+    if (c.status === 'pending') {
       // Per-entity update: cancelling one command must not rewrite the rest (ADR-002).
       await updateCommand(env, c.id, { status: 'cancelled' });
     }
@@ -1086,8 +1086,8 @@ async function handleListDeviceCommands(
   const requested = Number.parseInt(requestUrl(request).searchParams.get('limit') || '20', 10);
   const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 20, 1), 100);
 
-  const allCommands = await listCommands(env);
-  const commands = newestFirst(allCommands.filter((c) => c.device_id === deviceId)).slice(0, limit);
+  const allCommands = await listCommandsForDevice(env, deviceId);
+  const commands = newestFirst(allCommands).slice(0, limit);
 
   return jsonResponse(commands);
 }
@@ -1705,7 +1705,111 @@ async function handleDetailedHealth(env: Env): Promise<Response> {
 // Main handler
 // ---------------------------------------------------------------------------
 
+import { runAlertTick } from './alerts';
+import { backupFailed, listBackups, readBackup, restoreBackup, writeBackup } from './backup';
+
+/** The backup hour, UTC. Retention/alerts are hourly; the full export is daily. */
+export const BACKUP_HOUR_UTC = 3;
+
+/**
+ * True when this tick should write a backup.
+ *
+ * Unknown or malformed `scheduledTime` means run: a backup that silently stops because a
+ * timestamp was missing is worse than one taken more often than intended.
+ */
+export function shouldRunBackup(controller: ScheduledEvent | { scheduledTime?: number } | undefined): boolean {
+  const when = controller?.scheduledTime;
+  if (typeof when !== 'number' || !Number.isFinite(when)) return true;
+  return new Date(when).getUTCHours() === BACKUP_HOUR_UTC;
+}
+
+/**
+ * Record a scheduled-pass failure in the audit trail.
+ *
+ * The swallow is deliberate and narrow: `scheduled()` has no caller to return an error to, so
+ * rethrowing only produces an unhandled rejection with no record. This is the one place where
+ * swallowing is strictly better than propagating.
+ */
+async function recordScheduledFailure(env: Env, pass: string, error: unknown): Promise<void> {
+  try {
+    await addAuditEntry(env, 'system', 'scheduled_failure', `${pass}: ${String(error)}`);
+  } catch {
+    // Nothing further to try: no audit store, no cron caller, no output channel.
+  }
+}
+
 export default {
+  /**
+   * Cron trigger: retention purge, then the alert tick.
+   *
+   * The Node server runs both as in-process loops. A Worker has no process to host a loop, so
+   * the policy is carried by a cron trigger and each pass runs once here. Without the first
+   * pass, location reports are only bounded by the per-device history cap (a size limit, not a
+   * retention promise). Without the second, a device that goes silent is visible in the
+   * dashboard and nowhere else — nobody is told.
+   *
+   * Each pass is isolated: they share one cron slot, and a failure in one must not silently
+   * stop the other. A failure is recorded rather than rethrown because a cron has no caller to
+   * return it to — a swallowed error with an audit entry is recoverable, a silent stop is not.
+   */
+  async scheduled(controller: ScheduledEvent, env: Env): Promise<void> {
+    try {
+      const retention = await purgeExpiredLocations(env);
+      if (retention.deleted > 0) {
+        await addAuditEntry(
+          env,
+          'system',
+          'location_retention_purge',
+          `removed ${retention.deleted} location report(s) older than ${retention.retentionDays} days `
+            + `across ${retention.devices} device(s)`,
+        );
+      }
+      // Expired nonces: no-op without a relational binding, and a range delete with one.
+      const nonces = await purgeExpiredNonces(env);
+      if (nonces > 0) {
+        await addAuditEntry(env, 'system', 'nonce_purge', `removed ${nonces} expired nonce(s)`);
+      }
+    } catch (error) {
+      await recordScheduledFailure(env, 'location retention', error);
+    }
+
+    try {
+      const alerts = await runAlertTick(env);
+      if (alerts.alerted > 0 || alerts.failed > 0) {
+        await addAuditEntry(env, 'system', 'alert_tick', JSON.stringify(alerts));
+      }
+    } catch (error) {
+      await recordScheduledFailure(env, 'alert tick', error);
+    }
+
+    // Backup last: it reads the whole store, so running it after the passes above means a
+    // backup taken today reflects today's purge. A refusal (no bucket, no key) is recorded,
+    // not thrown — and "no key" is a refusal on purpose rather than an unencrypted fallback.
+    //
+    // Only on the 03:00 UTC tick: the cron now fires hourly so a stale device is noticed within
+    // the hour, but a backup walks every device, command and report, so it stays daily. Manual
+    // backups go through POST /api/admin/backups, which is also the restore drill.
+    if (!shouldRunBackup(controller)) {
+      return;
+    }
+    try {
+      const backup = await writeBackup(env);
+      if (backupFailed(backup)) {
+        await addAuditEntry(env, 'system', 'backup_skipped', backup.reason);
+      } else {
+        await addAuditEntry(
+          env,
+          'system',
+          'backup_written',
+          `${backup.key} (${backup.bytes} bytes, ${backup.counts.devices} device(s), `
+            + `${backup.counts.commands} command(s), pruned ${backup.pruned})`,
+        );
+      }
+    } catch (error) {
+      await recordScheduledFailure(env, 'backup', error);
+    }
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = requestUrl(request);
     const path = url.pathname;
@@ -1740,6 +1844,19 @@ export default {
       method === 'GET'
     ) {
       return handleIntegrationsUnavailable(request, env);
+    }
+
+    // Backup and restore. The cron writes one a day; these exist so that a restore drill can be
+    // run on demand instead of waiting for 03:00 UTC — a backup nobody has restored is a
+    // hypothesis, and the drill is the only thing that turns it into a fact.
+    if (path === '/api/admin/backups' && method === 'GET') {
+      return handleListBackups(request, env);
+    }
+    if (path === '/api/admin/backups' && method === 'POST') {
+      return handleCreateBackup(request, env);
+    }
+    if (path === '/api/admin/restore' && method === 'POST') {
+      return handleRestore(request, env);
     }
 
     if (path === '/api/hw-test-artifact' && method === 'POST') {
@@ -2747,6 +2864,74 @@ async function handleDownloadBinary(env: Env, name: string): Promise<Response> {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// Backup and restore routes
+// ---------------------------------------------------------------------------
+
+/** GET /api/admin/backups — stored backups, newest first. */
+async function handleListBackups(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'operator');
+  if (auth instanceof Response) return auth;
+  return jsonResponse({ backups: await listBackups(env) });
+}
+
+/** POST /api/admin/backups — take a backup now. */
+async function handleCreateBackup(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  const result = await writeBackup(env);
+  if (backupFailed(result)) {
+    // 503 rather than 400: nothing about the request was wrong, the deployment is not
+    // configured to hold an encrypted backup.
+    return errorResponse(result.reason, 503);
+  }
+  return jsonResponse({
+    backup: { key: result.key, bytes: result.bytes, counts: result.counts, pruned: result.pruned },
+  }, 201);
+}
+
+/**
+ * POST /api/admin/restore — restore from a stored backup (`{"key": "backups/..."}`) or from an
+ * uploaded envelope (raw body). Authenticated as super-admin, and never partial: a payload that
+ * fails authentication decrypts to nothing and writes nothing.
+ */
+async function handleRestore(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+
+  const contentType = request.headers.get('Content-Type') || '';
+  let blob: Uint8Array | null = null;
+
+  if (contentType.includes('application/json')) {
+    const body = parseJsonBody(await request.text());
+    const key = body && typeof (body as Record<string, unknown>).key === 'string'
+      ? String((body as Record<string, unknown>).key)
+      : '';
+    if (!key) return errorResponse('key required when restoring from a stored backup', 400);
+    blob = await readBackup(env, key);
+    if (!blob) return errorResponse(`backup not found: ${key}`, 404);
+  } else {
+    blob = new Uint8Array(await request.arrayBuffer());
+    if (blob.length === 0) return errorResponse('empty backup body', 400);
+  }
+
+  try {
+    const restored = await restoreBackup(env, blob);
+    await addAuditEntry(
+      env,
+      'system',
+      'backup_restored',
+      `${restored.createdAt}: ${restored.counts.devices} device(s), `
+        + `${restored.counts.commands} command(s), ${restored.counts.locations} location report(s)`,
+    );
+    return jsonResponse({ restored: true, createdAt: restored.createdAt, counts: restored.counts });
+  } catch (error) {
+    // A tampered or wrong-key payload lands here: AES-GCM refuses it, so nothing was written.
+    return errorResponse(`restore failed: ${String((error as Error).message ?? error)}`, 400);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // PBL /v1/* routes — CBOR/COSE wire format, no agent auth
 // ---------------------------------------------------------------------------
@@ -2769,6 +2954,6 @@ import {
 // Re-exported for the test harness, which resets the cache between cases.
 export { resetKeyCache } from './pbl/keys';
 import {
-  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, saveCheckinMetadata, saveHwArtifacts, saveKeysForDevice, updateCommand,
+  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredLocations, purgeExpiredNonces, saveCheckinMetadata, saveHwArtifacts,
+  saveKeysForDevice, updateCommand,
 } from './kv-store';
-

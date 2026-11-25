@@ -21,9 +21,9 @@ import { errorResponse, generateId, hmacSha256, jsonResponse, parseJsonBody, sha
 import {
   BiosPassword, Command, Device, LocationReport, activePollSeconds, addAuditEntry,
   addLocationReport, getCheckinMetadata, getCommand, getDeviceByApiKeyHash,
-  groupPbaCredentials, listBiosPasswordsForDevice, listCommands, listKeysForDevice,
-  normalizeAgentVersion, normalizeUpdateVerification, putDevice, saveBiosPasswordsForDevice,
-  saveCheckinMetadata, saveKeysForDevice, updateCommand,
+  groupPbaCredentials, listBiosPasswordsForDevice, listCommandsForDevice, listKeysForDevice,
+  normalizeAgentVersion, normalizeUpdateVerification, putDevice, rememberNonce,
+  saveBiosPasswordsForDevice, saveCheckinMetadata, saveKeysForDevice, updateCommand,
 } from './kv-store';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +41,12 @@ export async function verifyAgentAuth(
   const signature = request.headers.get('X-Signature');
 
   if (!agentKey || !timestamp || !nonce || !signature) {
+    return null;
+  }
+
+  // Nonce format — same contract as the Node server's hmacAuth.js (32 hex chars). Without it an
+  // empty or 4 KB nonce would be accepted, and then used as a KV key.
+  if (!/^[0-9a-f]{32}$/i.test(nonce)) {
     return null;
   }
 
@@ -62,14 +68,35 @@ export async function verifyAgentAuth(
     return null;
   }
 
-  // Check timestamp freshness (within 5 minutes)
+  // Check timestamp freshness. The window is also the replay window: a nonce is remembered
+  // for exactly this long, because a request older than it is already refused above.
   const now = Math.floor(Date.now() / 1000);
   const ts = parseInt(timestamp, 10);
-  if (Math.abs(now - ts) > 300) {
+  const window = signatureWindowSeconds(env);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > window) {
     return null;
   }
 
+  // Replay protection. The Node server keeps a process-local nonce cache; a Worker has no such
+  // memory, so the nonce is recorded in KV for the length of the signature window.
+  //
+  // Stated honestly: KV is eventually consistent across colos, so two replays arriving in
+  // different locations at the same moment can both pass. This narrows the window rather than
+  // closing it — an authoritative fix is a unique index in a relational store (see
+  // docs/SERVERLESS-COST.md). `REPLAY_PROTECTION=off` exists for a staged rollout, not as a
+  // supported production setting.
+  if (String(env.REPLAY_PROTECTION ?? '').toLowerCase() !== 'off') {
+    const fresh = await rememberNonce(env, device.id, nonce, window);
+    if (!fresh) return null;
+  }
+
   return device;
+}
+
+/** The signature freshness window in seconds (default 300, matching the Node server). */
+export function signatureWindowSeconds(env: Env): number {
+  const raw = Number.parseInt(String(env.HMAC_TIMESTAMP_WINDOW_SECONDS ?? ''), 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 300;
 }
 /**
  * Agent-compatible checkin — matches the full server's /api/agent/checkin
@@ -149,8 +176,9 @@ export async function handleAgentCheckin(request: Request, env: Env): Promise<Re
   // The check-in deliberately writes NO device record: it updates only `device_checkin:<id>`,
   // so it cannot race with an ACK's status write on `device:<id>` (KV-RACE-001, ADR-003).
 
-  // Check for pending commands (oldest first)
-  const commands = await listCommands(env);
+  // Check for pending commands (oldest first). Per-device index, not the global one:
+  // the global read costs one key per command in the fleet on every poll (S348).
+  const commands = await listCommandsForDevice(env, device.id);
   const pendingCmds = commands
     .filter((c) => c.device_id === device.id && c.status === 'pending')
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -531,8 +559,8 @@ export async function handleEscrowKey(request: Request, env: Env): Promise<Respo
     return errorResponse('key_material must be a string', 400);
   }
 
-  // The command must exist and belong to this device.
-  const commands = await listCommands(env);
+  // The command must exist and belong to this device. Read this device's index only.
+  const commands = await listCommandsForDevice(env, device.id);
   const cmd = commands.find(
     (c) => c.id === command_id && c.device_id === device.id,
   );

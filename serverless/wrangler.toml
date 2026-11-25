@@ -26,3 +26,36 @@ bucket_name = "lockdown-binaries"
 # Secrets (set with: wrangler secret put ADMIN_TOKEN)
 # [vars]
 # ADMIN_TOKEN is set via `wrangler secret put ADMIN_TOKEN`
+
+# Cron: hourly tick. Retention, nonce purge and the alert tick run on every tick; the backup
+# runs only on the 03:00 UTC tick, because a backup reads the whole store (cost scales with the
+# fleet) while alerts read one key per device. A stale-device alert arriving up to 24 h late is
+# the wrong trade for a lockdown product; a full export every hour is the wrong trade at scale.
+#
+# The Node server runs a retention scheduler in-process; a Worker has no process to host one,
+# so without this trigger location reports are only bounded by the per-device history cap —
+# a size limit, not the retention window the privacy notice states. Scheduled invocations
+# are included in the paid plan, so this adds no line to the bill.
+[triggers]
+crons = ["0 * * * *"]
+
+# Optional relational store (D1).
+# Uncomment after `npx wrangler d1 create lockdown` and applying d1/schema.sql.
+# With this binding, replay protection uses a UNIQUE constraint (authoritative) instead of a
+# key-value marker (eventually consistent). Nothing else reads these tables yet — the staged
+# plan, what each stage proves, and the rollback: docs/SERVERLESS-D1-CUTOVER.md.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "lockdown"
+# database_id = "<paste from npx wrangler d1 create lockdown>"
+
+# Encrypted backup bucket (optional). Create with:
+#   npx wrangler r2 bucket create lockdown-backups
+# Then set the key (64 hex chars: openssl rand -hex 32) and uncomment:
+#   npx wrangler secret put BACKUP_ENCRYPT_KEY
+# Separate from BINARIES on purpose: a backup is the one object that holds every credential
+# hash at once, so it can carry its own lifecycle and access rules.
+# With no binding the backup pass records "backup_skipped" and the cron carries on.
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "lockdown-backups"

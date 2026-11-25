@@ -44,6 +44,38 @@ export interface Env {
    */
   LOCATION_HISTORY_LIMIT?: string;
   /**
+   * How long a location report is kept, in days (default 90, hard ceiling 180).
+   *
+   * Distinct from LOCATION_HISTORY_LIMIT, which is a count. The history cap evicts the oldest
+   * once a device is full; a quiet device never fills, so its oldest report would otherwise sit
+   * forever. The Node server enforces this with a scheduler loop; a Worker has no process to
+   * host one, so the cron trigger calls the purge and this variable carries the policy.
+   */
+  LOCATION_RETENTION_DAYS?: string;
+  /**
+   * Replay protection for signed agent requests (default on; set "off" only for a staged
+   * rollout). The nonce is recorded for HMAC_TIMESTAMP_WINDOW_SECONDS.
+   */
+  REPLAY_PROTECTION?: string;
+  /** Signature freshness window in seconds (default 300, matching the Node server). */
+  HMAC_TIMESTAMP_WINDOW_SECONDS?: string;
+  /** A device is stale when its last check-in is older than this (default 600). */
+  STALE_DEVICE_THRESHOLD_SEC?: string;
+  /** How long before the same stale device alerts again (default 24 hours). */
+  ALERT_REPEAT_HOURS?: string;
+  /** Generic webhook: receives POST { eventType, timestamp, payload }. */
+  NOTIFICATION_WEBHOOK_URL?: string;
+  /** Slack incoming webhook: receives POST { text }. */
+  SLACK_WEBHOOK_URL?: string;
+  /**
+   * Optional relational binding (D1). When present it is preferred for replay protection, where
+   * a UNIQUE constraint is authoritative and a key-value store is not.
+   *
+   * Optional on purpose, like R2: a deployment that never creates the database keeps working on
+   * KV. Schema and staged cutover plan: serverless/d1/schema.sql, docs/SERVERLESS-D1-CUTOVER.md.
+   */
+  DB?: D1Database;
+  /**
    * How many audit entries are retained (ADR-005; default 1000 when unset).
    *
    * Same reasoning as the location cap: retention is only exercised by crossing it.
@@ -59,6 +91,22 @@ export interface Env {
    * deployment that has not enabled R2 keeps working unchanged.
    */
   BINARIES?: R2Bucket;
+  /**
+   * R2 bucket for encrypted backups. Optional: with no binding the backup pass records that it
+   * skipped, rather than failing the cron tick that also runs retention and alerting.
+   *
+   * Deliberately a separate bucket from BINARIES: a backup is the only object in this system that
+   * contains every credential hash at once, so it should be able to carry its own lifecycle and
+   * access rules without exposing the download bucket to them.
+   */
+  BACKUPS?: R2Bucket;
+  /**
+   * 64 hex characters (32 bytes) for AES-256-GCM backup encryption. Required to write or read a
+   * backup — with no key the pass refuses, because a plaintext backup is a credential dump.
+   */
+  BACKUP_ENCRYPT_KEY?: string;
+  /** Backup retention in days (default 30). */
+  BACKUP_RETENTION_DAYS?: string;
   /**
    * Google Geolocation key, provisioned into the enrolment response at install
    * time (ruling C, S306 — see docs/adr/ADR-008-geolocation-key-delivery.md).

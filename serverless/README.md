@@ -44,7 +44,8 @@ Commands are **per-entity records**, not one list:
 | key | value |
 |-----|-------|
 | `command:<id>` | one command record (status, timestamps, the ACK's evidence) |
-| `command_index` | the ids, append-mostly |
+| `command_index` | every id in the fleet — for admin listings only, never read by an agent |
+| `command_index:<device_id>` | that device's ids — the index the agent's poll reads |
 | `commands` | legacy whole-list key; read once for migration, then deleted |
 
 Why: every mutation used to load the whole list, edit it, and write it back, so two
@@ -60,6 +61,20 @@ Residual, stated rather than hidden: `command_index` is itself one key. It is ap
 and holds only ids, so a lost append hides a command (recoverable from the audit log) instead
 of corrupting a record. Removing that residual means a Durable Object per device; see
 [docs/adr/ADR-002-per-entity-command-records.md](../docs/adr/ADR-002-per-entity-command-records.md).
+
+### The per-device index is a cost control, not a nicety (S348)
+
+The check-in path originally read `command_index` and then one record per id, so **every poll cost
+`1 + (commands in the fleet)` reads**. A 100-command history made a 4-read check-in a 104-read one,
+and the bill grew with command history × fleet size: 1,000 devices cost about KES 63,400 a month
+instead of about KES 8,300. The functional tests passed the whole time — the answer was correct,
+only expensive — which is why `serverless-scale.test.ts` now counts key reads during a real signed
+check-in rather than asserting on the response.
+
+Both indexes are maintained on create and delete. A device enrolled before the change has no
+`command_index:<device_id>` key, so its first poll rebuilds it from the global index and stores it;
+every later poll reads only its own. Cost model and the remaining write ceiling:
+[docs/SERVERLESS-COST.md](../docs/SERVERLESS-COST.md).
 
 ## Device storage (ADR-003)
 
@@ -267,6 +282,62 @@ terminator carrying that line refuses TLS 1.0/1.1 and accepts 1.2/1.3. Verdict
 the policy key, so a downgrade cannot forge a decision — the floor protects
 confidentiality of the echoed `device_id`/`nonce`.
 
+## Scheduled work (cron)
+
+The Node server runs two background loops in-process: the alert tick and the location-retention purge.
+A Worker has no process to host a loop, so retention is driven by a cron trigger and the alert tick is
+not implemented here — see the list at the end of this section.
+
+`wrangler.toml` declares one trigger:
+
+```toml
+[triggers]
+crons = ["0 * * * *"]
+```
+
+**Hourly**, and the passes are not all hourly: retention, nonce purge and the alert tick run on
+every tick (each reads one key per device), while the backup runs only on the 03:00 UTC tick
+because it walks the whole store. Gating the backup instead of lowering the alert frequency is
+deliberate — a stale-device alert arriving up to 24 h late is the wrong trade for a lockdown
+product, and an hourly full export is the wrong trade at scale.
+
+The handler is `scheduled()` in `worker.ts`; it calls `purgeExpiredLocations()`, which deletes reports
+older than `LOCATION_RETENTION_DAYS` (default 90, clamped to 180) and writes the count into the audit
+trail. Without it, location reports are bounded only by `LOCATION_HISTORY_LIMIT` — a *size* cap, which a
+quiet device never reaches, so its oldest report would otherwise be kept forever. That is the difference
+between a cap and the retention window the privacy notice states.
+
+To exercise it locally: `npx wrangler dev --test-scheduled`, then `curl "http://localhost:8787/__scheduled?cron=0+3+*+*+*"`.
+
+Cron expressions do not run at minute granularity for the alert tick: a 300 s poll interval and a
+600 s staleness threshold do not need a 60 s tick, and one daily pass costs nothing. If alert
+latency ever matters more than that, add a second expression — scheduled invocations are included
+in the base plan.
+
+### Replay protection
+
+`verifyAgentAuth` checks the nonce's format (32 hex characters, the Node server's contract) and
+records it for `HMAC_TIMESTAMP_WINDOW_SECONDS` (default 300). With no relational binding the marker
+lives in KV, which is **eventually consistent across locations** — it narrows the replay window
+rather than closing it. Bind D1 (`[[d1_databases]]` in `wrangler.toml`) and the same code takes the
+UNIQUE-constraint path, which is authoritative. `REPLAY_PROTECTION=off` exists for a staged rollout,
+not as a production setting.
+
+**Implemented in the Worker (S348/S349)**, with the cron trigger as the driver:
+
+| Pass | What it does |
+|---|---|
+| Retention | Deletes location reports past `LOCATION_RETENTION_DAYS`, audit-logs the count; purges expired replay nonces |
+| Alerts | `device_stale` for devices past `STALE_DEVICE_THRESHOLD_SEC`, deduped per device for `ALERT_REPEAT_HOURS`, delivered to `NOTIFICATION_WEBHOOK_URL` and/or `SLACK_WEBHOOK_URL`, always audit-logged as `health_alert` |
+| Backup | Encrypted AES-256-GCM export to the `BACKUPS` bucket, audited as `backup_written` — or `backup_skipped` with the reason when the bucket or key is absent. Refuses to write plaintext. Runbook and drill: [docs/SERVERLESS-BACKUP.md](../docs/SERVERLESS-BACKUP.md) |
+
+**Still not implemented**, stated so a deployment is not planned around them by mistake:
+
+| Missing | Consequence |
+|---|---|
+| Deadman-switch and lockdown-confirmation alerts | Only `device_stale` is wired; the Node server's richer alert set is not |
+| Relational store for device and command state | Schema exists ([d1/schema.sql](d1/schema.sql)); cutover is staged and not started — [docs/SERVERLESS-D1-CUTOVER.md](../docs/SERVERLESS-D1-CUTOVER.md) |
+
 ## What this backend does not implement
 
 **Integrations inventory** (`GET /api/integrations`,
@@ -314,6 +385,18 @@ or boot anything:
    | `GET /api/download/agent` → 200/404/503 | binary route routed, no crash without KV data |
 
 ## Deploy
+
+Ordered checklist with what each step proves, secret-escrow notes and rollback:
+**[docs/SERVERLESS-DEPLOY.md](../docs/SERVERLESS-DEPLOY.md)**. After deploying:
+
+```bash
+export WORKER_URL="https://lockdown.example.com"
+node scripts/serverless-smoke.mjs --url "$WORKER_URL" --token "$ADMIN_TOKEN"
+```
+
+Read-only by default; `--allow-writes` also creates a backup and proves replay rejection end to
+end (200 then 401) with a throwaway device. Exit 0 with every check `OK` or `SKIP`-with-a-reason
+is the pass condition.
 
 This is the one step that needs your credentials:
 
