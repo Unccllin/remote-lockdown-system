@@ -243,6 +243,64 @@ describe('POST /api/enroll/claim', () => {
     ).toBe(false);
   });
 
+  // D-227 (review S3): re-association must not clear a device's flag.
+  describe('re-association preserves the flag (D-227)', () => {
+    function stolenReassociation() {
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('SELECT * FROM devices WHERE hardware_uuid', {
+        rows: [{ id: 'dev-1', hardware_uuid: 'HW-1', status: 'stolen' }],
+      });
+      // Whatever the row holds is what the response shows; the point is that the SQL does not
+      // overwrite the status.
+      mockPool.query.setResult('UPDATE devices', {
+        rows: [{ id: 'dev-1', hostname: 'PC-1', hardware_uuid: 'HW-1', status: 'stolen' }],
+      });
+    }
+
+    test('the UPDATE no longer writes status = active', async () => {
+      stolenReassociation();
+
+      await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-1', hardware_uuid: 'HW-1' });
+
+      const update = mockPool.query.mock.calls.find((c) => /UPDATE devices/.test(c[0]));
+      expect(update).toBeTruthy();
+      expect(update[0]).not.toMatch(/status\s*=\s*'active'/);
+    });
+
+    test('the audit record says what the status was before', async () => {
+      stolenReassociation();
+
+      await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-1', hardware_uuid: 'HW-1' });
+
+      const audit = mockPool.query.mock.calls.find((c) => /INSERT INTO audit_log/.test(c[0]));
+      expect(audit[1][3]).toMatchObject({ reassociated: true, previous_status: 'stolen' });
+    });
+
+    test('re-associating an active device still reports active', async () => {
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('SELECT * FROM devices WHERE hardware_uuid', {
+        rows: [{ id: 'dev-2', hardware_uuid: 'HW-2', status: 'active' }],
+      });
+      mockPool.query.setResult('UPDATE devices', {
+        rows: [{ id: 'dev-2', hostname: 'PC-2', hardware_uuid: 'HW-2', status: 'active' }],
+      });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-2', hardware_uuid: 'HW-2' });
+
+      expect(res.status).toBe(200);
+      const audit = mockPool.query.mock.calls.find((c) => /INSERT INTO audit_log/.test(c[0]));
+      expect(audit[1][3]).toMatchObject({ previous_status: 'active' });
+    });
+  });
+
   describe('google_api_key on claim responses (ruling C, S306)', () => {
     let saved;
     beforeEach(() => {

@@ -451,6 +451,61 @@ export function mutationQueueStats(): { stalls: number; wait_ms: number } {
   return { stalls: mutationQueueStalls, wait_ms: MUTATION_QUEUE_WAIT_MS };
 }
 
+/**
+ * Re-associate an existing device with a fresh API key (D-227, review S3).
+ *
+ * Reinstalling the agent on a machine the fleet had flagged used to set it back to `active`, silently
+ * and with no audit entry — so anyone holding a branch enrolment token could erase a theft flag, and
+ * afterwards a thief's reinstall and a technician's legitimate rebuild looked identical.
+ *
+ * Two things follow, and both live here rather than in the callers:
+ *   - the status is PRESERVED. Recovering a device is an explicit administrator action; it must not be
+ *     a side effect of reinstalling software.
+ *   - the re-association is audited (with the status it had before, the path that did it and the source
+ *     address), and one that touches a flagged device also raises an out-of-band notification when a
+ *     webhook/Slack URL is configured — that is what distinguishes the two cases to a human.
+ *
+ * Both enrolment paths call this, because they were byte-identical twins and the next edit would
+ * otherwise fix one and not the other.
+ */
+async function reassociateDevice(
+  request: Request,
+  env: Env,
+  existing: Device,
+  payload: { hostname: string; mac_address?: string; serial_number?: string },
+  apiKeyHash: string,
+  via: 'hardware_uuid' | 'enrollment_token',
+): Promise<Device> {
+  const previousStatus = existing.status;
+
+  existing.api_key_hash = apiKeyHash;
+  existing.hostname = payload.hostname;
+  existing.mac_address = payload.mac_address || existing.mac_address;
+  existing.serial_number = payload.serial_number || existing.serial_number;
+  // Deliberately NOT `existing.status = 'active'` — see the docstring above.
+  await putDevice(env, existing);
+
+  const sourceIp = request.headers.get('CF-Connecting-IP') || 'unknown';
+  await addAuditEntry(
+    env,
+    existing.id,
+    'reassociated',
+    `previous_status=${previousStatus} hostname=${payload.hostname} via=${via} ip=${sourceIp}`,
+  );
+
+  if (previousStatus !== 'active') {
+    await sendNotification(env, 'device_reassociated_while_flagged', {
+      device_id: existing.id,
+      hostname: existing.hostname,
+      previous_status: previousStatus,
+      via,
+      source_ip: sourceIp,
+    });
+  }
+
+  return existing;
+}
+
 async function handleEnroll(request: Request, env: Env): Promise<Response> {
   const auth = await requireRole(request, env, 'operator');
   if (auth instanceof Response) return auth;
@@ -480,13 +535,9 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
       (d) => d.hardware_uuid === payload.hardware_uuid,
     );
     if (existingIdx >= 0) {
-      const existing = devices[existingIdx];
-      existing.api_key_hash = apiKeyHash;
-      existing.hostname = payload.hostname;
-      existing.mac_address = payload.mac_address || existing.mac_address;
-      existing.serial_number = payload.serial_number || existing.serial_number;
-      existing.status = 'active';
-      await putDevice(env, existing);
+      const existing = await reassociateDevice(
+        request, env, devices[existingIdx], payload, apiKeyHash, 'hardware_uuid',
+      );
 
       return jsonResponse(
         {
@@ -664,13 +715,9 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
       (d) => d.hardware_uuid === payload.hardware_uuid,
     );
     if (existingIdx >= 0) {
-      const existing = devices[existingIdx];
-      existing.api_key_hash = apiKeyHash;
-      existing.hostname = payload.hostname;
-      existing.mac_address = payload.mac_address || existing.mac_address;
-      existing.serial_number = payload.serial_number || existing.serial_number;
-      existing.status = 'active';
-      await putDevice(env, existing);
+      const existing = await reassociateDevice(
+        request, env, devices[existingIdx], payload, apiKeyHash, 'hardware_uuid',
+      );
 
       return jsonResponse(
         {
@@ -1962,7 +2009,7 @@ async function handleDetailedHealth(env: Env): Promise<Response> {
 // Main handler
 // ---------------------------------------------------------------------------
 
-import { runAlertTick } from './alerts';
+import { runAlertTick, sendNotification } from './alerts';
 import { backupFailed, listBackups, readBackup, restoreBackup, writeBackup } from './backup';
 
 /** The backup hour, UTC. Retention/alerts are hourly; the full export is daily. */

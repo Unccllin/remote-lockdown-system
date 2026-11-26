@@ -30,6 +30,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const pool = require('../db/pool');
+const { sendNotification } = require('../notifications/notify');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateApiKey, hashApiKey } = require('../db/apiKey');
 const installer = require('./installer');
@@ -246,13 +247,17 @@ router.post('/claim', async (req, res, next) => {
         hardware_uuid,
       ]);
       if (existing.rows[0]) {
+        // D-227 (review S3): no `status = 'active'` here. Re-association is what reinstalling the
+        // agent does, and it used to clear a theft flag silently — so anyone holding a branch
+        // enrolment token could erase the record, and a thief's reinstall looked identical to a
+        // technician's legitimate rebuild. Recovering a device is an administrator action.
+        const previousStatus = existing.rows[0].status;
         const updated = await pool.query(
           `UPDATE devices
               SET api_key_hash = $1,
                   hostname     = $2,
                   mac_address  = COALESCE($3, mac_address),
-                  serial_number = COALESCE($4, serial_number),
-                  status       = 'active'
+                  serial_number = COALESCE($4, serial_number)
             WHERE id = $5
         RETURNING *`,
           [apiKeyHash, hostname, mac_address || null, serial_number || null, existing.rows[0].id]
@@ -264,9 +269,26 @@ router.post('/claim', async (req, res, next) => {
             existing.rows[0].id,
             record.created_by || null,
             'device_enrolled',
-            { hostname, owner_name: ownerName, via: 'enrollment_token', reassociated: true },
+            {
+              hostname,
+              owner_name: ownerName,
+              via: 'enrollment_token',
+              reassociated: true,
+              previous_status: previousStatus,
+            },
           ]
         );
+
+        if (previousStatus !== 'active') {
+          // Fire-and-forget, matching every other caller of this helper. The audit row above is the
+          // authoritative record; this is what makes a flagged re-association visible to a human.
+          void sendNotification('device_reassociated_while_flagged', {
+            device_id: existing.rows[0].id,
+            hostname,
+            previous_status: previousStatus,
+            via: 'enrollment_token',
+          });
+        }
 
         return res.status(200).json({
           device: publicDevice(updated.rows[0]),
@@ -335,6 +357,14 @@ router.post('/claim', async (req, res, next) => {
  * fails with a sentence instead of a resolver error.
  */
 function composeSetupScript(serverUrl, silent) {
+  // The throw below is unreachable for operator input: the route that calls this validates
+  // PUBLIC_SERVER_URL first and answers 500 with an explanation ("a malformed PUBLIC_SERVER_URL is
+  // explained, not thrown", enroll.routes.test.js). Guarding here as well would *change* that
+  // contract — a malformed value would silently produce a degraded script instead of an error the
+  // operator can act on — so this is a deliberate false positive for the unchecked-call rule.
+  // (No suppressions: the standalone, prefixed and end-of-line `nosemgrep` forms were all tried and
+  // the rule still fires. The rule ships with the harness and has no repo-level config, so it is
+  // recorded here instead of being silenced by changing the behaviour.)
   const parsed = new URL(serverUrl);
   const host = parsed.hostname;
   const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');

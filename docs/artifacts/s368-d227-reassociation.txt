@@ -1,0 +1,82 @@
+# S368 — D-227: re-association no longer clears a device's flag
+
+Review finding S3 · ledger entry D-227
+
+## The defect
+
+Both enrolment paths matched an existing device by `hardware_uuid` and then wrote
+`existing.status = 'active'` — with no audit entry. Reinstalling the agent on a stolen laptop, using
+any valid branch enrolment token, therefore erased the theft flag: nobody was told and the history was
+gone. A thief's reinstall and a technician's legitimate rebuild were indistinguishable afterwards,
+which is the worse half of the problem — the flag is the product.
+
+## What changed
+
+**Worker** (`serverless/worker.ts`) — the two paths were byte-identical copy-paste twins, so the fix is
+one helper both call (`reassociateDevice`), which:
+
+- updates hostname / mac / serial / API-key hash and **preserves `status`**;
+- audits `reassociated` with `previous_status=…`, `via=hardware_uuid|enrollment_token` and the source IP;
+- raises `sendNotification('device_reassociated_while_flagged', …)` when the previous status was not
+  `active` — webhook/Slack, and a no-op when neither is configured, exactly like the stale-device alerts.
+
+**Express** (`server/src/routes/enroll.js`) — the same defect, found by checking parity before closing
+rather than assuming: `UPDATE devices … status = 'active'` at the re-association branch. Removed, the
+audit `detail` now carries `previous_status`, and a flagged re-association fires the server's own
+`sendNotification`. Express already audited the re-association (`device_enrolled` +
+`reassociated: true`), so only the status reset applied there.
+
+**Why status is preserved rather than "restored to active unless flagged"**: `stolen`, `locked`,
+`recovering` and `tracking` are all states an administrator set deliberately. Reinstalling software must
+not be able to undo one, and recovery is an explicit action (`/recover`), which is what gives the audit
+trail its meaning.
+
+## Tests and teeth
+
+| side | cases | teeth (defect reinstated) |
+|---|---|---|
+| Worker (`worker.test.ts`, `D-227: re-association preserves the flag`) | 5: status preserved on `/api/enroll`; the audit entry names the previous status; an out-of-band notification fires for a flagged device (stubbed `fetch`); an active re-enrol stays active and does *not* notify; the enrolment-token path preserves it too | **2 of 5 fail** |
+| Express (`enroll.routes.test.js`, `re-association preserves the flag (D-227)`) | 3: the UPDATE no longer writes `status = 'active'`; the audit names `previous_status`; an active device still reports active | **1 of 3 fail** |
+
+Two existing assertions had to change, and both were changed *deliberately* with the reason in the
+test:
+
+1. `re-association resets status to active` (worker) asserted the defect. Renamed to
+   `re-association PRESERVES a flag (D-227 changed this deliberately)` and its expectation flipped to
+   `'stolen'`, with a comment explaining that the old assertion was the behaviour being fixed.
+2. Nothing else: the other re-association tests assert the device id, a new key and
+   `reassociated: true`, none of which changed.
+
+## A false positive I stopped fighting
+
+`composeSetupScript` calls `new URL(serverUrl)` and an ast-grep rule reports it as an unchecked throwing
+call. It is a false positive: the route validates `PUBLIC_SERVER_URL` before calling and answers **500
+with an explanation**, which an existing test pins (`a malformed PUBLIC_SERVER_URL is explained, not
+thrown`). I first "fixed" it with a try/catch — and that *changed the contract* to a 200 with a degraded
+script, which the existing test caught. Reverted.
+
+Three suppression forms were then tried (standalone `// nosemgrep`, standalone with the prefixed rule id,
+end-of-line with the bare id); a fresh `source=lsp` check still reports it, so the harness does not honour
+`nosemgrep` for this rule. Per the repo's own guidance that is the known false-positive class: verify the
+enclosed-ness, record it, move on. The comment at the call site now says exactly that, so the next reader
+does not repeat the experiment — and the behaviour stays as the test defines it.
+
+## Gates
+
+```
+cd serverless && npx tsc --noEmit -p .                    exit 0
+cd serverless && npx vitest run                           8 files, 579 passed   (was 574; +5)
+cd server   && npm test                                   57 suites, 916 passed (was 913; +3)
+cd server   && npx eslint src/ tests/ --max-warnings=0    exit 0
+```
+
+## Residuals
+
+- **The enrolment token is still a bearer credential handed to branch staff.** A thief who obtains one
+  can still reinstall — the flag now survives and the event is recorded and notified, but the install is
+  not denied. Denying it needs the token bound to a device or an operator, which is a different decision.
+- **The notification needs a configured channel.** With no `NOTIFICATION_WEBHOOK_URL` (Worker) or server
+  notification config, the alert is a no-op and the audit entry is the only record.
+- **Express parity was checked, not assumed** — and it mattered: had I closed D-227 after the Worker fix,
+  the self-hosted backend would still have cleared flags silently, which is the exact drift that kept
+  D-226 open for a session.

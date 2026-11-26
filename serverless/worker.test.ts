@@ -2364,7 +2364,7 @@ describe('Serverless Worker', () => {
       expect(getData.status).toBe('active');
     });
 
-    it('re-association resets status to active', async () => {
+    it('re-association PRESERVES a flag (D-227 changed this deliberately)', async () => {
       // Enroll
       const enroll1 = makeRequest(
         'POST',
@@ -2411,7 +2411,10 @@ describe('Serverless Worker', () => {
       const data2: any = await parseResponse(resp2);
 
       expect(resp2.status).toBe(200);
-      expect(data2.device.status).toBe('active');
+      // This assertion used to read `.toBe('active')`: reinstalling the agent silently cleared the
+      // flag, so a branch enrolment token could erase a theft record. D-227 made recovery an
+      // administrator action, so the flag now survives the reinstall. The change is deliberate.
+      expect(data2.device.status).toBe('stolen');
     });
 
     it('re-association via enroll/claim with same hardware_uuid', async () => {
@@ -6828,3 +6831,136 @@ describe('login lockout (D-228)', () => {
     expect(breakGlass.status).toBe(200);
   });
 });
+
+/**
+ * D-227 — a re-association must not silently clear a device's flag.
+ *
+ * Reinstalling the agent on a flagged machine used to write `status = 'active'` with no audit entry,
+ * so anyone holding a branch enrolment token could erase a theft flag, and a thief's reinstall was
+ * indistinguishable from a technician's legitimate rebuild. Each test below fails against that code.
+ */
+describe('D-227: re-association preserves the flag', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; JWT_SECRET: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 'test-jwt' };
+  });
+
+  /** Enrol a device, then flag it stolen (the route needs the hostname as confirmation). */
+  async function stolenDevice(hostname = 'REASSOC-STOLEN') {
+    const enrolled = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname, hardware_uuid: `UUID-${hostname}` }, ADMIN), env);
+    const device = ((await parseResponse(enrolled)) as any).device;
+    await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+      env);
+    return { deviceId: device.id as string, hwid: `UUID-${hostname}`, hostname };
+  }
+
+  async function statusOf(deviceId: string) {
+    const raw = await env.LOCKDOWN_KV.get(`device:${deviceId}`);
+    return JSON.parse(raw as string).status;
+  }
+
+  it('keeps a stolen device stolen across a reinstall (the defect)', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+    // The flag was set by an administrator…
+    expect(await statusOf(deviceId)).toBe('stolen');
+
+    const again = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'REASSOC-STOLEN', hardware_uuid: hwid }, ADMIN), env);
+    expect(again.status).toBe(200);
+    expect(((await parseResponse(again)) as any).reassociated).toBe(true);
+
+    // …and reinstalling the agent does not undo it.
+    expect(await statusOf(deviceId)).toBe('stolen');
+  });
+
+  it('audits the re-association with the status it had before', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+    await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'REASSOC-STOLEN', hardware_uuid: hwid }, ADMIN), env);
+
+    const index = JSON.parse((await env.LOCKDOWN_KV.get('audit_index')) as string) as { id: string }[];
+    const entries = await Promise.all(index.map(async (e) => {
+      const raw = await env.LOCKDOWN_KV.get(`audit:${e.id}`);
+      return JSON.parse(raw as string);
+    }));
+    const reassoc = entries.filter((e) => e.action === 'reassociated');
+    expect(reassoc).toHaveLength(1);
+    expect(reassoc[0].device_id).toBe(deviceId);
+    expect(reassoc[0].detail).toMatch(/previous_status=stolen/);
+    expect(reassoc[0].detail).toMatch(/via=hardware_uuid/);
+  });
+
+  it('notifies out of band when a flagged device is re-associated', async () => {
+    const { hwid } = await stolenDevice();
+    const sent: any[] = [];
+    const original = globalThis.fetch;
+    // The route calls sendNotification with its default fetch, so the stub has to be global.
+    vi.stubGlobal('fetch', async (url: string, init: any) => {
+      sent.push({ url: String(url), body: JSON.parse(init.body) });
+      return new Response('ok', { status: 200 });
+    });
+
+    try {
+      const withHook = { ...env, NOTIFICATION_WEBHOOK_URL: 'https://hooks.example.test/notify' };
+      await worker.fetch(
+        makeRequest('POST', '/api/enroll', { hostname: 'REASSOC-STOLEN', hardware_uuid: hwid }, ADMIN),
+        withHook);
+    } finally {
+      vi.stubGlobal('fetch', original);
+    }
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.eventType).toBe('device_reassociated_while_flagged');
+    expect(sent[0].body.payload.previous_status).toBe('stolen');
+  });
+
+  it('does not alert for an ordinary active re-enrol, and keeps it active', async () => {
+    const enrolled = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'REASSOC-OK', hardware_uuid: 'UUID-REASSOC-OK' }, ADMIN), env);
+    const device = ((await parseResponse(enrolled)) as any).device;
+
+    const sent: any[] = [];
+    const original = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init: any) => {
+      sent.push({ url: String(url), body: JSON.parse(init.body) });
+      return new Response('ok', { status: 200 });
+    });
+    try {
+      const withHook = { ...env, NOTIFICATION_WEBHOOK_URL: 'https://hooks.example.test/notify' };
+      const again = await worker.fetch(
+        makeRequest('POST', '/api/enroll', { hostname: 'REASSOC-OK', hardware_uuid: 'UUID-REASSOC-OK' }, ADMIN),
+        withHook);
+      expect(again.status).toBe(200);
+    } finally {
+      vi.stubGlobal('fetch', original);
+    }
+
+    expect(sent).toHaveLength(0);
+    expect(await statusOf(device.id)).toBe('active');
+  });
+
+  it('the enrolment-token path preserves the flag too', async () => {
+    const { deviceId, hwid } = await stolenDevice('REASSOC-TOKEN');
+
+    // Mint a token through the real route (it requires an operator), then claim it — the same
+    // two-step an installer performs, rather than hand-writing the KV shape.
+    const minted = await worker.fetch(
+      makeRequest('POST', '/api/enroll/token', {}, { Authorization: 'Bearer test-admin-token' }), env);
+    expect(minted.status).toBe(200);
+    const token = ((await parseResponse(minted)) as any).token as string;
+
+    const claim = await worker.fetch(
+      makeRequest('POST', '/api/enroll/claim', {
+        token, hostname: 'REASSOC-TOKEN', hardware_uuid: hwid,
+      }),
+      env);
+
+    expect(claim.status).toBeLessThan(300);
+    expect(await statusOf(deviceId)).toBe('stolen');
+  });
+});
+
