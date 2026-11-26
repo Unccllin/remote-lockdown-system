@@ -301,6 +301,35 @@ describe('POST /api/enroll/claim', () => {
     });
   });
 
+  describe('D-230: a placeholder key is never served', () => {
+    test('omits the field for ROT-TEST', async () => {
+      process.env.GOOGLE_API_KEY = 'ROT-TEST-1795082341';
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-key', hostname: 'PC-K' }] });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-K' });
+
+      expect(res.status).toBeLessThan(300);
+      expect(res.body).not.toHaveProperty('google_api_key');
+    });
+
+    test('serves a real key', async () => {
+      process.env.GOOGLE_API_KEY = 'AIzaSyRealLookingKey123';
+      mockPool.query.setResult('SELECT * FROM enrollment_tokens', { rows: [tokenRow()] });
+      mockPool.query.setResult('UPDATE enrollment_tokens', { rows: [], rowCount: 1 });
+      mockPool.query.setResult('INSERT INTO devices', { rows: [{ id: 'dev-key2', hostname: 'PC-K2' }] });
+
+      const res = await request(app)
+        .post('/api/enroll/claim')
+        .send({ token: 'good', hostname: 'PC-K2' });
+
+      expect(res.body.google_api_key).toBe('AIzaSyRealLookingKey123');
+    });
+  });
+
   describe('google_api_key on claim responses (ruling C, S306)', () => {
     let saved;
     beforeEach(() => {

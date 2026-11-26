@@ -24,7 +24,7 @@ import {
   BiosPassword, Command, Device, LocationReport, activePollSeconds, addAuditEntry,
   addLocationReport, getCheckinMetadata, getCommand, getDeviceByApiKeyHash,
   groupPbaCredentials, listBiosPasswordsForDevice, listCommandsForDevice, listKeysForDevice,
-  normalizeAgentVersion, normalizeUpdateVerification, putDevice, rememberNonce,
+  normalizeAgentVersion, normalizeUpdateVerification, putDevice, rememberNonce, servedGeolocationKey,
   saveBiosPasswordsForDevice, saveCheckinMetadata, saveKeysForDevice, updateCommand, watchKv,
 } from './kv-store';
 
@@ -116,9 +116,8 @@ export function signatureWindowSeconds(env: Env): number {
  */
 async function agentRuntimeSettings(env: Env): Promise<{ google_api_key: string | null; revision: string } | undefined> {
   if (env.GOOGLE_API_KEY === undefined) return undefined;
-  const raw = env.GOOGLE_API_KEY;
-  const key = (raw || '').trim();
-  const google_api_key = key === '' ? null : key;
+  // A placeholder is reported as "no key" (D-230), so an agent stops trying one that cannot work.
+  const google_api_key = servedGeolocationKey(env);
   const canonical = JSON.stringify({ google_api_key });
   const buf = new TextEncoder().encode(canonical);
   const digest = await crypto.subtle.digest('SHA-256', buf);

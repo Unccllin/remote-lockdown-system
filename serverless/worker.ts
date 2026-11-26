@@ -551,7 +551,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
-          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
+          ...geolocationKeyField(env),
           reassociated: true,
         },
         200,
@@ -586,7 +586,7 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
-      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
+      ...geolocationKeyField(env),
     },
     201,
   );
@@ -725,7 +725,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
             mac_address: existing.mac_address,
           },
           api_key: apiKey, // Only returned once — store it securely
-          ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
+          ...geolocationKeyField(env),
           reassociated: true,
         },
         200,
@@ -760,7 +760,7 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
         mac_address: device.mac_address,
       },
       api_key: apiKey, // Only returned once — store it securely
-      ...(env.GOOGLE_API_KEY ? { google_api_key: env.GOOGLE_API_KEY } : {}),
+      ...geolocationKeyField(env),
     },
     201,
   );
@@ -3271,7 +3271,7 @@ import {
 export { resetKeyCache } from './pbl/keys';
 import {
   AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredEnrollmentClaims, purgeExpiredLocations, purgeExpiredNonces,
-  claimEnrollmentToken, saveCheckinMetadata, saveHwArtifacts,
+  claimEnrollmentToken, geolocationKeyField, saveCheckinMetadata, saveHwArtifacts,
   saveKeysForDevice, updateCommand, kvInFlight, kvStalls,
   REARM_APPROVAL_TTL_SECONDS, deleteRearmRequest, getDeviceByHardwareUuid, getRearmRequest,
   listRearmRequests, saveRearmRequest,

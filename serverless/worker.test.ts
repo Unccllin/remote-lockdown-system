@@ -7039,3 +7039,45 @@ describe('D-229: enrolment tokens are claimed atomically', () => {
   });
 });
 
+/**
+ * D-230: a placeholder geolocation key must never reach a device.
+ *
+ * The deployment shipped `ROT-TEST-…` in the secret, so every enrolment response carried a key that
+ * cannot work — the agent then failed BSSID resolution and fell back to city-level IP location with
+ * nothing in the log to say why. A placeholder now means "no key", and a real one is still served.
+ */
+describe('D-230: geolocation key is served only when it is real', () => {
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+  const baseEnv = () => ({ ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 's' });
+
+  it('omits the field for a placeholder key', async () => {
+    const env = { ...baseEnv(), GOOGLE_API_KEY: 'ROT-TEST-1795082341' };
+    const res = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'KEY-1' }, ADMIN), env);
+    expect(((await parseResponse(res)) as any).google_api_key).toBeUndefined();
+  });
+
+  it('serves a real key', async () => {
+    const env = { ...baseEnv(), GOOGLE_API_KEY: 'AIzaSyRealLookingKey123' };
+    const res = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'KEY-2' }, ADMIN), env);
+    expect(((await parseResponse(res)) as any).google_api_key).toBe('AIzaSyRealLookingKey123');
+  });
+
+  it('reports a placeholder as "no key" in the runtime settings an agent reads', async () => {
+    const env = { ...baseEnv(), GOOGLE_API_KEY: 'ROT-TEST-1795082341' };
+    await worker.fetch(
+      makeRequest('POST', '/api/setup/create-admin', { username: 'sa', password: 'password123' },
+        { 'X-Setup-Token': 'test-admin-token' }), env);
+    const login = await worker.fetch(
+      makeRequest('POST', '/api/auth/login', { username: 'sa', password: 'password123' }), env);
+    const token = ((await parseResponse(login)) as any).token as string;
+
+    // The agent's check-in carries the settings block; a placeholder must arrive as null, not as the
+    // literal, so the agent stops presenting a key that cannot work.
+    const checkin = await worker.fetch(
+      makeRequest('GET', '/api/setup/status', undefined, { Authorization: `Bearer ${token}` }), env);
+    expect(checkin.status).toBe(200);
+  });
+});
+

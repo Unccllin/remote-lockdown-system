@@ -1682,6 +1682,36 @@ export async function listRearmRequests(env: Env): Promise<RearmRequest[]> {
 // binding is used — only LOCKDOWN_KV with expirationTtl, matching the nonce/rearm precedent.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// D-230: the geolocation key a device may be given.
+//
+// `GOOGLE_API_KEY` is a deployment secret that every device could read out of its own enrolment
+// response, so it must at least be a real, restricted key (Geolocation API only, with a daily quota —
+// see docs/SERVERLESS-DEPLOY.md). The other half of that rule lives here: a *placeholder* is not a key.
+// The deployment shipped with `ROT-TEST-…` in the secret, and serving it told every agent to try a key
+// that cannot work, so BSSID resolution failed silently and fell back to city-level IP location with
+// nothing in the log to say why. Treating a placeholder as unset makes that fallback honest.
+// ---------------------------------------------------------------------------
+
+// Deliberately not /test/ anywhere: test suites legitimately use synthetic keys like
+// 'test-google-key', and this rule is about a PLACEHOLDER that shipped in a deployment secret —
+// the shapes below are the ones that actually appear (ROT-TEST-… is this one).
+const PLACEHOLDER_GEOLOCATION_KEY = /^(rot-test|changeme|placeholder|your[-_]?key|example|xxx)/i;
+
+/** The geolocation key this deployment may serve, or null when unset or a placeholder. */
+export function servedGeolocationKey(env: Env): string | null {
+  const raw = String(env.GOOGLE_API_KEY ?? "").trim();
+  if (!raw) return null;
+  if (PLACEHOLDER_GEOLOCATION_KEY.test(raw)) return null;
+  return raw;
+}
+
+/** The `google_api_key` field a response may carry — nothing at all when there is no usable key. */
+export function geolocationKeyField(env: Env): { google_api_key?: string } {
+  const key = servedGeolocationKey(env);
+  return key ? { google_api_key: key } : {};
+}
+
 export const LOGIN_FAIL_LIMIT_USERNAME = 5;
 export const LOGIN_FAIL_LIMIT_IP = 20;
 export const LOGIN_LOCKOUT_SECONDS = 900;

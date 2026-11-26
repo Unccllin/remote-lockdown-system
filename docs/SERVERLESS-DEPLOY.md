@@ -183,3 +183,27 @@ is a rollback of code, not a rebuild of state.
   (`make hw-preflight`, `docs/D-129-HARDWARE-RUNBOOK.md`).
 - It does not give you SSO, MFA, audit export or a licence mechanism. Those are gaps with a
   remediation plan, not deployment steps.
+
+---
+
+## GOOGLE_API_KEY must be restricted before it is set (D-230)
+
+The Worker hands this key to every device in its own enrolment response, and the agent uses it to
+resolve BSSID scans into coordinates. So it is a *deployment* secret in the weakest possible position:
+any device can read it out of the response it already receives (field `google_api_key`), and so can
+anyone holding a device or a log of that response.
+
+Two rules, and the second is in the code:
+
+1. **Restrict the key in Google Cloud** to the **Geolocation API only**, with a **daily quota**.
+   An unrestricted key is a billing incident waiting for the first extracted device.
+2. **A placeholder is not served.** `serverless/kv-store.ts` (`servedGeolocationKey`) and
+   `server/lib/geolocationKey.js` treat `ROT-TEST-…`, `changeme`, `placeholder`, `your-key`,
+   `example…` and `xxx…` as "no key" — the field is omitted and the agent's runtime settings report
+   `null`, so it falls back to city-level IP location *knowingly* instead of presenting a key that
+   cannot work. This deployment shipped `ROT-TEST-…`, which is why the rule exists.
+
+```bash
+# what the deployment currently serves (should be null until a restricted key is set)
+npx wrangler secret list | grep GOOGLE_API_KEY
+```
