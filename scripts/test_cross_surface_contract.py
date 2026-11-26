@@ -90,6 +90,13 @@ ROUTED_NOT_PRODUCED = {
 # orphaned-commit-refs baseline).
 KNOWN_GAPS = {
     ("POST", "/api/enroll"): "admin enrolment by path; Express enrols via POST /api/devices + /api/enroll/{token,claim}",
+    # S350 shipped encrypted backups to R2, a store the Express server does not have. Its backup
+    # path is scripts/backup.sh (a cron'd pg_dump), which is a different mechanism reaching a
+    # different store -- not a missing Express endpoint. These were unclassified until S361 ran
+    # the script suite, so the contract test had been failing since S350 landed.
+    ("GET", "/api/admin/backups"): "lists R2 backups; R2 is serverless-only (S350), Express backs up via scripts/backup.sh",
+    ("POST", "/api/admin/backups"): "creates an encrypted R2 backup; Express has no R2 store",
+    ("POST", "/api/admin/restore"): "restores from an R2 backup; Express restores via scripts/restore.sh",
 }
 
 

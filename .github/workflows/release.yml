@@ -88,7 +88,11 @@ jobs:
           python-version: '3.12'
 
       - name: Agent — install deps
-        run: cd agent && pip install -r requirements.txt pytest ruff pip-audit
+        # requirements-dev.txt, not a hand-listed set: pyproject.toml sets `--timeout=30`, so
+        # without pytest-timeout pytest exits 4 (usage error) and the job fails before running a
+        # single test. ci.yml installs this file for the same reason; the first v1.0.5 run did not
+        # (S361).
+        run: cd agent && pip install -r requirements.txt -r requirements-dev.txt pip-audit
 
       - name: Agent — pip-audit
         run: cd agent && pip-audit -r requirements.txt
