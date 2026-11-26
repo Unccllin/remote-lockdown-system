@@ -6701,3 +6701,130 @@ describe('D-226 / ADR-011: re-arm requires administrator approval', () => {
   });
 });
 
+
+
+/**
+ * D-228 — admin login attempt limiting and lockout.
+ *
+ * MFA is out of scope (the ledger says so). The cases below are the ones the close criteria name,
+ * plus a regression test for a defect the review oracle found in the first implementation: the IP gate
+ * used to call a combined (username, ip) helper with a sentinel username, so five attempts with the
+ * *username* `'__ip__'` locked every login from every address.
+ */
+describe('login lockout (D-228)', () => {
+  const IP = { 'CF-Connecting-IP': '203.0.113.10' };
+  const OTHER_IP = { 'CF-Connecting-IP': '198.51.100.9' };
+
+  async function freshEnv() {
+    const env: any = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 'test-jwt' };
+    await worker.fetch(
+      makeRequest('POST', '/api/setup/create-admin', { username: 'la', password: 'password123' },
+        { 'X-Setup-Token': 'test-admin-token' }),
+      env,
+    );
+    return env;
+  }
+
+  const login = (env: any, body: Record<string, unknown>, headers: Record<string, string> = IP) =>
+    worker.fetch(makeRequest('POST', '/api/auth/login', body, headers), env);
+
+  async function failTimes(env: any, username: string, times: number, headers = IP) {
+    for (let i = 0; i < times; i += 1) {
+      await login(env, { username, password: 'wrong-password' }, headers);
+    }
+  }
+
+  it('refuses the 6th attempt after 5 failures', async () => {
+    const env = await freshEnv();
+    await failTimes(env, 'la', 5);
+
+    const res = await login(env, { username: 'la', password: 'password123' });
+    expect(res.status).toBe(429);
+    expect((await res.json() as any).error).toMatch(/try again in \d+ minutes/i);
+  });
+
+  it('refuses the CORRECT password while the username is locked', async () => {
+    const env = await freshEnv();
+    await failTimes(env, 'la', 5);
+
+    // A lockout that let the right password through would be decoration.
+    const res = await login(env, { username: 'la', password: 'password123' });
+    expect(res.status).toBe(429);
+  });
+
+  it('accepts the correct password once the window has passed', async () => {
+    const env = await freshEnv();
+    await failTimes(env, 'la', 5);
+
+    // Move the recorded lockout into the past rather than waiting 15 minutes: the state carries an
+    // absolute `locked_until`, which is what the gate compares against.
+    await env.LOCKDOWN_KV.put('login_fail:user:la', JSON.stringify({
+      count: 5, locked_until: Date.now() - 1000,
+    }));
+
+    const res = await login(env, { username: 'la', password: 'password123' });
+    expect(res.status).toBe(200);
+  });
+
+  it('does not reveal whether a username exists', async () => {
+    const env = await freshEnv();
+
+    // Bodies are read once: a Response body is a stream, and comparing `.text()` twice silently
+    // compares against "" the second time.
+    const wrongPassword = await login(env, { username: 'la', password: 'wrong-password' });
+    const unknownUser = await login(env, { username: 'nobody-here', password: 'wrong-password' });
+    const realBody = await wrongPassword.text();
+    const unknownBody = await unknownUser.text();
+
+    expect(unknownUser.status).toBe(wrongPassword.status);
+    expect(unknownBody).toBe(realBody);
+
+    // Once the real name is locked its answer changes to 429 while an unknown name still answers 401,
+    // so a per-username lockout is inherently observable. That is accepted rather than hidden: the
+    // alternative is no per-name limit at all, and the lockout text never names the account.
+    await failTimes(env, 'la', 4); // five total with the attempt above
+    const lockedReal = await login(env, { username: 'la', password: 'password123' });
+    expect(lockedReal.status).toBe(429);
+    expect(await lockedReal.text()).not.toContain('la');
+  });
+
+  it('does not let case or surrounding whitespace buy a fresh allowance', async () => {
+    const env = await freshEnv();
+
+    await failTimes(env, 'la', 3);
+    await failTimes(env, ' LA ', 2);
+
+    const res = await login(env, { username: 'la', password: 'password123' });
+    expect(res.status).toBe(429);
+  });
+
+  it('a username named like the old IP sentinel cannot lock everyone out (regression)', async () => {
+    const env = await freshEnv();
+
+    // The defect: `isLoginLocked(env, '__ip__', ip)` made this *username* counter the IP gate, so
+    // these five failures locked every login from every address for fifteen minutes.
+    await failTimes(env, '__ip__', 5);
+
+    const correctOtherIp = await login(env, { username: 'la', password: 'password123' }, OTHER_IP);
+    expect(correctOtherIp.status).toBe(200);
+
+    const correctSameIp = await login(env, { username: 'la', password: 'password123' }, IP);
+    expect(correctSameIp.status).toBe(200);
+
+    // And break-glass still works from an address that has not burned its own allowance.
+    const breakGlass = await login(env,
+      { username: 'admin', password: 'test-admin-token' }, OTHER_IP);
+    expect(breakGlass.status).toBe(200);
+  });
+
+  it('break-glass is never permanently denied: its failures are bounded by the IP window', async () => {
+    const env = await freshEnv();
+
+    // Wrong break-glass guesses count against the IP only, so they cannot lock a *username*.
+    for (let i = 0; i < 3; i += 1) {
+      await login(env, { token: 'wrong-break-glass' }, IP);
+    }
+    const breakGlass = await login(env, { token: 'test-admin-token' }, IP);
+    expect(breakGlass.status).toBe(200);
+  });
+});

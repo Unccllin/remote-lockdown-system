@@ -1612,3 +1612,119 @@ export async function listRearmRequests(env: Env): Promise<RearmRequest[]> {
     .filter((r): r is RearmRequest => r !== null)
     .sort((a, b) => b.requested_at.localeCompare(a.requested_at));
 }
+
+// ---------------------------------------------------------------------------
+// D-228: admin login attempt limiting + lockout (rate limiting only; MFA deferred).
+//
+// Two INDEPENDENT counters, exposed as separate functions on purpose.
+//
+// An earlier revision of this code had one `isLoginLocked(env, username, ip)` that ORed both
+// counters, and the Worker's IP gate called it as `isLoginLocked(env, '__ip__', ip)`. `'__ip__'` is
+// an ordinary username an attacker can submit, so five failed logins with that name wrote the *user*
+// counter for it — and from then on every login from every IP, including a correct password and a
+// correct break-glass token, was refused 429. A global denial of service that any anonymous caller
+// could trigger for 15 minutes at a time (found by the review oracle, reproduced, S367).
+//
+// The rule that follows: a caller-supplied string must never be able to address the IP counter.
+// `isIpLoginLocked` takes only an IP; `isUsernameLoginLocked` takes only a username; nothing ORs them.
+//
+// Honest limitation: KV is eventually consistent across colos, so a distributed attacker can
+// slightly exceed the limit. This narrows the brute-force window; it does not eliminate it. No new
+// binding is used — only LOCKDOWN_KV with expirationTtl, matching the nonce/rearm precedent.
+// ---------------------------------------------------------------------------
+
+export const LOGIN_FAIL_LIMIT_USERNAME = 5;
+export const LOGIN_FAIL_LIMIT_IP = 20;
+export const LOGIN_LOCKOUT_SECONDS = 900;
+
+interface LoginFailState {
+  count: number;
+  locked_until: number; // epoch ms; 0 means not locked
+}
+
+export interface LockoutState {
+  locked: boolean;
+  retryAfterSeconds: number;
+}
+
+const NOT_LOCKED: LockoutState = { locked: false, retryAfterSeconds: 0 };
+
+/** Trim + lowercase, so `Admin` and ` admin` cannot each get their own allowance. */
+function normalizeUsername(u: unknown): string {
+  return String(u ?? '').trim().toLowerCase();
+}
+
+function userKey(username: unknown): string {
+  return `login_fail:user:${normalizeUsername(username)}`;
+}
+function ipKey(ip: unknown): string {
+  return `login_fail:ip:${String(ip ?? 'unknown')}`;
+}
+
+async function readState(env: Env, key: string): Promise<LoginFailState> {
+  const raw = await env.LOCKDOWN_KV.get(key);
+  if (!raw) return { count: 0, locked_until: 0 };
+  try {
+    const parsed = JSON.parse(raw) as Partial<LoginFailState>;
+    return { count: Number(parsed.count) || 0, locked_until: Number(parsed.locked_until) || 0 };
+  } catch {
+    // A corrupt counter must not become a lockout.
+    return { count: 0, locked_until: 0 };
+  }
+}
+
+async function writeState(env: Env, key: string, state: LoginFailState): Promise<void> {
+  await env.LOCKDOWN_KV.put(key, JSON.stringify(state), { expirationTtl: LOGIN_LOCKOUT_SECONDS });
+}
+
+function toLockout(state: LoginFailState, now: number): LockoutState {
+  if (state.locked_until > now) {
+    return { locked: true, retryAfterSeconds: Math.ceil((state.locked_until - now) / 1000) };
+  }
+  return NOT_LOCKED;
+}
+
+/** Is this username locked out? Reads the username counter only. */
+export async function isUsernameLoginLocked(env: Env, username: unknown): Promise<LockoutState> {
+  return toLockout(await readState(env, userKey(username)), Date.now());
+}
+
+/** Is this source IP locked out? Reads the IP counter only — never anything a caller supplied. */
+export async function isIpLoginLocked(env: Env, ip: unknown): Promise<LockoutState> {
+  return toLockout(await readState(env, ipKey(ip)), Date.now());
+}
+
+async function bump(env: Env, key: string, limit: number): Promise<void> {
+  const now = Date.now();
+  const state = await readState(env, key);
+  state.count += 1;
+  if (state.count >= limit) state.locked_until = now + LOGIN_LOCKOUT_SECONDS * 1000;
+  await writeState(env, key, state);
+}
+
+/** Record a failed login against BOTH counters: the name tried and the address it came from. */
+export async function recordLoginFailure(env: Env, username: unknown, ip: unknown): Promise<void> {
+  await Promise.all([
+    bump(env, userKey(username), LOGIN_FAIL_LIMIT_USERNAME),
+    bump(env, ipKey(ip), LOGIN_FAIL_LIMIT_IP),
+  ]);
+}
+
+/**
+ * Record a failed attempt against the IP counter only.
+ *
+ * Used for a wrong break-glass secret: there is no username to attribute it to (the whole point of
+ * break-glass is that it is not a registered admin), and counting it against a name a caller chose
+ * would let them lock that name for everyone — the defect above, one layer down.
+ */
+export async function recordIpLoginFailure(env: Env, ip: unknown): Promise<void> {
+  await bump(env, ipKey(ip), LOGIN_FAIL_LIMIT_IP);
+}
+
+/** A successful login clears both counters for that (username, ip) pair. */
+export async function clearLoginFailures(env: Env, username: unknown, ip: unknown): Promise<void> {
+  await Promise.all([
+    env.LOCKDOWN_KV.delete(userKey(username)),
+    env.LOCKDOWN_KV.delete(ipKey(ip)),
+  ]);
+}

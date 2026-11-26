@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 
 const router = express.Router();
+const { loginRateLimit, recordLoginFailure, clearLoginFailures } = require('../middleware/loginRateLimit');
 
 // NOTE: Admin account creation lives at POST /api/setup/create-admin
 // (see routes/setup.js). That endpoint enforces a "first-admin-only" guard
@@ -12,7 +13,7 @@ const router = express.Router();
 // Do NOT re-add an open /register route here — it would reintroduce the
 // unauthenticated-admin-creation vulnerability fixed in this patch.
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   let { username } = req.body;
   const { password } = req.body;
 
@@ -38,16 +39,17 @@ router.post('/login', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM admins WHERE username = $1', [username]);
     const admin = result.rows[0];
-    if (!admin) return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' });
+    if (!admin) { recordLoginFailure(req); return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' }); }
 
     const valid = await bcrypt.compare(password, admin.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' });
+    if (!valid) { recordLoginFailure(req); return res.status(401).json({ error: 'Invalid credentials. Check your username and password and try again.' }); }
 
     const token = jwt.sign(
       { id: admin.id, username: admin.username, role: admin.role || 'viewer' },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
+    clearLoginFailures(req);
     res.json({ token, admin: { id: admin.id, username: admin.username, role: admin.role || 'viewer' } });
   } catch (err) {
     res.status(500).json({ error: 'Login failed. Please try again.' });

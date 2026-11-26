@@ -1652,6 +1652,51 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
  * matches the env ADMIN_TOKEN, issue a super-admin session — keeps the
  * pre-multi-admin behavior working for bootstrap / recovery.
  */
+/**
+ * Break-glass login: a `{token}` equal to ADMIN_TOKEN, or a password equal to ADMIN_TOKEN for a
+ * username that is NOT a registered admin (restricting the password form to unregistered names stops
+ * a coincidental admin password from silently escalating to super-admin).
+ *
+ * Returns the response when this is a break-glass attempt, or null to continue with the normal
+ * password path. Extracted from `handleAuthLogin` (D-228): the handler had grown to four concerns —
+ * IP gate, break-glass, username gate, password verify — and this one owns three branches of its own.
+ *
+ * A wrong guess is counted against the IP only, never the username: the whole point is that there is
+ * no registered name to attribute it to, and counting it against a caller-chosen name is how the
+ * sentinel defect upstream locked every login (see kv-store.ts).
+ */
+async function tryBreakGlassLogin(
+  env: Env,
+  payload: { username?: string; password?: string; token?: string },
+  admin: Admin | undefined,
+  ip: string,
+): Promise<Response | null> {
+  const attempt = payload.token !== undefined || (!admin && payload.password !== undefined);
+  if (!attempt) return null;
+
+  const matched =
+    matchesAdminToken(env, payload.token) || (!admin && matchesAdminToken(env, payload.password));
+  if (!matched) {
+    await recordIpLoginFailure(env, ip);
+    return null;
+  }
+
+  await clearLoginFailures(env, payload.username, ip);
+  const sa: Admin = {
+    id: BREAK_GLASS_ADMIN_ID,
+    username: 'admin',
+    password_hash: '',
+    salt: '',
+    role: 'super-admin',
+    created_at: new Date().toISOString(),
+  };
+  return jsonResponse({
+    token: await signAdminToken(env, sa),
+    user: { username: 'admin', role: 'super-admin' },
+    admin: { id: sa.id, username: 'admin', role: 'super-admin' },
+  });
+}
+
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   // Review S4: this used to sign tokens with the constant 'dev-secret' when neither JWT_SECRET nor
   // ADMIN_TOKEN was set, so one missed setup step let anyone mint a super-admin login. Refuse here,
@@ -1672,8 +1717,20 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
     return errorResponse('Invalid JSON body', 400);
   }
 
-  // Normal path: username + password → look up admin → PBKDF2 verify.
   const { username, password } = payload;
+  // Source IP for the per-IP counter (rearm precedent: CF-Connecting-IP).
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+
+  // D-228: the IP lockout is checked first, before any admin lookup, so a locked address cannot even
+  // probe usernames. It reads the IP counter *only* — see the block comment in kv-store.ts for the
+  // sentinel-username version of this that let five attempts with a chosen name lock out every IP.
+  // Break-glass is counted per IP as well, so no username lock can deny the operator recovery.
+  const ipLock = await isIpLoginLocked(env, ip);
+  if (ipLock.locked) {
+    const mins = Math.ceil(ipLock.retryAfterSeconds / 60);
+    return errorResponse(`Too many failed login attempts. Try again in ${mins} minutes.`, 429);
+  }
+
   const admins = await listAdmins(env);
   const admin = username ? admins.find((a) => a.username === username) : undefined;
 
@@ -1681,18 +1738,14 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   // ADMIN_TOKEN for a username that is NOT a registered admin. Restricting
   // the password form to non-registered usernames prevents a coincidental
   // admin password from silently escalating to super-admin.
-  const breakGlass =
-    matchesAdminToken(env, payload.token) || (!admin && matchesAdminToken(env, password));
-  if (breakGlass) {
-    const sa: Admin = {
-      id: BREAK_GLASS_ADMIN_ID, username: 'admin', password_hash: '', salt: '',
-      role: 'super-admin', created_at: new Date().toISOString(),
-    };
-    return jsonResponse({
-      token: await signAdminToken(env, sa),
-      user: { username: 'admin', role: 'super-admin' },
-      admin: { id: sa.id, username: 'admin', role: 'super-admin' },
-    });
+  const breakGlass = await tryBreakGlassLogin(env, payload, admin, ip);
+  if (breakGlass) return breakGlass;
+
+  // D-228: username lockout, checked after break-glass so a locked name cannot block recovery.
+  const userLock = await isUsernameLoginLocked(env, username);
+  if (userLock.locked) {
+    const mins = Math.ceil(userLock.retryAfterSeconds / 60);
+    return errorResponse(`Too many failed login attempts. Try again in ${mins} minutes.`, 429);
   }
 
   if (!username || !password) {
@@ -1702,6 +1755,7 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
     return errorResponse('username and password must be strings', 400);
   }
   if (!admin) {
+    await recordLoginFailure(env, username, ip);
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
   // Verify with the admin's recorded iteration count; fall back to the
@@ -1709,9 +1763,11 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   const hash = await pbkdf2Hash(password, admin.salt, admin.pbkdf2_iterations ?? LEGACY_PBKDF2_ITERATIONS);
   // Constant-time compare — don't let timing leak match position.
   if (!timingSafeEqualStr(hash, admin.password_hash)) {
+    await recordLoginFailure(env, username, ip);
     return errorResponse('Invalid credentials. Check your username and password and try again.', 401);
   }
 
+  await clearLoginFailures(env, username, ip);
   return jsonResponse({
     token: await signAdminToken(env, admin),
     user: { username: admin.username, role: admin.role },
@@ -3173,4 +3229,5 @@ import {
   saveKeysForDevice, updateCommand, kvInFlight, kvStalls,
   REARM_APPROVAL_TTL_SECONDS, deleteRearmRequest, getDeviceByHardwareUuid, getRearmRequest,
   listRearmRequests, saveRearmRequest,
+  isUsernameLoginLocked, isIpLoginLocked, recordIpLoginFailure, recordLoginFailure, clearLoginFailures,
 } from './kv-store';

@@ -2595,7 +2595,7 @@ number is derived from the other; each is counted where it lives.
 - **Estimated effort**: 1 day.
 
 ### D-228 — Admin login has no attempt limit, lockout or second factor
-- **Status**: OPEN (found 2026-11-26, S363; review finding S5)
+- **Status**: OPEN (found 2026-11-26, S363; review finding S5). Limiter implemented (rate limiting only; MFA deferred) — see docs/artifacts/s367-d228-login-lockout.txt. Formal closure pending commit hash (I2).
 - **Category**: SECURITY
 - **What the code does**: `worker.ts:1557 handleAuthLogin` reads the admin list, finds the username
   and verifies PBKDF2. There is no attempt counter, no lockout, no CAPTCHA and no second factor

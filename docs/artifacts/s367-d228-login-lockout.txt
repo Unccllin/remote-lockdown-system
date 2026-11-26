@@ -1,0 +1,105 @@
+# S367 — D-228: login attempt limiting and lockout, on both backends
+
+Review finding S5 · ledger entry D-228 · MFA explicitly out of scope (the close criteria say so)
+
+This work was delegated to the Sisyphus role-loop. **Its oracle rejected the first implementation
+twice and the workflow failed — correctly.** What follows is the defect it found, the fix, and the
+evidence.
+
+## The defect the oracle caught (and I would have shipped)
+
+The first implementation kept one helper, `isLoginLocked(env, username, ip)`, that ORed the per-username
+and per-IP counters. The Worker's IP gate called it by passing a sentinel *username*:
+
+```ts
+const ipLock = await isLoginLocked(env, '__ip__', ip);   // ← the bug
+```
+
+`'__ip__'` is an ordinary string an attacker can put in the login body. Five failed logins with
+`username: '__ip__'` wrote the **username** counter for that name to its limit, and from then on
+*every* login from *every* address — including a correct password and a correct break-glass token —
+returned 429 for fifteen minutes. A global denial of service that any anonymous caller could renew at
+will.
+
+The oracle did not take this on inspection: it wrote a scratch probe, reproduced it (correct login from
+`198.51.100.9` → 429 after five failures as `'__ip__'` from `203.0.113.1`), removed the probe, and
+blocked the gate. That is exactly the job.
+
+## The fix
+
+**A caller-supplied string can never address the IP counter.** The combined helper is gone; the counters
+are separate functions with separate keys:
+
+| function | counter it touches | used for |
+|---|---|---|
+| `isIpLoginLocked(env, ip)` | `login_fail:ip:<ip>` only | the gate before any lookup |
+| `isUsernameLoginLocked(env, username)` | `login_fail:user:<normalised>` only | the gate after break-glass |
+| `recordLoginFailure(env, username, ip)` | both | an ordinary failed login |
+| `recordIpLoginFailure(env, ip)` | IP only | a wrong break-glass guess (no name to attribute) |
+| `clearLoginFailures(env, username, ip)` | both | a successful login |
+
+Numbers: **5 failures per username → 15-minute lockout**, **20 per source IP → 15 minutes**. The IP
+limit is looser because a shared branch NAT would otherwise lock a whole office from one careless
+account, while the per-name limit is what actually stops guessing. Names are trimmed and lowercased
+before keying, so `Admin`, `admin` and ` admin` share one allowance.
+
+`handleAuthLogin` had grown to four concerns and cyclomatic complexity 21 (the file's advisory threshold
+is 15), so the break-glass path moved into `tryBreakGlassLogin()`. Verified by the suite: **574 pass
+before and after**, and the extraction was kept only because the tests said so.
+
+## Behaviour, stated precisely
+
+- **Before a lockout**, an unknown username and a wrong password answer with the same status and the
+  same body — the login is not a username oracle.
+- **Under a lockout**, a locked real name answers 429 while an unknown name answers 401, so a
+  per-username lock is *inherently observable*. That is accepted and written down rather than hidden:
+  the alternative is no per-name limit at all. The 429 text says how long to wait and never names an
+  account.
+- **Break-glass** is counted per IP only. A wrong break-glass secret cannot lock a username, and an
+  address that has burned its 20 attempts waits out one bounded 15-minute window — recovery cannot be
+  denied permanently.
+- **MFA is not implemented.** The ledger's close criterion (c) says it is designed separately, and
+  folding it in would turn a day's work into a quarter.
+
+## Tests and teeth
+
+| side | file | cases |
+|---|---|---|
+| Worker | `serverless/worker.test.ts` (`login lockout (D-228)`) | 7: 6th refused; correct-during-lockout refused; success after the window; identical bodies for unknown vs wrong; case/whitespace shares one allowance; **the sentinel regression**; break-glass not permanently denied |
+| Express | `server/tests/auth.lockout.test.js` | 5: the same set minus the sentinel case (the Express limiter never had one — it keys `user:` and `ip:` separately) |
+
+Two mutations, each measured:
+
+1. **Both refusal branches disabled** (`if (false && lock.locked)`) → 4 of the 7 Worker lockout tests
+   fail (6th-refused, correct-during-lockout, identical-bodies, case/whitespace).
+2. **The oracle's defect reinstated** (`isUsernameLoginLocked(env, '__ip__')` as the IP gate) → exactly
+   the regression test fails, and nothing else. That is the mutation that matters: it proves the test
+   would have caught what shipped.
+
+Note what mutation 1 does *not* catch: the regression test still passes with all refusals disabled,
+because with no lockout at all nothing locks anything. The two mutations are complementary, which is why
+both are recorded.
+
+## Gates (measured with the exact commands the repository documents)
+
+```
+cd serverless && npx tsc --noEmit -p .                    exit 0
+cd serverless && npx vitest run                           8 files, 574 passed   (was 567; +7)
+cd server   && npm test                                   57 suites, 913 passed (was 908; +5)
+cd server   && npx eslint src/ tests/ --max-warnings=0    exit 0
+```
+
+`npm test`, not `npx jest`: the suite needs `--experimental-vm-modules`, and a bare `npx jest` run dies
+in `postgres-compat.test.js` with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` — which reads like a code
+failure and is not one (S366 lost a run to that).
+
+## Residuals, named
+
+- **KV is eventually consistent across colos**, so a distributed attacker can slightly exceed the
+  limits. This narrows the brute-force window; it does not eliminate it. No new binding was added —
+  `LOCKDOWN_KV` with `expirationTtl`, the same pattern as nonces and the re-arm limiter.
+- **The Express limiter is an in-process Map** (the `nonceCache` precedent). A process restart clears
+  the counters. Acceptable for the documented single-process deployment; a 021 table migration is the
+  upgrade path if that changes.
+- **Per-username lockouts are observable**, as described above.
+- **MFA remains not implemented**, by scope.
