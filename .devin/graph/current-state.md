@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 63 | 70 | ✗ |
+| Debt items | 64 | 70 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 63 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 64 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,32 +53,28 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 368 — 2026-11-26
+## Latest session: 369 — 2026-11-26
 
 ### Fog cleared
-- **Re-enrolling a flagged device no longer clears its flag.** `stolen`/`locked`/`recovering`/`tracking`
-  survive a reinstall, so recovering a device is an administrator action rather than a side effect of
-  reinstalling the agent.
-- **Every re-association is now recorded** with the status it had before, which path did it and from
-  which address — so the legitimate rebuild and the thief's reinstall are distinguishable.
-- **A re-association of a flagged device raises an out-of-band notification** when a webhook or Slack
-  URL is configured, and is a no-op otherwise (the same contract the stale-device alerts use).
+- **A single-use enrolment token is now single-use on the deployed Worker.** The claim is an INSERT whose
+  primary key refuses the second writer; the loser gets 401. Verified against the live D1 (table present)
+  and by tests that run two claims concurrently.
+- **The KV fallback is documented and pinned** rather than waiting to be rediscovered: a test asserts both
+  claims win without a binding, so the difference between the paths is visible in the suite.
+- **Claim rows are purged and audited** by the cron, so the table cannot grow for ever.
 
 ### Fog remaining
-- **The enrolment token is still a bearer credential handed to branch staff**, so a thief who obtains
-  one can still reinstall — the flag survives now, but the install itself is not denied. Denying it
-  would need the token to be bound to a device or an operator, which is a different decision.
-- Unchanged: D-229 (enrol-token race), D-230 (Google key exposure); D-120/D-129/D-130/D-134 need
-  hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0; no
-  dashboard panel for re-arm approvals.
-
-- **Tests and teeth**: 5 Worker cases and 3 Express cases; reinstating the defect fails **2 of 5** and
-  **1 of 3**. One existing worker assertion (`re-association resets status to active`) asserted the
-  defect itself and was renamed and flipped deliberately, with the reason written into the test.
+- **D-230 is the last unfixed review finding** (the deployment's Google key is returned to every device in
+  four enrolment responses). Half a day to restrict the key in Google Cloud and document it as a
+  deployment step; 2–3 days to move the lookup server-side. The first option needs an owner action in the
+  Google Cloud console, which is why this session took D-229 instead.
+- **The enrolment token stays a bearer credential** (D-227's residual): single-use now, not attributable.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY`
+  placeholder; FRANKENSTEIN still 1.0.0; no dashboard panel for re-arm approvals.
 
 ### Debt items closed
-- **D-227 — CLOSED** (re-association preserves the flag, both backends): commit `38009ba`, artifact
-  `docs/artifacts/s368-d227-reassociation.txt`.
+- **D-229 — CLOSED** (atomic enrolment-token claim): commit `a39cc61`, artifact
+  `docs/artifacts/s369-d229-enrol-claim.txt`.
 
 ### Debt items still open
 - D-120
@@ -86,45 +82,35 @@
 - D-130
 - D-134
 - D-225
-- D-229
 - D-230
 
 ### Blockers
-- None.
+- None for this item. D-230's preferred fix needs an owner action in Google Cloud.
 
 ### Session artifacts
-- docs/artifacts/s368-d227-reassociation.txt
+- docs/artifacts/s369-d229-enrol-claim.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), and this time an existing test saved me from myself.** I "fixed"
-  `composeSetupScript`'s unguarded `new URL()` because an ast-grep rule flagged it — and the change
-  silently turned an operator-facing 500 into a 200 with a degraded script. The existing test
-  `a malformed PUBLIC_SERVER_URL is explained, not thrown` failed immediately, which is the whole value
-  of a test that pins a *contract* rather than a return value. **Harness change**: before "fixing" a
-  checker finding in code you did not write, look for a test that pins the current behaviour — the
-  finding may be a false positive, and the test is the evidence either way.
-- **Layer 4 again**: three `nosemgrep` forms (standalone, standalone with the prefixed rule id,
-  end-of-line with the bare id) do not suppress this ast-grep rule; a `source=lsp` re-check confirmed
-  it. Recorded at the call site rather than worked around by changing behaviour (AGENTS.md rule 5: know
-  the false-positive class).
-- **Layer 2 (context provision), the good kind**: checking Express parity *before* closing found the
-  same `status = 'active'` defect in `enroll.js`. That check exists because D-226 stayed open a session
-  for exactly this reason, and the memory of it is doing real work now.
+- **Layer 4 (verification feedback), mine**: I added the cron purge and left its result unused, so `tsc`
+  and the unused-variable rule both flagged a variable nothing read — the purge ran but nothing said so.
+  Fixed by auditing the count the way `nonce_purge` already does. **Harness change**: when adding a purge
+  beside an existing one, copy the whole block including its reporting, not just the call.
+- **Layer 2 (context provision), the good kind again**: the parity check answered the opposite way from
+  the previous two sessions, which is exactly why it is now a step rather than a guess.
 
 ### VERIFY
+- `wrangler d1 execute lockdown --file=d1/schema.sql --remote` -> applied; `sqlite_master` lists
+  `enrollment_claims`
 - `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, **579 passed** (was 574; +5)
-- `cd server && npm test` -> 57 suites, **916 passed** (was 913; +3)
-- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
-- teeth: defect reinstated -> 2 of 5 Worker cases and 1 of 3 Express cases failed; restored -> all pass
-- `make graph-check` -> all invariants pass (70 items, 63 CLOSED, 7 OPEN)
+- `cd serverless && npx vitest run` -> 8 files, **582 passed** (was 579; +3)
+- teeth: atomic path forced off (`if (false && env.DB)`) -> 2 of 3 D-229 cases failed; restored -> 582 pass
+- `make graph-check` -> all invariants pass (70 items, 64 CLOSED, 6 OPEN)
 - `python3 scripts/check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- Take **D-230** (the deployment's Google API key is returned to every device in four enrolment
-  responses): half a day if the fix is "restrict the key in Google Cloud to Geolocation with a daily
-  quota and document it as a deployment step", or 2–3 days if the lookup moves server-side — decide
-  which before touching the responses, since the second removes the key from the fleet entirely.
+- Take **D-230** — the last unfixed review finding — and start by deciding the shape with the owner:
+  restricting the key in Google Cloud (half a day, needs their console access) versus moving the location
+  lookup server-side (2–3 days, removes the key from the fleet entirely).
 
 ---
 
@@ -137,10 +123,9 @@
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 | D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
-| D-229 | Enrolment tokens are read then deleted across an eventually  | OPEN | — |
 | D-230 | The deployment's Google API key is returned to every device  | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (7 of 70 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (6 of 70 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

@@ -2385,14 +2385,14 @@
 | D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | CLOSED (S366: ADR-011 — approval on BOTH backends; Worker `408f2cdf` + Express commit `6794058`, 17 tests, 6-of-9 and 2-of-8 fail against the pre-fix code; docs/artifacts/s366-d226-express-parity.txt) | SECURITY |
 | D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | CLOSED (S368: status preserved on both backends, audit carries `previous_status`, flagged re-association notifies; commit `38009ba`) | SECURITY |
 | D-228 | Admin login has no attempt limit, lockout or second factor | CLOSED (S367: 5/username and 20/IP per 15 minutes on both backends, commit `548cedf`; the oracle rejected the first version's sentinel-username IP gate, which locked every login globally — see the progress note) | SECURITY |
-| D-229 | Enrolment tokens are read then deleted across an eventually consistent store | OPEN (S364: `worker.ts:618` get → `:647` delete, so two racers can both pass; review S8) | SECURITY |
+| D-229 | Enrolment tokens are read then deleted across an eventually consistent store | CLOSED (S369: D1 PRIMARY KEY claim with ON CONFLICT DO NOTHING, KV fallback documented; Express was already atomic — commit `a39cc61`) | SERVERLESS |
 | D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
 
 **Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
-58 CLOSED, 7 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+59 CLOSED, 6 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
-D-229/D-230 — the two unfixed findings from the 26 November external review; D-226 closed in S366,
-D-227 in S368, D-228 in S367). The previous line claimed
+D-230 — the last unfixed finding from the 26 November external review; D-226 closed in S366,
+D-227 in S368, D-228 in S367, D-229 in S369). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2635,7 +2635,8 @@ number is derived from the other; each is counted where it lives.
   the Express in-process Map cleared on restart, and the inherent observability of a per-username lock.
 
 ### D-229 — Enrolment tokens are read then deleted across an eventually consistent store
-- **Status**: OPEN (found 2026-11-26, S363; review finding S8)
+- **Status**: CLOSED (2026-11-26, S369; commit `a39cc61`) — Worker-only, Express already
+  atomic. Evidence: `docs/artifacts/s369-d229-enrol-claim.txt`
 - **Category**: SERVERLESS
 - **What the code does**: `worker.ts:618` reads `enroll_token:<token>`, validates expiry and only
   then deletes (`:647`), so two concurrent enrolments can both pass the read before either deletes.
@@ -2646,6 +2647,13 @@ number is derived from the other; each is counted where it lives.
   one success; (c) if the window is instead accepted, it is documented on the route and in the
   dashboard's token UI rather than left implicit.
 - **Estimated effort**: 1 day with D1 already bound.
+- **Progress (S369)**: `claimEnrollmentToken` makes the claim an INSERT into `enrollment_claims`
+  (token PRIMARY KEY) with `ON CONFLICT DO NOTHING`, so the second writer gets "0 rows changed" and a 401;
+  the KV read-then-delete remains only as the unbound fallback, with its window stated and pinned by a
+  test. Cron purges expired claims and audits the count. **Parity ran the other way this time**: Express
+  already did it correctly (`UPDATE … WHERE used_at IS NULL` + rowCount), so the item is Worker-only —
+  the check that produced that answer is the one added after D-226 was assumed. 3 tests, 2 of which fail
+  when the atomic path is forced off. Commit `a39cc61`; evidence `docs/artifacts/s369-d229-enrol-claim.txt`.
 
 ### D-230 — The deployment's Google API key is returned to every device in four enrolment responses
 - **Status**: OPEN (found 2026-11-26, S363; review finding S9)

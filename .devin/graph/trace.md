@@ -9900,3 +9900,89 @@ attempt while `consolidate` holds the lock.
   responses): half a day if the fix is "restrict the key in Google Cloud to Geolocation with a daily
   quota and document it as a deployment step", or 2–3 days if the lookup moves server-side — decide
   which before touching the responses, since the second removes the key from the fleet entirely.
+
+---
+
+## Session 369 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `serverless/worker.ts handleEnrollClaim` (the KV read → expiry check → delete sequence, with
+  the `typeof kv.delete` probe and the MockKV fallback), `serverless/d1/schema.sql` (tables and the
+  `nonces` UNIQUE precedent), `serverless/kv-store.ts` `rememberNonce`/`purgeExpiredNonces` (the exact
+  `prepare().bind().run()` + `meta.changes` pattern to copy), and the cron tick's purge/report block.
+- **Read**: `server/src/routes/enroll.js:204-235` — the Express claim, which consumes the token with
+  `UPDATE … WHERE used_at IS NULL` and checks `rowCount !== 1`. That single read decided the shape of the
+  session: Express was already atomic, so D-229 is Worker-only.
+- **Finding**: the fix is not "add a lock", it is "make the consumption a single atomic operation". KV
+  cannot do that, D1's primary key can, and the pattern already exists two functions above in the same
+  file. Also worth stating: the parity check found the *opposite* result from D-226/D-227 (the backend I
+  expected to be wrong was right), which is the argument for doing the check rather than assuming either
+  way.
+
+### IMPLEMENT
+- `serverless/d1/schema.sql`: `enrollment_claims(token TEXT PRIMARY KEY, claimed_at, device_id,
+  expires_at)` + expiry index, applied to the live database and verified via `sqlite_master`.
+- `serverless/kv-store.ts`: `claimEnrollmentToken()` (D1 insert-or-lose, KV fallback) and
+  `purgeExpiredEnrollmentClaims()`.
+- `serverless/worker.ts`: the claim replaces the delete block (loser → 401 "already used"), and the cron
+  purges + audits expired claims (`enrollment_claim_purge`) beside the nonce purge.
+- `serverless/worker.test.ts`: 3 cases, including a fake D1 that enforces the primary key with a yield
+  mid-write so two concurrent claims genuinely interleave.
+- `docs/artifacts/s369-d229-enrol-claim.txt`: the change, the parity result, the teeth measurement.
+
+### Fog cleared
+- **A single-use enrolment token is now single-use on the deployed Worker.** The claim is an INSERT whose
+  primary key refuses the second writer; the loser gets 401. Verified against the live D1 (table present)
+  and by tests that run two claims concurrently.
+- **The KV fallback is documented and pinned** rather than waiting to be rediscovered: a test asserts both
+  claims win without a binding, so the difference between the paths is visible in the suite.
+- **Claim rows are purged and audited** by the cron, so the table cannot grow for ever.
+
+### Fog remaining
+- **D-230 is the last unfixed review finding** (the deployment's Google key is returned to every device in
+  four enrolment responses). Half a day to restrict the key in Google Cloud and document it as a
+  deployment step; 2–3 days to move the lookup server-side. The first option needs an owner action in the
+  Google Cloud console, which is why this session took D-229 instead.
+- **The enrolment token stays a bearer credential** (D-227's residual): single-use now, not attributable.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY`
+  placeholder; FRANKENSTEIN still 1.0.0; no dashboard panel for re-arm approvals.
+
+### Debt items closed
+- **D-229 — CLOSED** (atomic enrolment-token claim): commit `a39cc61`, artifact
+  `docs/artifacts/s369-d229-enrol-claim.txt`.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-230
+
+### Blockers
+- None for this item. D-230's preferred fix needs an owner action in Google Cloud.
+
+### Session artifacts
+- docs/artifacts/s369-d229-enrol-claim.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), mine**: I added the cron purge and left its result unused, so `tsc`
+  and the unused-variable rule both flagged a variable nothing read — the purge ran but nothing said so.
+  Fixed by auditing the count the way `nonce_purge` already does. **Harness change**: when adding a purge
+  beside an existing one, copy the whole block including its reporting, not just the call.
+- **Layer 2 (context provision), the good kind again**: the parity check answered the opposite way from
+  the previous two sessions, which is exactly why it is now a step rather than a guess.
+
+### VERIFY
+- `wrangler d1 execute lockdown --file=d1/schema.sql --remote` -> applied; `sqlite_master` lists
+  `enrollment_claims`
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, **582 passed** (was 579; +3)
+- teeth: atomic path forced off (`if (false && env.DB)`) -> 2 of 3 D-229 cases failed; restored -> 582 pass
+- `make graph-check` -> all invariants pass (70 items, 64 CLOSED, 6 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- Take **D-230** — the last unfixed review finding — and start by deciding the shape with the owner:
+  restricting the key in Google Cloud (half a day, needs their console access) versus moving the location
+  lookup server-side (2–3 days, removes the key from the fleet entirely).

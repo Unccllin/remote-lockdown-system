@@ -4515,3 +4515,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-208
+  statement: 'D-229 is closed: enrolment-token claims are atomic on the Worker via D1''s enrollment_claims
+    table (token PRIMARY KEY, INSERT ... ON CONFLICT DO NOTHING, loser gets 401), with the KV read-then-delete
+    retained only as the unbound fallback and pinned by a test that shows both claims win without a binding.
+    Express was already atomic (conditional UPDATE ... WHERE used_at IS NULL + rowCount), so the item
+    was Worker-only. Commit a39cc61; worker 582 tests, 2 of 3 D-229 cases fail when the atomic path is
+    forced off.'
+  domain: serverless
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'worker 582 tests; teeth: forcing the KV fallback fails 2 of 3 D-229 cases; live D1 carries
+    enrollment_claims; commit a39cc61'
+  source: S369
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -1625,9 +1625,10 @@ debt_items:
     close_criteria: >-
       Atomic claim (the live D1 UNIQUE constraint is the natural home), a test that two concurrent
       claims yield exactly one success, or the window documented on the route and in the UI
-    status: OPEN
+    status: CLOSED
     category: SERVERLESS
-    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    commit_ref: "a39cc61 — atomic enrolment-token claim (D1 primary key)"
+    artifact_ref: "docs/artifacts/s369-d229-enrol-claim.txt"
     risk_notes: >-
       worker.ts:618 get then :647 delete: two racers can both pass the read inside the KV
       propagation window, so a single-use token can enrol a machine it was not issued for.
