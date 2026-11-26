@@ -53,24 +53,30 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 371 — 2026-11-26
+## Latest session: 372 — 2026-11-26
 
 ### Fog cleared
-- **Re-arm approvals are now doable by a human without `curl`**: the queue shows what is pending, the
-  decision is deliberate, and the expiry is visible where it matters.
-- **The D-226 follow-up is closed and the ledger says so** — the note that read "no dashboard panel for
-  approvals yet" would otherwise have been the kind of stale line this repository keeps finding.
+- **The D-134 ledger entry no longer misdescribes the default.** Both defects the entry's own matrix
+  records (missing `OWNERREAD` → `0x149`; and the hierarchy-authorized read) are fixed in the tree, and
+  provisioning agrees with consumption.
+- **The target is identified and its identity recorded**, so the next attempt starts from a machine
+  profile rather than from investigation.
+- **The cost of the capture is measured**: no `build`/`nasm`/`iasl` here, no serial rig, and `PblApp`
+  writes no log to disk — so there is no file-based shortcut to substitute for the serial line.
 
 ### Fog remaining
-- **D-120, D-129, D-130, D-134** need Windows/HP hardware or the owner's signing certificate.
-- **D-225** needs the KV-stall trigger to recur; its witness is deployed and names the operation.
-- **`GOOGLE_API_KEY` is still the placeholder**, so devices get honest IP-level location; setting a real
-  restricted key is an owner action with a documented step.
-- **No re-arm approval notification reaches an administrator out of band** — the queue is pull-only. A
-  device asking for recovery does not email anyone; the operator has to look, or be told by the technician.
+- **D-134 stays OPEN, and the blocker is equipment**: no USB drive at the moment, which is what the
+  boot window needs (stage `HARDWARE-TEST-PLAN.md` files on FAT32, boot, run PBL, `TPM2_Clear`, boot
+  again). Closing it on the QEMU arms would contradict its own criterion — "QEMU cannot answer the
+  firmware half".
+- **A serial rig is still absent.** If one never appears, the durable fix is to have PBL append its log
+  to the ESP/USB (the `PblPersistDxe` file-writing pattern already exists), which would make every future
+  hardware run capturable from the stick afterwards.
+- Unchanged: D-120/D-129/D-130 need hardware or the owner's signing certificate; D-225's trigger is
+  unmeasured; `GOOGLE_API_KEY` remains the placeholder.
 
 ### Debt items closed
-- None. This session closed a D-226 *follow-up*, and D-226 itself was closed in S366.
+- None. No debt item was closed this session, and D-134 was deliberately left OPEN.
 
 ### Debt items still open
 - D-120
@@ -80,30 +86,45 @@
 - D-225
 
 ### Blockers
-- None for this work. The five remaining items need hardware, owner credentials, or an occurrence.
+- **D-134**: no USB drive available for the boot stage, and no serial capture rig. Both are equipment,
+  not engineering.
+- **D-120/D-129/D-130**: hardware windows and the owner's signing certificate.
 
 ### Session artifacts
-- docs/artifacts/s371-rearm-approval-panel.txt
+- docs/artifacts/s372-d134-mole-environment.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), mine, and the second time in two sessions**: I inserted an icon into a
-  multi-line `import` with a regex, producing `FileText,, KeyRound`, and `vite build` failed on it. The build
-  named file and column within a second, which is the harness working. **Harness change**: edit import
-  blocks by reading and rewriting them; a pattern that lands "somewhere in the braces" is not an edit, and
-  the previous session's offset-based block replacement failed the same way.
+- **Layer 5 (state management), and it is the session's lesson**: the debt ledger — the artefact this
+  repository treats as state — described the *opposite* of the tree for a P0-relevant default, and it had
+  done so for weeks across sessions that read it. AGENTS.md warns about exactly this ("the debt ledger can
+  be stale"), and it was right. **Harness change**: when a ledger entry's claim is cheap to check in code
+  (a PCD default, an attribute constant), check it before reasoning from it — and when correcting one,
+  correct only the stale sentence, because the rest of this entry was accurate and my first draft would
+  have flattened a six-arm investigation into a one-line summary.
+- **Layer 4 (verification feedback)**: two string-anchor edits failed before a line-based edit worked. The
+  failures were cheap and visible; the fix was to locate the line and rewrite it rather than to widen the
+  anchor. Third session running where pattern-based file editing was the weak link.
 
 ### VERIFY
-- `cd dashboard && npx vitest run` -> 32 files, **280 passed** (was 274; +6)
-- `cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0` -> exit 0
-- `cd dashboard && npx vite build` -> built (after repairing the import the first attempt broke)
+- `ssh … 'powershell -File mole-tpm-probe.ps1'` -> `TPM Present=True Ready=True Owned=True
+  Enabled=True Activated=True`; `Mfr=IFX Ver=7.85.4555.0`; `Model=HP | HP EliteBook 830 G6`;
+  `BIOS=R70 Ver. 01.36.00`
+- `ssh … 'powershell -File mole-identity.ps1'` -> serial `5CG0398GCN`, UUID
+  `BE10009B-5867-337C-5024-E390E760DA74`, Windows 11 Pro `10.0.26300`, TPMSpec `2.0, 0, 1.38`
+- `ssh … 'powershell -File mole-esp-check.ps1'` -> EFI partition present, `SecureBoot=False`,
+  no `EFI\PBL`
+- tree checks: `PblPkg.dec:76` = `|FALSE|`; `TpmClient.c:1194-1195` index-handle handles;
+  `1356`/`1420` = `0x02060004`; `ci-harness-docker.sh:142` and `provision-qemu-tpm.sh:115,152` =
+  `-C o -a 0x02060004`
+- `command -v build nasm iasl` -> all missing (so no PBL build from this host as-is)
 - `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
-- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- Nothing in the tree can move the remaining five: take **D-134** (TPM NV hierarchy) first when a Windows
-  machine with a real TPM is available, since its outcome decides whether D-129/D-130's hardware work can
-  reuse the same sealing path — and until then, the only open code work is the out-of-band notification for
-  re-arm requests noted under "Fog remaining".
+- Bring a USB stick (or a serial adapter, or both): the D-134 run is fully specified in
+  `docs/artifacts/s372-d134-mole-environment.txt` and the machine profile is recorded, so the next attempt
+  starts at "build, stage, boot, read the AK Name line" rather than at investigation. If no rig will
+  exist, take the durable option instead — make PBL append its log to the ESP, using the
+  `PblPersistDxe` file-writing pattern, so the evidence is captured by the stick itself.
 
 ---
 

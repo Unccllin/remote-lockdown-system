@@ -10151,3 +10151,107 @@ attempt while `consolidate` holds the lock.
   machine with a real TPM is available, since its outcome decides whether D-129/D-130's hardware work can
   reuse the same sealing path — and until then, the only open code work is the out-of-band notification for
   re-arm requests noted under "Fog remaining".
+
+---
+
+## Session 372 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `docs/adr/PBL-DEBT-LEDGER.md` D-134 **in full** (the six-arm session-165 evidence, the
+  session-166 "the fallback is broken too" matrix, the ownerAuth question, the empty-TPM trap, and the
+  2026-11-02 ruling), `firmware/PblPkg/PblPkg.dec:60-76` (the PCD and the ruling's comment),
+  `firmware/PblPkg/PblApp/TpmClient.c` (both attribute sets and the `NV_Read` handle block),
+  `firmware/PblPkg/ci-harness-docker.sh` + `scripts/provision-qemu-tpm.sh` (provisioning hierarchy),
+  `docs/D-129-HARDWARE-RUNBOOK.md` (the pre-registered 0x9A2/0x18B check and the serial-capture line),
+  and `firmware/PblPkg/HARDWARE-TEST-PLAN.md` (the USB staging route).
+- **Finding, and the reason this session was worth running**: the ledger said
+  `PcdPblTpmUsePlatformHierarchy` "defaults to **TRUE**". The .dec says `|FALSE|`, under a comment dated
+  with the ruling that flipped it, and the code the matrix said was missing (`OWNERREAD`, index-handle
+  read, `-C o -a 0x02060004` provisioning) is all present. **A reader would have gone to fix a P0 that
+  was already fixed.** I nearly wrote the same mistake in reverse: my first ledger edit asserted "the
+  firmware half is done, only the capture remains" before I had read the `0x149` matrix, which records a
+  *second* bug in the fallback that the ruling also fixed. The anchor assertion failed and I read the
+  section instead of patching it — the right outcome for the wrong reason.
+- **Finding, about the target**: MOLE is `HP EliteBook 830 G6`, BIOS `R70 01.36.00`, Infineon TPM 2.0
+  `7.85.4555.0` (present/ready/owned/enabled/activated), Secure Boot off, no `EFI\PBL` on the ESP. That
+  is the machine D-134's close criteria name, reachable over SSH, and its identity fields are now
+  recorded so the eventual run does not re-derive them.
+
+### IMPLEMENT
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-134's stale "defaults to TRUE" bullet corrected in place and dated,
+  plus an S372 progress note recording what is verified in the tree, the target machine, and the three
+  measured blockers for the capture.
+- `docs/artifacts/s372-d134-mole-environment.txt`: the machine identity (the runbook's `model`, `serial`,
+  `uuid`, `tpm`, `secure_boot` fields), the seven code lines that prove the ruling landed, what the
+  remaining step needs, and the exact log lines that would close it.
+
+### Fog cleared
+- **The D-134 ledger entry no longer misdescribes the default.** Both defects the entry's own matrix
+  records (missing `OWNERREAD` → `0x149`; and the hierarchy-authorized read) are fixed in the tree, and
+  provisioning agrees with consumption.
+- **The target is identified and its identity recorded**, so the next attempt starts from a machine
+  profile rather than from investigation.
+- **The cost of the capture is measured**: no `build`/`nasm`/`iasl` here, no serial rig, and `PblApp`
+  writes no log to disk — so there is no file-based shortcut to substitute for the serial line.
+
+### Fog remaining
+- **D-134 stays OPEN, and the blocker is equipment**: no USB drive at the moment, which is what the
+  boot window needs (stage `HARDWARE-TEST-PLAN.md` files on FAT32, boot, run PBL, `TPM2_Clear`, boot
+  again). Closing it on the QEMU arms would contradict its own criterion — "QEMU cannot answer the
+  firmware half".
+- **A serial rig is still absent.** If one never appears, the durable fix is to have PBL append its log
+  to the ESP/USB (the `PblPersistDxe` file-writing pattern already exists), which would make every future
+  hardware run capturable from the stick afterwards.
+- Unchanged: D-120/D-129/D-130 need hardware or the owner's signing certificate; D-225's trigger is
+  unmeasured; `GOOGLE_API_KEY` remains the placeholder.
+
+### Debt items closed
+- None. No debt item was closed this session, and D-134 was deliberately left OPEN.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- **D-134**: no USB drive available for the boot stage, and no serial capture rig. Both are equipment,
+  not engineering.
+- **D-120/D-129/D-130**: hardware windows and the owner's signing certificate.
+
+### Session artifacts
+- docs/artifacts/s372-d134-mole-environment.txt
+
+### Failure attribution
+- **Layer 5 (state management), and it is the session's lesson**: the debt ledger — the artefact this
+  repository treats as state — described the *opposite* of the tree for a P0-relevant default, and it had
+  done so for weeks across sessions that read it. AGENTS.md warns about exactly this ("the debt ledger can
+  be stale"), and it was right. **Harness change**: when a ledger entry's claim is cheap to check in code
+  (a PCD default, an attribute constant), check it before reasoning from it — and when correcting one,
+  correct only the stale sentence, because the rest of this entry was accurate and my first draft would
+  have flattened a six-arm investigation into a one-line summary.
+- **Layer 4 (verification feedback)**: two string-anchor edits failed before a line-based edit worked. The
+  failures were cheap and visible; the fix was to locate the line and rewrite it rather than to widen the
+  anchor. Third session running where pattern-based file editing was the weak link.
+
+### VERIFY
+- `ssh … 'powershell -File mole-tpm-probe.ps1'` -> `TPM Present=True Ready=True Owned=True
+  Enabled=True Activated=True`; `Mfr=IFX Ver=7.85.4555.0`; `Model=HP | HP EliteBook 830 G6`;
+  `BIOS=R70 Ver. 01.36.00`
+- `ssh … 'powershell -File mole-identity.ps1'` -> serial `5CG0398GCN`, UUID
+  `BE10009B-5867-337C-5024-E390E760DA74`, Windows 11 Pro `10.0.26300`, TPMSpec `2.0, 0, 1.38`
+- `ssh … 'powershell -File mole-esp-check.ps1'` -> EFI partition present, `SecureBoot=False`,
+  no `EFI\PBL`
+- tree checks: `PblPkg.dec:76` = `|FALSE|`; `TpmClient.c:1194-1195` index-handle handles;
+  `1356`/`1420` = `0x02060004`; `ci-harness-docker.sh:142` and `provision-qemu-tpm.sh:115,152` =
+  `-C o -a 0x02060004`
+- `command -v build nasm iasl` -> all missing (so no PBL build from this host as-is)
+- `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
+
+### Next session opening
+- Bring a USB stick (or a serial adapter, or both): the D-134 run is fully specified in
+  `docs/artifacts/s372-d134-mole-environment.txt` and the machine profile is recorded, so the next attempt
+  starts at "build, stage, boot, read the AK Name line" rather than at investigation. If no rig will
+  exist, take the durable option instead — make PBL append its log to the ESP, using the
+  `PblPersistDxe` file-writing pattern, so the evidence is captured by the stick itself.

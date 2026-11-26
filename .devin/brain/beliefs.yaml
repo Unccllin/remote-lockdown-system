@@ -4573,3 +4573,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-211
+  statement: 'D-134''s remaining work is equipment-bound, not engineering: the owner-hierarchy ruling
+    is already implemented and verified in the tree (PblPkg.dec default FALSE, NV_Read by index handle,
+    attrs 0x02060004 with OWNERREAD, provisioning at -C o -a 0x02060004) and in QEMU arms, so what is
+    left is a real-hardware capture (AK Name line, then TPM2_Clear treated as unenrolled). That needs
+    a PBL build (no build/nasm/iasl on the dev host), a serial rig (PblApp writes no log to disk), and
+    a FAT32 USB for the boot stage. MOLE is the target: HP EliteBook 830 G6, serial 5CG0398GCN, UUID BE10009B-5867-337C-5024-E390E760DA74,
+    Infineon TPM 2.0 7.85.4555.0, Secure Boot off.'
+  domain: firmware
+  status: proposed
+  evidence_level: assumed
+  provenance: docs/artifacts/s372-d134-mole-environment.txt
+  source: S372
+  asserted: '2026-11-26'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

@@ -1,13 +1,14 @@
 # Memory Index
 
-Last rebuilt: 2026-11-26 16:05:24
-Active memories: 1601 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-26 16:13:39
+Active memories: 1625 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
 | ID | Title | Tags | Conf | Last Seen | Score | Rel | Impact |
 |----|-------|------|------|-----------|-------|-----|--------|
 | m-1467 | MISTAKE: mistake: accepted the workflow's '5 of 7  |  | 0.55 | 2026-11-26 | 0.275 | 0 |  |
+| m-1155 | MISTAKE: mistake: my first ledger edit asserted on |  | 0.55 | 2026-11-26 | 0.275 | 0 |  |
 | m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.55 | 2026-11-19 | 0.254 | 0 |  |
 | m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.55 | 2026-11-18 | 0.252 | 0 |  |
 | m-1547 | TPM sealing works when the key is addressed by a c | 1 | 0.50 | 2026-11-26 | 0.250 | 0 |  |
@@ -85,6 +86,30 @@ Active memories: 1601 | Superseded: 0 | Decayed: 20
 | m-1619 | A per-username lockout is inherently observable (4 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1620 | Delegated work: a worker's report is a claim. Its  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1621 | MISTAKE: mistake: compared two .text() calls on on |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1622 | Reassociation by hardware_uuid wrote status='activ |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1623 | Reinstalling software must not undo a state an adm |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1624 | CHECK PARITY BEFORE CLOSING: the same status='acti |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1625 | An ast-grep finding on the unguarded URL parse in  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1626 | When a checker flags code you did not write, look  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1627 | MISTAKE: mistake: 'fixed' an ast-grep finding by a |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1628 | MISTAKE: mistake: appended the RULE-ZERO/IMPLEMENT |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1629 | The fix was not 'add a lock' but 'make consumption |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1630 | Parity ran the OPPOSITE way this time: Express alr |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1631 | A claim row outlives the 15-minute token, so the c |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1632 | MISTAKE: mistake: added the cron purge but left it |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1633 | The chosen option (restrict rather than move looku |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1634 | One rule per deployable: servedGeolocationKey/geol |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1635 | The boundary of 'placeholder' matters: matching /t |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1636 | MISTAKE: mistake: first placeholder regex matched  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1637 | Approving a re-arm re-keys a machine and cuts off  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1638 | Reload the queue after deciding rather than splici |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1639 | Dashboard api modules use paths relative to baseUR |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1640 | MISTAKE: mistake: inserted an icon into a multi-li |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1641 | The D-134 ledger entry was stale in the most expen |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1642 | MOLE is HP EliteBook 830 G6, BIOS R70 01.36.00, se |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1643 | D-134's remaining step is equipment-bound: this ho |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1644 | MOLE SSH route: ssh -i ~/.ssh/lockdown_lab_ed25519 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1645 | MISTAKE: mistake: two string-anchor ledger edits f |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1520 | make verify-worker answers 'does the bundle build  |  | 0.50 | 2026-11-25 | 0.247 | 0 |  |
@@ -493,7 +518,6 @@ Active memories: 1601 | Superseded: 0 | Decayed: 20
 | m-1152 | Enforcement pattern repeated from the SAST gate: c |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
 | m-1153 | A deadline can be gamed by setting it far out, so  |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
 | m-1154 | Both surfaces echo deprecated_scheme_sunset in the |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
-| m-1155 | MISTAKE: mistake: my first ledger edit asserted on |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
 | m-1156 | MISTAKE: mistake: nearly deleted the legacy branch |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
 | m-1157 | The D-221 sunset breaks legacy TOKENS, not agent b |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
 | m-1158 | The server records no agent version at all: /api/a |  | 0.50 | 2026-11-06 | 0.200 | 0 |  |
