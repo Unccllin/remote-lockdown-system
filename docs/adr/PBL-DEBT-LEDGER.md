@@ -2383,16 +2383,16 @@
 | D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
 | D-225 | The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate | OPEN (S357: a wedged chain made `/api/agent/checkin` and `/api/agent/command-ack` hang while every unserialised route answered in ~0.6 s; cleared by redeploy, not by the code — docs/artifacts/s357-release-1.0.5.txt) | SERVERLESS |
 | D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | CLOSED (S366: ADR-011 — approval on BOTH backends; Worker `408f2cdf` + Express commit `6794058`, 17 tests, 6-of-9 and 2-of-8 fail against the pre-fix code; docs/artifacts/s366-d226-express-parity.txt) | SECURITY |
-| D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | OPEN (S364: `worker.ts:488` and `:672` both assign `status = 'active'`; review S3) | SECURITY |
+| D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | CLOSED (S368: status preserved on both backends, audit carries `previous_status`, flagged re-association notifies; commit `38009ba`) | SECURITY |
 | D-228 | Admin login has no attempt limit, lockout or second factor | CLOSED (S367: 5/username and 20/IP per 15 minutes on both backends, commit `548cedf`; the oracle rejected the first version's sentinel-username IP gate, which locked every login globally — see the progress note) | SECURITY |
 | D-229 | Enrolment tokens are read then deleted across an eventually consistent store | OPEN (S364: `worker.ts:618` get → `:647` delete, so two racers can both pass; review S8) | SECURITY |
 | D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
 
 **Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
-57 CLOSED, 8 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+58 CLOSED, 7 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
-D-227/D-229/D-230 — the three unfixed findings from the 26 November external review; D-226 closed in
-S366, D-228 in S367). The previous line claimed
+D-229/D-230 — the two unfixed findings from the 26 November external review; D-226 closed in S366,
+D-227 in S368, D-228 in S367). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2582,7 +2582,8 @@ number is derived from the other; each is counted where it lives.
   security-critical handler for a style metric.
 
 ### D-227 — Re-enrolment silently clears a device's `stolen` status with no audit record
-- **Status**: OPEN (found 2026-11-26, S363; review finding S3)
+- **Status**: CLOSED (2026-11-26, S368; commit `38009ba`) — both backends
+  — evidence: `docs/artifacts/s368-d227-reassociation.txt`
 - **Category**: SECURITY
 - **What the code does**: both enrolment paths (`worker.ts:488` and `:672`) assign
   `existing.status = 'active'` when the supplied `hardware_uuid` matches a registered device, then
@@ -2594,6 +2595,17 @@ number is derived from the other; each is counted where it lives.
   and the previous status; (c) a test proving a stolen device stays stolen across re-enrolment;
   (d) an alert on re-association of a non-active device.
 - **Estimated effort**: 1 day.
+- **Progress (S368)**: fixed on both backends. Worker: `reassociateDevice()` used by both enrolment
+  paths — preserves `status`, audits `reassociated` with `previous_status` and `via`, and notifies out of
+  band for a device that was not `active` (the two paths were byte-identical twins, so one helper was the
+  only way to stop the next edit fixing one and not the other). Express: the same `status = 'active'` in
+  `enroll.js`'s re-association branch, found by checking parity **before** closing — a check added after
+  D-226 stayed open a session for exactly this reason. 5 Worker cases + 3 Express cases; reinstating the
+  defect fails 2 of 5 and 1 of 3. One existing assertion (worker: `re-association resets status to
+  active`) asserted the defect and was flipped deliberately, with the reason in the test. Commit
+  `38009ba`; evidence `docs/artifacts/s368-d227-reassociation.txt`. Residuals: the enrolment token is still a bearer credential (the
+  install is not denied, only the flag preserved and the event recorded), and the alert needs a configured
+  channel.
 
 ### D-228 — Admin login has no attempt limit, lockout or second factor
 - **Status**: CLOSED (2026-11-26, S367; commit `548cedf`) — rate limiting only, MFA

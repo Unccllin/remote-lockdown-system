@@ -9798,3 +9798,105 @@ attempt while `consolidate` holds the lock.
 - Take **D-227** (re-enrolment silently clears a device's `stolen` status with no audit record) — the
   last High-severity review finding that is about a day of work, and the one that erases the theft
   record the rest of this product exists to keep.
+
+---
+
+## Session 368 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `serverless/worker.ts` `handleEnroll` (454-540) and `handleEnrollClaim` (588-700) — the two
+  re-association blocks are byte-identical, both ending `existing.status = 'active'; await
+  putDevice(...)` with no audit entry; `addAuditEntry`'s signature and existing action names;
+  `serverless/alerts.ts` (`sendNotification(env, eventType, payload, fetchImpl)` — webhook/Slack,
+  silently a no-op when unconfigured — and `ALERT_KEY_PREFIX` for the cron-side markers).
+- **Read**: `serverless/worker.test.ts` re-enrolment tests (2310-2330: they assert same device id, a new
+  API key and `reassociated: true`, and **do not** assert status, so preserving it will not break them);
+  `serverless-alerts.test.ts` (how the alert suite injects a fake `fetch`, which the route needs via a
+  global stub because it calls the default parameter).
+- **Finding**: the defect is a one-line deletion (`existing.status = 'active'`) that has to be replaced
+  by two things — an explicit decision that recovery is an administrator action, and a record that a
+  re-association happened. Without the audit entry even a correct fix is invisible: a thief who
+  re-enrols a stolen machine, and an IT technician who legitimately rebuilds one, look identical
+  afterwards. The alert is what distinguishes them to a human, so it belongs in the same change rather
+  than a follow-up. Both paths are copy-paste twins, so the fix goes in one helper that both call —
+  otherwise the next edit will fix one and not the other, which is how this defect existed twice.
+
+### IMPLEMENT
+- `serverless/worker.ts`: `reassociateDevice()` — updates hostname/mac/serial and the API-key hash,
+  **preserves `status`**, audits `reassociated` with the previous status, the path (`hardware_uuid` or
+  `enrollment_token`) and the source IP, and calls `sendNotification('device_reassociated_while_flagged')`
+  when the device was not `active`. Both enrolment paths call it, so they cannot drift.
+- `serverless/worker.test.ts`: cases for status preservation on both paths, the audit entry, the alert
+  (with a stubbed `fetch`), and an ordinary active re-enrol remaining active.
+- `docs/artifacts/s368-d227-reassociation.txt`: the change, the teeth measurement, the live-free note.
+
+### Fog cleared
+- **Re-enrolling a flagged device no longer clears its flag.** `stolen`/`locked`/`recovering`/`tracking`
+  survive a reinstall, so recovering a device is an administrator action rather than a side effect of
+  reinstalling the agent.
+- **Every re-association is now recorded** with the status it had before, which path did it and from
+  which address — so the legitimate rebuild and the thief's reinstall are distinguishable.
+- **A re-association of a flagged device raises an out-of-band notification** when a webhook or Slack
+  URL is configured, and is a no-op otherwise (the same contract the stale-device alerts use).
+
+### Fog remaining
+- **The enrolment token is still a bearer credential handed to branch staff**, so a thief who obtains
+  one can still reinstall — the flag survives now, but the install itself is not denied. Denying it
+  would need the token to be bound to a device or an operator, which is a different decision.
+- Unchanged: D-229 (enrol-token race), D-230 (Google key exposure); D-120/D-129/D-130/D-134 need
+  hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0; no
+  dashboard panel for re-arm approvals.
+
+- **Tests and teeth**: 5 Worker cases and 3 Express cases; reinstating the defect fails **2 of 5** and
+  **1 of 3**. One existing worker assertion (`re-association resets status to active`) asserted the
+  defect itself and was renamed and flipped deliberately, with the reason written into the test.
+
+### Debt items closed
+- **D-227 — CLOSED** (re-association preserves the flag, both backends): commit `38009ba`, artifact
+  `docs/artifacts/s368-d227-reassociation.txt`.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-229
+- D-230
+
+### Blockers
+- None.
+
+### Session artifacts
+- docs/artifacts/s368-d227-reassociation.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), and this time an existing test saved me from myself.** I "fixed"
+  `composeSetupScript`'s unguarded `new URL()` because an ast-grep rule flagged it — and the change
+  silently turned an operator-facing 500 into a 200 with a degraded script. The existing test
+  `a malformed PUBLIC_SERVER_URL is explained, not thrown` failed immediately, which is the whole value
+  of a test that pins a *contract* rather than a return value. **Harness change**: before "fixing" a
+  checker finding in code you did not write, look for a test that pins the current behaviour — the
+  finding may be a false positive, and the test is the evidence either way.
+- **Layer 4 again**: three `nosemgrep` forms (standalone, standalone with the prefixed rule id,
+  end-of-line with the bare id) do not suppress this ast-grep rule; a `source=lsp` re-check confirmed
+  it. Recorded at the call site rather than worked around by changing behaviour (AGENTS.md rule 5: know
+  the false-positive class).
+- **Layer 2 (context provision), the good kind**: checking Express parity *before* closing found the
+  same `status = 'active'` defect in `enroll.js`. That check exists because D-226 stayed open a session
+  for exactly this reason, and the memory of it is doing real work now.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, **579 passed** (was 574; +5)
+- `cd server && npm test` -> 57 suites, **916 passed** (was 913; +3)
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- teeth: defect reinstated -> 2 of 5 Worker cases and 1 of 3 Express cases failed; restored -> all pass
+- `make graph-check` -> all invariants pass (70 items, 63 CLOSED, 7 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- Take **D-230** (the deployment's Google API key is returned to every device in four enrolment
+  responses): half a day if the fix is "restrict the key in Google Cloud to Geolocation with a daily
+  quota and document it as a deployment step", or 2–3 days if the lookup moves server-side — decide
+  which before touching the responses, since the second removes the key from the fleet entirely.

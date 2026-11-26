@@ -1595,9 +1595,10 @@ debt_items:
     close_criteria: >-
       Preserve status on re-association, audit every re-association, test that a stolen device
       stays stolen, alert on re-association of a non-active device
-    status: OPEN
+    status: CLOSED
     category: SECURITY
-    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    commit_ref: "38009ba — re-association preserves the flag, Worker + Express"
+    artifact_ref: "docs/artifacts/s368-d227-reassociation.txt"
     risk_notes: >-
       worker.ts:488 and :672 both assign existing.status = 'active' on a hardware_uuid match, then
       putDevice, with no addAuditEntry. Review S3: any branch staff enrolment token erases the

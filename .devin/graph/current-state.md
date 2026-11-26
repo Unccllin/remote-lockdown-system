@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 62 | 70 | ✗ |
+| Debt items | 63 | 70 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 62 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 63 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,32 +53,32 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 367 — 2026-11-26
+## Latest session: 368 — 2026-11-26
 
 ### Fog cleared
-- **Brute-forcing an administrator password is now bounded on both backends**: 5 failures per name and
-  20 per address, 15-minute windows, and a locked name cannot outlive the window.
-- **The oracle's defect is fixed and pinned**: a caller-supplied username can no longer address the IP
-  counter, and reinstating the old call makes exactly the regression test fail.
-- **The first implementation's false "teeth measured" claim is replaced with two measured mutations**:
-  refusals disabled → 4 of 7 fail; sentinel reinstated → the regression test fails.
+- **Re-enrolling a flagged device no longer clears its flag.** `stolen`/`locked`/`recovering`/`tracking`
+  survive a reinstall, so recovering a device is an administrator action rather than a side effect of
+  reinstalling the agent.
+- **Every re-association is now recorded** with the status it had before, which path did it and from
+  which address — so the legitimate rebuild and the thief's reinstall are distinguishable.
+- **A re-association of a flagged device raises an out-of-band notification** when a webhook or Slack
+  URL is configured, and is a no-op otherwise (the same contract the stale-device alerts use).
 
 ### Fog remaining
-- **MFA is still not implemented** — out of scope by the ledger's own criterion (c), 8–12 weeks with SSO.
-- **Per-username lockouts are observable** (a locked real name answers 429 where an unknown one answers
-  401). Documented rather than hidden; the alternative is no per-name limit.
-- **KV is eventually consistent** across colos, so a distributed attacker can slightly exceed the
-  limits; the Express limiter is an in-process Map that a restart clears.
-- **Delegation lesson to carry**: a role-loop worker's report is not evidence. The oracle re-measured
-  and was right twice; I should treat every child's "gates green / teeth measured" as unverified until
-  I have run the command myself.
-- Unchanged: D-227 (stolen-status reset), D-229 (enrol-token race), D-230 (Google key exposure);
-  D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY` placeholder;
-  FRANKENSTEIN still 1.0.0; no dashboard panel for re-arm approvals.
+- **The enrolment token is still a bearer credential handed to branch staff**, so a thief who obtains
+  one can still reinstall — the flag survives now, but the install itself is not denied. Denying it
+  would need the token to be bound to a device or an operator, which is a different decision.
+- Unchanged: D-229 (enrol-token race), D-230 (Google key exposure); D-120/D-129/D-130/D-134 need
+  hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0; no
+  dashboard panel for re-arm approvals.
+
+- **Tests and teeth**: 5 Worker cases and 3 Express cases; reinstating the defect fails **2 of 5** and
+  **1 of 3**. One existing worker assertion (`re-association resets status to active`) asserted the
+  defect itself and was renamed and flipped deliberately, with the reason written into the test.
 
 ### Debt items closed
-- **D-228 — CLOSED** (login attempt limiting + lockout, both backends): commit `548cedf`, artifact
-  `docs/artifacts/s367-d228-login-lockout.txt`.
+- **D-227 — CLOSED** (re-association preserves the flag, both backends): commit `38009ba`, artifact
+  `docs/artifacts/s368-d227-reassociation.txt`.
 
 ### Debt items still open
 - D-120
@@ -86,7 +86,6 @@
 - D-130
 - D-134
 - D-225
-- D-227
 - D-229
 - D-230
 
@@ -94,37 +93,38 @@
 - None.
 
 ### Session artifacts
-- docs/artifacts/s367-d228-login-lockout.txt
+- docs/artifacts/s368-d227-reassociation.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback) — the session's central lesson.** The delegated worker reported
-  "gates green" from *pre-work* baselines (567/908) and "teeth measured" for a test that did not exist.
-  The oracle re-ran both and rejected it. **Harness change**: when work is delegated, the parent must
-  re-measure the gates and diff the test count against the pre-work baseline before trusting any claim;
-  the numbers moving is the evidence, not the sentence saying they moved.
-- **Layer 4, mine**: my `does not reveal whether a username exists` test compared two `.text()` calls on
-  the same `Response` — a body can only be read once, so the second read was `''` and the assertion was
-  comparing against nothing. Same class as the S365 `Request` bug. **Harness change**: read a response
-  body into a variable once, then assert on the variable; never call `.text()`/`.json()` twice.
-- **Layer 3 (execution environment)**: `npx jest` instead of `npm test` produced
-  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`, which reads as a code failure. Already recorded in S366;
-  it recurred here and the artifact now names it for the next reader.
+- **Layer 4 (verification feedback), and this time an existing test saved me from myself.** I "fixed"
+  `composeSetupScript`'s unguarded `new URL()` because an ast-grep rule flagged it — and the change
+  silently turned an operator-facing 500 into a 200 with a degraded script. The existing test
+  `a malformed PUBLIC_SERVER_URL is explained, not thrown` failed immediately, which is the whole value
+  of a test that pins a *contract* rather than a return value. **Harness change**: before "fixing" a
+  checker finding in code you did not write, look for a test that pins the current behaviour — the
+  finding may be a false positive, and the test is the evidence either way.
+- **Layer 4 again**: three `nosemgrep` forms (standalone, standalone with the prefixed rule id,
+  end-of-line with the bare id) do not suppress this ast-grep rule; a `source=lsp` re-check confirmed
+  it. Recorded at the call site rather than worked around by changing behaviour (AGENTS.md rule 5: know
+  the false-positive class).
+- **Layer 2 (context provision), the good kind**: checking Express parity *before* closing found the
+  same `status = 'active'` defect in `enroll.js`. That check exists because D-226 stayed open a session
+  for exactly this reason, and the memory of it is doing real work now.
 
 ### VERIFY
 - `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, **574 passed** (was 567; +7 lockout cases)
-- `cd server && npm test` -> 57 suites, **913 passed** (was 908; +5 Express lockout cases)
+- `cd serverless && npx vitest run` -> 8 files, **579 passed** (was 574; +5)
+- `cd server && npm test` -> 57 suites, **916 passed** (was 913; +3)
 - `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
-- teeth 1: both refusal branches disabled -> 4 of 7 lockout tests failed; restored -> 7 passed
-- teeth 2: sentinel defect reinstated (`isUsernameLoginLocked(env, '__ip__')` as the IP gate) ->
-  exactly the regression test failed; restored -> 574 passed
-- `make graph-check` -> all invariants pass (70 items, 62 CLOSED, 8 OPEN)
+- teeth: defect reinstated -> 2 of 5 Worker cases and 1 of 3 Express cases failed; restored -> all pass
+- `make graph-check` -> all invariants pass (70 items, 63 CLOSED, 7 OPEN)
 - `python3 scripts/check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- Take **D-227** (re-enrolment silently clears a device's `stolen` status with no audit record) — the
-  last High-severity review finding that is about a day of work, and the one that erases the theft
-  record the rest of this product exists to keep.
+- Take **D-230** (the deployment's Google API key is returned to every device in four enrolment
+  responses): half a day if the fix is "restrict the key in Google Cloud to Geolocation with a daily
+  quota and document it as a deployment step", or 2–3 days if the lookup moves server-side — decide
+  which before touching the responses, since the second removes the key from the fleet entirely.
 
 ---
 
@@ -137,11 +137,10 @@
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 | D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
-| D-227 | Re-enrolment silently clears a device's stolen status with n | OPEN | — |
 | D-229 | Enrolment tokens are read then deleted across an eventually  | OPEN | — |
 | D-230 | The deployment's Google API key is returned to every device  | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (8 of 70 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (7 of 70 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

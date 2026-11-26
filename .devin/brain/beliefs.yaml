@@ -4493,3 +4493,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-207
+  statement: 'D-227 is closed: a re-association (reinstall) no longer clears a device''s status on either
+    backend. The Worker''s reassociateDevice() — used by both /api/enroll and /api/enroll/claim — preserves
+    the status, audits ''reassociated'' with previous_status and the path, and raises device_reassociated_while_flagged
+    when the device was not active; Express enroll.js does the same and adds previous_status to its existing
+    audit detail. Recovery is an explicit administrator action, not a side effect of reinstalling software.
+    Commit 38009ba; worker 579 tests, server 916 in 57 suites; reinstating the defect fails 2 of 5 Worker
+    and 1 of 3 Express cases. Residual: the enrolment token is still a bearer credential, so the install
+    is not denied — only the flag preserved and the event recorded/notified.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: worker 579 tests + server 916 in 57 suites with the fix; defect reinstated fails 2/5 Worker
+    and 1/3 Express; commit 38009ba
+  source: S368
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
