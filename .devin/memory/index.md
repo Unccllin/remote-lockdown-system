@@ -1,12 +1,13 @@
 # Memory Index
 
-Last rebuilt: 2026-11-26 14:50:09
-Active memories: 1566 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-26 15:27:25
+Active memories: 1601 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
 | ID | Title | Tags | Conf | Last Seen | Score | Rel | Impact |
 |----|-------|------|------|-----------|-------|-----|--------|
+| m-1467 | MISTAKE: mistake: accepted the workflow's '5 of 7  |  | 0.55 | 2026-11-26 | 0.275 | 0 |  |
 | m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.55 | 2026-11-19 | 0.254 | 0 |  |
 | m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.55 | 2026-11-18 | 0.252 | 0 |  |
 | m-1547 | TPM sealing works when the key is addressed by a c | 1 | 0.50 | 2026-11-26 | 0.250 | 0 |  |
@@ -49,6 +50,41 @@ Active memories: 1566 | Superseded: 0 | Decayed: 20
 | m-1584 | MISTAKE: mistake: used %ERRORLEVEL% in a single cm |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1585 | MISTAKE: mistake: ran a sed whose pattern containe |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1586 | MISTAKE: mistake: claimed in an artifact that agen |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1587 | D1 stage 0 per docs/SERVERLESS-D1-CUTOVER.md: crea |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1588 | The binding must be shown to be USED: nonce rows g |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1589 | The backup cron is provably working from the audit |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1590 | Cost model grounded in code: 60 s poll = 43,200 ch |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1591 | Crossover against a KES 2,000-2,500 local VM is ~4 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1592 | Cloudflare rates checked 2026-11-26: Workers Paid  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1593 | MISTAKE: mistake: queried MAX(expires) when the co |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1594 | MISTAKE: mistake: left a second, contradicting cos |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1595 | S1 fix shape: require the deployment ADMIN_TOKEN o |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1596 | S4's defect was the literal 'dev-secret' fallback, |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1597 | S6 revocation must take the role from the stored a |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1598 | When verification cannot run (no secret configured |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1599 | A regression test must be run against the pre-fix  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1600 | MISTAKE: mistake: my S6 check broke break-glass lo |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1601 | MISTAKE: mistake: two new tests were weak (wrong e |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1602 | The PblPersistDxe ESP payload carries no secret by |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1603 | Approval must be single-use and time-limited and c |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1604 | The hwid:<uuid> pointer belongs in putDevice next  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1605 | Unknown and active devices must answer an IDENTICA |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1606 | Express has its own server/src/routes/rearm.js wit |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1607 | MISTAKE: mistake: reused one Request object for th |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1608 | MISTAKE: mistake: asserted the literal api_key ins |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1609 | MISTAKE: mistake: replaced a block by string offse |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1610 | The Express half was the same decision on a differ |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1611 | Single-use must be a DELETE before the UPDATE that |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1612 | Put the authority in the admin queue and test it t |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1613 | Adding a migration fails tests/migrationIdempotenc |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1614 | Run the server suite with npm test, not npx jest:  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1615 | MISTAKE: mistake: read ERR_VM_DYNAMIC_IMPORT_CALLB |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1616 | MISTAKE: mistake: cited docs/artifacts/s366-... in |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1617 | A counter-OR shape (one helper taking username+ip  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1618 | Wrong break-glass guesses must count against the I |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1619 | A per-username lockout is inherently observable (4 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1620 | Delegated work: a worker's report is a claim. Its  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1621 | MISTAKE: mistake: compared two .text() calls on on |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1520 | make verify-worker answers 'does the bundle build  |  | 0.50 | 2026-11-25 | 0.247 | 0 |  |
@@ -131,7 +167,6 @@ Active memories: 1566 | Superseded: 0 | Decayed: 20
 | m-1464 | MISTAKE: mistake: earlier framed option (c) as 'ar |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
 | m-1465 | when a required test group is missing, the suite c |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
 | m-1466 | a worker's report can reclassify a required item a |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
-| m-1467 | MISTAKE: mistake: accepted the workflow's '5 of 7  |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
 | m-1468 | a health 200 does not mean the database the caller |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
 | m-1469 | when wrapping a CLI in a probe, kill by captured P |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |
 | m-1470 | MISTAKE: mistake: assumed SQLITE_PATH selects SQLi |  | 0.50 | 2026-11-19 | 0.231 | 0 |  |

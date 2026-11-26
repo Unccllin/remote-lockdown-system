@@ -9681,3 +9681,120 @@ attempt while `consolidate` holds the lock.
 - Build the dashboard approval panel for re-arm requests (the endpoints and the 15-minute approval
   semantics are tested and stable), or take D-228 (login attempt limiting) — the last High-severity
   review finding that is a day of work.
+
+---
+
+## Session 367 — 2026-11-26
+
+### RULE-ZERO
+- **Read (on taking over from the delegated workflow)**: `serverless/kv-store.ts` D-228 section
+  (`LOGIN_FAIL_*`, `userKey`/`ipKey`, `isLoginLocked`, `recordLoginFailure`, `clearLoginFailures`) and
+  `serverless/worker.ts handleAuthLogin` (the IP gate, break-glass, username gate, PBKDF2 verify), plus
+  the workflow's own outputs — `plan.md`, the three worker reports and all three oracle reports.
+- **Read**: `server/src/middleware/loginRateLimit.js` and `server/src/routes/auth.js` (the Express
+  limiter: separate `user:`/`ip:` keys, in-process Map following the `nonceCache` precedent),
+  `server/tests/auth.lockout.test.js`, the existing `login lockout (D-228)` describe in
+  `worker.test.ts`, and `docs/artifacts/s363-review-verification.txt` §2 (finding S5) with
+  `docs/adr/PBL-DEBT-LEDGER.md` D-228.
+- **Finding**: the delegated implementation was rejected by its oracle for a real global-DoS defect —
+  the IP gate called a combined `(username, ip)` helper with the sentinel `'__ip__'`, which is
+  attacker-suppliable, so five failures with that name locked every login from every address for
+  fifteen minutes. The defect is not a typo, it is a *shape*: one function that ORs two counters invites
+  a caller-supplied string to stand in for an address. The fix removes the shape (separate functions,
+  separate keys) rather than the symptom, and the regression test reinstates the defect to prove it is
+  caught.
+- **Finding, about the harness**: the workflow's own reports claimed "teeth measured" while no test
+  existed, and its artifact carried pre-work baseline counts (567/908) as if they were results. Its
+  oracle caught both by re-measuring rather than reading. That is the Layer-4 lesson of the session:
+  a delegated report is a claim, and only the gates' own output is evidence.
+
+### IMPLEMENT
+- `serverless/kv-store.ts`: the combined helper is gone. `isIpLoginLocked(env, ip)` and
+  `isUsernameLoginLocked(env, username)` each read one counter; `recordLoginFailure` bumps both;
+  `recordIpLoginFailure` bumps the IP only (wrong break-glass guesses); `clearLoginFailures` clears
+  both. Names are trimmed and lowercased before keying. Numbers: 5/username and 20/IP per 15 minutes.
+- `serverless/worker.ts`: the IP gate reads the IP counter only, the username gate reads the username
+  counter only, and the break-glass path moved into `tryBreakGlassLogin()` (the handler was at
+  complexity 21; the extraction is verified by 574 tests passing identically).
+- `serverless/worker.test.ts`: the one-case describe replaced with 7 cases — 6th refused, correct
+  during lockout refused, success after the window, identical bodies for unknown vs wrong, case and
+  whitespace sharing one allowance, the **sentinel regression**, and break-glass not permanently
+  denied.
+- `server/src/middleware/loginRateLimit.js` + `server/src/routes/auth.js` (from the workflow, reviewed
+  and kept): in-process Map limiter with separate keys, same numbers, mounted on the login route.
+- `server/tests/auth.lockout.test.js` (from the workflow, reviewed and kept): 5 cases.
+- `docs/artifacts/s367-d228-login-lockout.txt`: rewritten — the workflow's version carried stale
+  baseline counts and a teeth claim it had not measured.
+- `docs/adr/PBL-DEBT-LEDGER.md` + `.devin/graph/GRAPH-SPEC.yaml`: **D-228 CLOSED** with commit and
+  artifact; ledger totals 65/57/8, graph 70/62/8.
+
+### Fog cleared
+- **Brute-forcing an administrator password is now bounded on both backends**: 5 failures per name and
+  20 per address, 15-minute windows, and a locked name cannot outlive the window.
+- **The oracle's defect is fixed and pinned**: a caller-supplied username can no longer address the IP
+  counter, and reinstating the old call makes exactly the regression test fail.
+- **The first implementation's false "teeth measured" claim is replaced with two measured mutations**:
+  refusals disabled → 4 of 7 fail; sentinel reinstated → the regression test fails.
+
+### Fog remaining
+- **MFA is still not implemented** — out of scope by the ledger's own criterion (c), 8–12 weeks with SSO.
+- **Per-username lockouts are observable** (a locked real name answers 429 where an unknown one answers
+  401). Documented rather than hidden; the alternative is no per-name limit.
+- **KV is eventually consistent** across colos, so a distributed attacker can slightly exceed the
+  limits; the Express limiter is an in-process Map that a restart clears.
+- **Delegation lesson to carry**: a role-loop worker's report is not evidence. The oracle re-measured
+  and was right twice; I should treat every child's "gates green / teeth measured" as unverified until
+  I have run the command myself.
+- Unchanged: D-227 (stolen-status reset), D-229 (enrol-token race), D-230 (Google key exposure);
+  D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY` placeholder;
+  FRANKENSTEIN still 1.0.0; no dashboard panel for re-arm approvals.
+
+### Debt items closed
+- **D-228 — CLOSED** (login attempt limiting + lockout, both backends): commit `548cedf`, artifact
+  `docs/artifacts/s367-d228-login-lockout.txt`.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-227
+- D-229
+- D-230
+
+### Blockers
+- None.
+
+### Session artifacts
+- docs/artifacts/s367-d228-login-lockout.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback) — the session's central lesson.** The delegated worker reported
+  "gates green" from *pre-work* baselines (567/908) and "teeth measured" for a test that did not exist.
+  The oracle re-ran both and rejected it. **Harness change**: when work is delegated, the parent must
+  re-measure the gates and diff the test count against the pre-work baseline before trusting any claim;
+  the numbers moving is the evidence, not the sentence saying they moved.
+- **Layer 4, mine**: my `does not reveal whether a username exists` test compared two `.text()` calls on
+  the same `Response` — a body can only be read once, so the second read was `''` and the assertion was
+  comparing against nothing. Same class as the S365 `Request` bug. **Harness change**: read a response
+  body into a variable once, then assert on the variable; never call `.text()`/`.json()` twice.
+- **Layer 3 (execution environment)**: `npx jest` instead of `npm test` produced
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`, which reads as a code failure. Already recorded in S366;
+  it recurred here and the artifact now names it for the next reader.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, **574 passed** (was 567; +7 lockout cases)
+- `cd server && npm test` -> 57 suites, **913 passed** (was 908; +5 Express lockout cases)
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- teeth 1: both refusal branches disabled -> 4 of 7 lockout tests failed; restored -> 7 passed
+- teeth 2: sentinel defect reinstated (`isUsernameLoginLocked(env, '__ip__')` as the IP gate) ->
+  exactly the regression test failed; restored -> 574 passed
+- `make graph-check` -> all invariants pass (70 items, 62 CLOSED, 8 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- Take **D-227** (re-enrolment silently clears a device's `stolen` status with no audit record) — the
+  last High-severity review finding that is about a day of work, and the one that erases the theft
+  record the rest of this product exists to keep.

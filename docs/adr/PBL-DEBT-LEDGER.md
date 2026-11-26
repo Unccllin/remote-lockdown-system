@@ -2384,14 +2384,15 @@
 | D-225 | The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate | OPEN (S357: a wedged chain made `/api/agent/checkin` and `/api/agent/command-ack` hang while every unserialised route answered in ~0.6 s; cleared by redeploy, not by the code — docs/artifacts/s357-release-1.0.5.txt) | SERVERLESS |
 | D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | CLOSED (S366: ADR-011 — approval on BOTH backends; Worker `408f2cdf` + Express commit `6794058`, 17 tests, 6-of-9 and 2-of-8 fail against the pre-fix code; docs/artifacts/s366-d226-express-parity.txt) | SECURITY |
 | D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | OPEN (S364: `worker.ts:488` and `:672` both assign `status = 'active'`; review S3) | SECURITY |
-| D-228 | Admin login has no attempt limit, lockout or second factor | OPEN (S364: `handleAuthLogin` reads the admin list and verifies PBKDF2 with no counter; review S5) | SECURITY |
+| D-228 | Admin login has no attempt limit, lockout or second factor | CLOSED (S367: 5/username and 20/IP per 15 minutes on both backends, commit `548cedf`; the oracle rejected the first version's sentinel-username IP gate, which locked every login globally — see the progress note) | SECURITY |
 | D-229 | Enrolment tokens are read then deleted across an eventually consistent store | OPEN (S364: `worker.ts:618` get → `:647` delete, so two racers can both pass; review S8) | SECURITY |
 | D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
 
 **Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
-56 CLOSED, 9 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+57 CLOSED, 8 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
-D-227..D-230 — the four unfixed findings from the 26 November external review; D-226 closed in S366). The previous line claimed
+D-227/D-229/D-230 — the three unfixed findings from the 26 November external review; D-226 closed in
+S366, D-228 in S367). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2595,7 +2596,8 @@ number is derived from the other; each is counted where it lives.
 - **Estimated effort**: 1 day.
 
 ### D-228 — Admin login has no attempt limit, lockout or second factor
-- **Status**: OPEN (found 2026-11-26, S363; review finding S5). Limiter implemented (rate limiting only; MFA deferred) — see docs/artifacts/s367-d228-login-lockout.txt. Formal closure pending commit hash (I2).
+- **Status**: CLOSED (2026-11-26, S367; commit `548cedf`) — rate limiting only, MFA
+  deferred as criterion (c) allows. Evidence: `docs/artifacts/s367-d228-login-lockout.txt`
 - **Category**: SECURITY
 - **What the code does**: `worker.ts:1557 handleAuthLogin` reads the admin list, finds the username
   and verifies PBKDF2. There is no attempt counter, no lockout, no CAPTCHA and no second factor
@@ -2607,6 +2609,18 @@ number is derived from the other; each is counted where it lives.
   that N+1 wrong attempts are refused and that a correct attempt after the lockout window succeeds;
   (c) MFA designed separately (see the review's G-MFA) and not conflated with this fix.
 - **Estimated effort**: 1 day for the limiter; 8–12 weeks for MFA and SSO together.
+- **Progress (S367)**: implemented on both backends — 5 failures per username → 15-minute lockout, 20
+  per source IP → 15 minutes, names trimmed and lowercased before keying, wrong break-glass guesses
+  counted per IP only so recovery cannot be denied permanently, and unknown-user/wrong-password
+  responses identical before any lockout. **The first implementation was rejected by the review oracle
+  for a defect worth recording here**: it ORed the two counters in one helper and called it from the IP
+  gate with a sentinel username (`'__ip__'`), which is attacker-suppliable — five failures with that
+  name locked every login from every address for fifteen minutes. The counters are now separate
+  functions on separate keys so a caller-supplied string cannot address the IP counter at all, and a
+  regression test reinstates the defect to prove it fails. 7 Worker cases + 5 Express cases; two
+  mutations measured (refusals disabled → 4 of 7 fail; sentinel reinstated → exactly the regression
+  test fails). Commit `548cedf`; evidence `docs/artifacts/s367-d228-login-lockout.txt`. Residuals named there: KV eventual consistency,
+  the Express in-process Map cleared on restart, and the inherent observability of a per-username lock.
 
 ### D-229 — Enrolment tokens are read then deleted across an eventually consistent store
 - **Status**: OPEN (found 2026-11-26, S363; review finding S8)

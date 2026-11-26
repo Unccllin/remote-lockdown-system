@@ -1609,9 +1609,10 @@ debt_items:
     close_criteria: >-
       Per-username and per-IP attempt limit with a lockout window, a test that N+1 attempts are
       refused and a correct one after the window succeeds, MFA designed separately
-    status: OPEN
+    status: CLOSED
     category: SECURITY
-    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    commit_ref: "548cedf — login attempt limiting + lockout, both backends"
+    artifact_ref: "docs/artifacts/s367-d228-login-lockout.txt"
     risk_notes: >-
       worker.ts:1557 handleAuthLogin: listAdmins + PBKDF2 verify, no counter, no lockout, no MFA in
       the tree. Review S5: unlimited guessing over a public URL, each attempt costing the client

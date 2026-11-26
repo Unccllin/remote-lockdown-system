@@ -4471,3 +4471,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-206
+  statement: 'D-228 is closed: admin login is rate-limited and locked out on both backends (5 failures
+    per username, 20 per source IP, 15-minute windows, names trimmed and lowercased before keying, break-glass
+    guessed counted per IP only so recovery cannot be denied permanently). The first implementation was
+    rejected by the review oracle for a global-DoS defect: the IP gate called a combined (username, ip)
+    helper with the sentinel ''__ip__'', which is attacker-suppliable, so five failures with that name
+    returned 429 for every login from every address. The counters are now separate functions on separate
+    keys so a caller-supplied string cannot address the IP counter, and a regression test reinstates the
+    defect to prove it fails. Commit 548cedf; worker 574 tests, server 913 in 57 suites.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: worker 574 tests + server 913 in 57 suites with the defect fixed; two mutations measured
+    (refusals disabled -> 4/7 fail; sentinel reinstated -> regression test fails); commit 548cedf
+  source: S367
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
