@@ -1,0 +1,112 @@
+# S359 — the release path stamps a build identity, and fails when it cannot
+
+2026-11-26 · `scripts/stamp-buildinfo.ps1` (new), `agent/build.ps1`,
+`scripts/build-windows-artifacts.ps1`, `scripts/test_build_windows_artifacts.py`
+· verified by real builds on MOLE (Windows 11, PowerShell 5.1, Python 3.14.8, PyInstaller 6.22.3)
+
+## The defect
+
+`agent/build.ps1` stamped `agent/_buildinfo.py` before PyInstaller, so a binary built that way
+reports a real identity:
+
+```
+lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+```
+
+`scripts/build-windows-artifacts.ps1` — what `.github/workflows/windows-artifacts.yml` runs on a
+`v*` tag, and what produces the binaries published to KV — did not. Its output:
+
+```
+lockdown-agent 1.0.5 (frozen=True, build=unknown.unknown)
+```
+
+Both different binaries, one version number, no way to tell them apart on a device: exactly the
+S286 defect the build-identity module exists to prevent, still live on the path that ships. It was
+only avoided for 1.0.5 because S357 ran `build.ps1` by hand on MOLE.
+
+## The fix
+
+- **`scripts/stamp-buildinfo.ps1`** (new) owns the stamping: SHA-256 over `agent/*.py` except
+  `_buildinfo.py`, sorted by name, `-BuildCommit` override, UTC `yyyyMMdd`, writes `_buildinfo.py`
+  as **ASCII** (`Set-Content -Encoding utf8` writes a BOM under PowerShell 5.1), prints
+  `Build identity: <date>.<commit>`.
+- **Both callers invoke it with `&`**, not `pwsh`: `pwsh` is absent on a plain Windows 10/11 host,
+  which is exactly where these scripts have to work. `agent/build.ps1` no longer computes a hash
+  itself — one implementation, not two copies.
+- **The stamp script `throw`s instead of `exit 1`.** It is called with `&`, and an `exit` inside a
+  called script takes the caller's whole script down mid-build.
+- **`build-windows-artifacts.ps1` verifies the identity reached the binary**: it runs
+  `dist\lockdown-agent.exe --version` and fails the build unless the output matches
+  `build=YYYYMMDD.12hex`. That check runs *before* `if ($failed) { exit 1 }`, so it can actually
+  fail the build.
+
+## Verified by running it, not by reading it
+
+`scripts/build-windows-artifacts.ps1 -Only agent` on MOLE:
+
+```
+==> stamping the build identity
+Build identity: 20261126.69a3e4156d16
+==> building agent
+==> verifying artefacts
+    lockdown-agent.exe           16,856,776 bytes  PE=True
+==> verifying the build identity reached the binary
+    lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+==> done - artefacts in C:\Users\labadmin\rls2\agent\dist
+exit=0
+```
+
+`agent/build.ps1 -AgentOnly` (the rewired caller):
+
+```
+Build identity: 20261126.69a3e4156d16
+  OK   dist\lockdown-agent.exe (16.1 MB)
+$ dist\lockdown-agent.exe --version
+lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+exit=0
+```
+
+## Teeth: an unstamped build fails, with the reason
+
+`teeth_identity.py` on MOLE strips the one stamp invocation, resets `_buildinfo.py` to the
+committed placeholders, and rebuilds:
+
+```
+==> stamping the build identity          (now a no-op)
+==> building agent
+==> verifying artefacts
+    lockdown-agent.exe           16,857,416 bytes  PE=True
+==> verifying the build identity reached the binary
+    lockdown-agent 1.0.5 (frozen=True, build=unknown.unknown)
+!!  the agent binary carries no stamped build id (build=unknown) - the stamp did not reach it
+exit=1
+PASS: an unstamped build fails at the identity check
+```
+
+Both files were restored afterwards and the next build is stamped again.
+
+Guards in `scripts/test_build_windows_artifacts.py` (8 → 11 tests): the stamp is invoked by both
+entry points in-process, the stamp precedes the first PyInstaller call, `agent/build.ps1` no longer
+contains `ComputeHash` (no duplicate implementation), the identity check runs before the failure
+exit, and the new script is ASCII-only for the same PowerShell-5.1 reason as the old one.
+
+## Two mistakes made while proving it (recorded because both hid a result)
+
+1. The build was first run through a `grep` pipeline; `grep` exiting 1 for "no match" became the
+   task's exit code and the build's real output was filtered away — an empty log reported as a
+   failure. Fixed by redirecting to a file and reading `$?` separately.
+2. The first version of my change checked `$LASTEXITCODE` after `& stamp-buildinfo.ps1`. That
+   variable reports the last **native** command, not a script's outcome, so a successful stamp was
+   followed by `!! stamping the build identity failed`. The run caught it; the check is gone and
+   the script now throws.
+
+Also learned, and not a defect: `agent/build.ps1` uses relative paths and must be run with the
+agent directory as the working directory (`cd agent && powershell -File .\build.ps1`). The shared
+stamp call is CWD-independent because it is passed `-AgentDir $PSScriptRoot` explicitly.
+
+## What this does not change
+
+`agent/_buildinfo.py` is still committed with `unknown` placeholders, and
+`agent/tests/test_version_identity.py` still pins that — a source checkout must not impersonate a
+release. The workflow still uploads artefacts without publishing them; publishing remains a
+separate, explicit step.

@@ -102,3 +102,53 @@ def test_windows_only_dependency_is_pinned_with_a_platform_marker():
     assert "sys_platform" in line and "win32" in line, (
         f"pywin32 must carry a win32 marker so Linux installs are unaffected, got: {line!r}"
     )
+
+STAMP = REPO / "scripts" / "stamp-buildinfo.ps1"
+BUILD_PS1 = REPO / "agent" / "build.ps1"
+
+
+def test_both_build_entry_points_share_one_stamp_implementation():
+    """The identity must be stamped on the path that ships, and by one implementation.
+
+    `agent/build.ps1` stamped from the start; `scripts/build-windows-artifacts.ps1` -- what CI
+    runs on a v* tag, and what produced the published binaries -- did not, so every CI-built
+    release reported `build=unknown.unknown`. Two builds of one AGENT_VERSION were then
+    indistinguishable on a device, which is the defect S286 fixed (S359). Using `&` rather than
+    `pwsh` matters: `pwsh` is absent on a plain Windows 10/11 host.
+    """
+    assert STAMP.exists(), "the shared stamping script is the single implementation"
+    artifacts = SCRIPT.read_text(encoding="ascii")
+    builder = BUILD_PS1.read_text(encoding="utf-8")
+
+    for name, text in (("scripts/build-windows-artifacts.ps1", artifacts), ("agent/build.ps1", builder)):
+        assert "stamp-buildinfo.ps1" in text, f"{name} does not stamp the build identity"
+        assert "& " in text, f"{name} must invoke the stamp script in-process, not via pwsh"
+
+    # The stamp has to happen before PyInstaller reads the sources, or the binary ships unstamped.
+    assert artifacts.index("stamp-buildinfo.ps1") < artifacts.index("-m PyInstaller"), (
+        "the stamp must run before the first PyInstaller invocation"
+    )
+
+    # …and the implementation may only exist once: the caller must not keep a private copy.
+    assert "ComputeHash" not in builder, (
+        "agent/build.ps1 still computes the source hash itself - that is the duplicate the "
+        "shared script exists to remove"
+    )
+
+
+def test_the_build_fails_when_the_identity_does_not_reach_the_binary():
+    """A stamp that stops reaching the exe must fail the build, not be discovered on a device."""
+    text = SCRIPT.read_text(encoding="ascii")
+
+    assert "--version" in text, "the build must ask the binary what identity it carries"
+    assert "unknown" in text, "the check must reject the placeholder explicitly"
+    assert text.index("--version") < text.index("if ($failed) { exit 1 }"), (
+        "the identity check must run before the failure exit, or it can never fail the build"
+    )
+
+
+def test_the_stamp_script_is_ascii_only():
+    """Same rule as the build script: PS 5.1 reads BOM-less UTF-8 as ANSI."""
+    assert STAMP.read_bytes().isascii(), (
+        "non-ASCII bytes in a PowerShell script break under Windows PowerShell 5.1"
+    )

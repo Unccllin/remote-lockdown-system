@@ -78,6 +78,21 @@ try {
         }
     }
 
+    # Stamp the build identity before PyInstaller runs.
+    #
+    # This script is what CI runs on a v* tag, and it used to build without stamping while
+    # agent/build.ps1 stamped - so every CI-built release reported `build=unknown.unknown` and
+    # two builds of the same AGENT_VERSION were indistinguishable on a device (S286, S359).
+    # The stamping lives in scripts/stamp-buildinfo.ps1 so the two entry points share one
+    # implementation. Invoked with `&` so it runs in this shell: `pwsh` is absent on a plain
+    # Windows 10/11 host, which is exactly where this script has to work.
+    Write-Step 'stamping the build identity'
+    # No $LASTEXITCODE check: that variable reports the last *native* command, not the outcome of a
+    # script invoked with `&`. The stamp script throws instead, and $ErrorActionPreference = 'Stop'
+    # turns that into a failed build with its message (measured on MOLE: checking LASTEXITCODE here
+    # failed a build whose stamp had succeeded).
+    & (Join-Path $PSScriptRoot 'stamp-buildinfo.ps1') -AgentDir $agentDir
+
     foreach ($name in $selected) {
         if (-not $targets.Contains($name)) { continue }
         Write-Step "building $name"
@@ -111,6 +126,20 @@ try {
             continue
         }
         Write-Host ("    {0,-26} {1,12:N0} bytes  PE={2}" -f $item.Name, $item.Length, $isPe)
+    }
+
+    # A build that reports `build=unknown.unknown` cannot be told apart from any other build of
+    # the same version, which is the defect S286 fixed on the other entry point. If the stamp
+    # ever stops reaching the binary, this fails here instead of being discovered on a device.
+    if ($selected -contains 'agent') {
+        Write-Step 'verifying the build identity reached the binary'
+        $agentExe = Join-Path $distDir 'lockdown-agent.exe'
+        $versionOutput = (& $agentExe --version 2>&1 | Out-String).Trim()
+        Write-Host "    $versionOutput"
+        if ($versionOutput -notmatch 'build=(\d{8}\.[0-9a-f]{12})') {
+            Write-Fail 'the agent binary carries no stamped build id (build=unknown) - the stamp did not reach it'
+            $failed = $true
+        }
     }
 
     if ($failed) { exit 1 }
