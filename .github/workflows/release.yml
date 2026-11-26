@@ -214,6 +214,10 @@ jobs:
         shell: bash
         run: |
           pip install -r requirements.txt pyinstaller
+          # This job calls PyInstaller directly rather than agent/build.sh, so it has to stamp
+          # too -- otherwise the binaries attached to the GitHub Release report
+          # build=unknown.unknown (S286/S361). working-directory is agent/.
+          python ../scripts/stamp_buildinfo.py --agent-dir .
           python -m PyInstaller agent.spec --noconfirm
           python -m PyInstaller watchdog.spec --noconfirm
           python -m PyInstaller offline_recovery.spec --noconfirm
@@ -432,7 +436,9 @@ jobs:
       # shell: bash is required because windows-latest defaults to pwsh,
       # which can't execute a .sh file. Git Bash is available on all
       # GitHub Windows runners.
-      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+      # --no-venv: build.sh would otherwise create a .venv and switch to it, and the pip install
+      # above ran in the system interpreter, so the venv has no PyInstaller (S361).
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh --no-venv
         shell: bash
 
       # Build + publish Electron app
@@ -509,7 +515,9 @@ jobs:
 
       # Build agent binaries (native arch — PyInstaller bundles the host's
       # Python interpreter, so the output arch matches the runner arch).
-      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+      # --no-venv: build.sh would otherwise create a .venv and switch to it, and the pip install
+      # above ran in the system interpreter, so the venv has no PyInstaller (S361).
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh --no-venv
 
       # Build DMG for this arch only. --publish never: the publish-macos
       # job handles publishing + manifest merging.
@@ -700,7 +708,9 @@ jobs:
 
       - run: cd ../dashboard && npm ci && npm run build
 
-      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh
+      # --no-venv: build.sh would otherwise create a .venv and switch to it, and the pip install
+      # above ran in the system interpreter, so the venv has no PyInstaller (S361).
+      - run: cd ../agent && pip install -r requirements.txt pyinstaller && ./build.sh --no-venv
 
       - run: npx electron-builder --linux --publish always
         env:
