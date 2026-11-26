@@ -1,0 +1,160 @@
+# S357 — release 1.0.5 built on MOLE, signed, published, and self-installed on a device
+
+2026-11-26 · Windows build host: MOLE (`C:\Python314`, PyInstaller 6.22.3) · signing host:
+the lab laptop (`~/.lockdown-secrets/update_signing.key`) · publish target: Cloudflare KV
+namespace `LOCKDOWN_KV` 84b24c0c… (remote)
+
+This release carries the certificate-addressed TPM seal key
+(`docs/artifacts/s357-tpm-cert-seal.txt`). Everything below is a measured run, not a plan.
+
+## 1. Why 1.0.5 and not 1.0.4
+
+`AGENT_VERSION` was already `1.0.4`, and MOLE **was already running a 1.0.4 build**
+(`build=20261119.32849efe4235`, installed 2026-11-19) that predates the TPM fix. Publishing
+"1.0.4" would have left that machine reporting itself up to date with code it does not have —
+the exact ambiguity `agent.py`'s version comment exists to prevent (S286/S310). So the
+functional change bumps to **1.0.5** and the fleet converges upward.
+
+## 2. Build — two scripts, and why the second one was needed
+
+First pass used `scripts/build-windows-artifacts.ps1` (the CI script). The binaries were
+valid (PE=True, correct sizes) but reported:
+
+```
+lockdown-agent 1.0.5 (frozen=True, build=unknown.unknown)
+```
+
+`agent.py` documents that the build id is stamped by `agent/build.ps1` immediately before
+PyInstaller so two binaries cannot share an identity. A published release with
+`build=unknown.unknown` is precisely the S286 defect. Rebuilt through `agent/build.ps1`:
+
+```
+Build identity: 20261126.69a3e4156d16
+  OK   dist\lockdown-agent.exe (16.1 MB)
+  OK   dist\lockdown-watchdog.exe (8.5 MB)
+  OK   dist\lockdown-installer.exe (15.1 MB)
+    lockdown-service.exe          9,494,908 bytes  PE=True      (build-windows-artifacts -Only service)
+
+lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+```
+
+No git on the build host, so the build id is `build.ps1`'s documented fallback: a SHA-256
+over the agent sources.
+
+## 3. Artefacts and hashes
+
+```
+09a2d3e6318fa0a13b3011aeced1cae5e9446515d8da0a06049b2e2649380edf  16856661  lockdown-agent.exe
+f85d611d5d8ff60fccfc0dda7911cf41fd6be309a59ee45351fa960603c4b165  15792590  lockdown-installer.exe
+ba5f528dc6adb33dac828511191a686fd03df4db86f8ead6a58134fa48255966   9494908  lockdown-service.exe
+```
+
+## 4. Signed metadata, verified by a second implementation
+
+```
+scripts/sign-release-metadata.py --version 1.0.5 \
+  --artifact win=agent/staging/1.0.5/lockdown-agent.exe \
+  --key ~/.lockdown-secrets/update_signing.key --out agent-release.json
+```
+
+The message is `v1:1.0.5:09a2d3e6…` and the signer is Python. Verified independently with
+OpenSSL and the pinned public key (fingerprint `78609c8b…34f39e8`, matching the deployed pin):
+
+```
+openssl pkeyutl -verify -rawin -pubin -inkey ~/.lockdown-secrets/update_signing.pub \
+  -sigfile sig.bin -in msg.bin
+Signature Verified Successfully
+```
+
+## 5. Published to KV (remote), read back byte-for-byte
+
+```
+binary:agent            ← lockdown-agent.exe
+binary:agent-installer  ← lockdown-installer.exe
+binary:service          ← lockdown-service.exe
+agent_release           ← agent-release.json   (1.0.3 before, 1.0.5 after)
+```
+
+Read back with `wrangler kv key get … --remote` and hashed: all three binaries rediscovered
+with the same sha256 and size as the staged files, and `agent_release` diffed byte-identical
+to the signed file.
+
+## 6. A production defect was found on the way: the mutation chain wedges permanently
+
+While waiting for MOLE to pick the release up, check-ins were failing:
+
+```
+[WARNING] Check-in failed: … Read timed out. (read timeout=15)     (from 11:41 onward)
+wrangler tail:  POST /api/agent/checkin - Canceled
+```
+
+Isolation probes from the laptop:
+
+| request | result |
+|---|---|
+| `GET /api/health` | 200, 0.66 s |
+| `GET /api/agent/update?platform=win` | 401, 0.72 s |
+| `GET /api/devices` | 401, 0.60 s |
+| `POST /api/setup/create-admin` (not serialised) | 409, 0.56 s |
+| `POST /api/agent/checkin` (serialised) | **no response in 40 s** |
+| `POST /api/agent/command-ack` (serialised) | **no response in 25 s** |
+
+`worker.ts:365` keeps a module-level `mutationChain`, and `serializeMutation` queues every
+mutation behind the previous one with no timeout. Only the two serialised agent routes hung,
+so one handler that never settled wedged the chain for that isolate — check-in **and**
+command-ack, i.e. the device was effectively unreachable while reporting a healthy network.
+An unserialised `POST` proved it was the chain and not the Worker as a whole.
+
+Cleared by redeploying the same committed code (`wrangler deploy`, version `bf0b81f7`), which
+recreates isolates; the unsigned check-in then answered 401 in 0.73 s. Filed as **D-225** —
+the wedge itself is a design defect that a redeploy must not be the standard remedy for.
+
+## 7. End-to-end: MOLE updated itself and the TPM seal came alive
+
+MOLE runs `lockdown-service.exe --service`, the supervisor that applies a pending update.
+Its `agent.log` for the first check-in after the redeploy, unedited:
+
+```
+2026-11-26 12:06:01,473 [WARNING] TPM key creation failed:
+2026-11-26 12:06:01,473 [ERROR] Could not create/open TPM seal key
+2026-11-26 12:06:01,474 [WARNING] TPM seal failed - falling back to DPAPI/plaintext
+2026-11-26 12:06:02,355 [INFO] Update available: 1.0.4 -> 1.0.5 (16856661 bytes)
+2026-11-26 12:06:02,356 [INFO] Downloading update from …/api/agent/download?platform=win ...
+2026-11-26 12:06:07,915 [INFO] Update signature verified (ed25519, pinned key)
+2026-11-26 12:06:07,916 [INFO] Update downloaded and verified (16856661 bytes, SHA-256 OK)
+2026-11-26 12:06:07,917 [INFO] Update signal written - watchdog will apply on next check
+2026-11-26 12:06:08 [SERVICE] update pending - stopping the agent to apply it
+2026-11-26 12:06:11 [SERVICE] pending update: applied
+2026-11-26 12:06:12 [SERVICE] starting agent: C:\ProgramData\LockdownAgent\lockdown-agent.exe
+2026-11-26 12:06:13,427 [INFO] Agent starting - hostname=MOLE … build=20261126.69a3e4156d16
+2026-11-26 12:06:23,771 [INFO] TPM seal certificate F35451B3E4FA0A1B5B6814F5C514965F2494E307 (CREATED)
+2026-11-26 12:07:25,809 [INFO] TPM seal certificate F35451B3E4FA0A1B5B6814F5C514965F2494E307 (EXISTS)
+```
+
+The first two lines are the **old** binary still failing exactly as S355 described — an
+empty error message and a silent DPAPI fallback. Everything after is the new one.
+
+Server side and device side agree:
+
+```
+KV device_checkin:14e7dafb…  last_checkin 2026-11-26T09:07:28.829Z
+                             agent_version 1.0.5   update_verification signature
+C:\ProgramData\LockdownAgent\.deadman   373 bytes, magic "TPM1"
+```
+
+`TPM1` is the first time any device has stored state sealed to a TPM; every previous build
+fell back to DPAPI. The subsequent `(EXISTS)` line is the cache working — a check-in must not
+mint a new TPM key every 60 seconds.
+
+## 8. What this release still does not prove
+
+- **Only one Windows device took it.** FRANKENSTEIN (1.0.0) is powered off, so the fleet is
+  now split 1.0.5 / 1.0.0 rather than 1.0.4 / 1.0.0.
+- **No Authenticode signature.** The binaries are unsigned executables; the update chain is
+  authenticated by Ed25519 metadata over the SHA-256, which is a different property from
+  Windows trusting the publisher (see D-130 for the firmware size of this, and
+  `docs/CODE_SIGNING.md` for the product).
+- **`binary:lockscreen` and `binary:installer` were not rebuilt.** Neither is produced by
+  `build.ps1`/`build-windows-artifacts.ps1` defaults and neither is touched by this change;
+  they remain at their previous build.
+- **D-225 is open**: the wedge can recur, and a redeploy is a workaround, not a fix.

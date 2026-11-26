@@ -33,6 +33,10 @@ agent/.pytest_cache/
 # PyInstaller build artifacts
 agent/build/
 agent/dist/
+# Per-release Windows binaries staged for signing and publishing (S357). Build output is
+# never committed: the signed record lives in KV as `agent_release`, and the hashes that
+# were published are recorded in docs/artifacts/s357-release-1.0.5.txt.
+agent/staging/
 *.spec.bak
 server/coverage/
 server/.pglite-data/

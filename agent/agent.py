@@ -229,7 +229,7 @@ except ImportError:
 # Version
 # ---------------------------------------------------------------------------
 
-AGENT_VERSION = "1.0.4"
+AGENT_VERSION = "1.0.5"
 
 # Build identity. AGENT_VERSION stays numeric semver because the update path compares it
 # numerically (`compareVersions` splits on '.', server/src/routes/agent.js:1037), so build
@@ -245,6 +245,12 @@ AGENT_VERSION = "1.0.4"
 # number in the same commit. ADR-010's runtime key rotation landed in 23e70f8 without a bump, so
 # every device still reported 1.0.3 and the dashboard could not say which ones had the code — the
 # exact ambiguity this block exists to prevent. Rotation is 1.0.4.
+#
+# 1.0.4 was never published: it was built locally on MOLE for the ADR-010 rotation check and
+# then reported 1.0.4 while still carrying the broken TPM seal path. The certificate-addressed
+# seal key (S357) is a functional change, so it bumps to 1.0.5 — publishing a "1.0.4" that is
+# not the 1.0.4 already in the field would leave MOLE permanently reporting itself up to date
+# with code it does not have, which is the same defect this comment describes.
 #
 # The two pragmas below are for the checker, not for the runtime: `_buildinfo` is a tracked
 # sibling module (agent/_buildinfo.py) that ships with the source and is bundled by PyInstaller

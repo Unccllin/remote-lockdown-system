@@ -1,0 +1,166 @@
+# S357 — TPM state sealing, certificate-addressed, verified on MOLE
+
+2026-11-26 · host: the lab laptop (Linux) → MOLE over
+`ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249`
+· device: MOLE (HP EliteBook 830 G6, Windows 11, TPM 2.0 Infineon IFX, spec 2.0/1.38,
+  `Get-Tpm` TpmPresent/TpmReady/TpmEnabled/TpmActivated all True, Python 3.14.8)
+
+What this proves: `agent/tpm_seal.py` seals and unseals the deadman state on a **real TPM**,
+the key is genuinely TPM-resident (export is refused), it survives a **reboot**, a modified
+blob fails closed, and removing the key makes unseal fail closed without minting a new one.
+
+Every step below is the module itself, run by `C:\Python314\python.exe` on MOLE
+(`mole_tpm_verify.py` imports `tpm_seal` — no hand-written PowerShell in the test path).
+Each step exits non-zero when the evidence is not what the module is supposed to produce.
+
+---
+
+## 1. Why the old path could not work (S355, carried forward)
+
+```
+Get-Tpm                     Present/Ready/Enabled/Activated = True
+CngKey.Create + PCP         "The requested operation is not supported"      <- the old code
+New-SelfSignedCertificate   CREATED, HasPrivateKey True                      <- the supported path
+```
+
+## 2. Clean slate, then create — the delete works and the key is TPM-bound
+
+```
+### step: delete
+delete_tpm_key()                True
+store after delete              remaining=0
+
+### step: facts
+resolved thumbprint             058EEC36A99E8A6DB0C174AD2617CE9A0E80B952 (CREATED)
+provider=Microsoft Platform Crypto Provider
+keyname=te-c40a7660-09ce-4b47-a74a-c8aeaeb419d0
+exportpolicy=None
+export=REFUSED :: The requested operation is not supported.
+```
+
+`export=REFUSED` is the proof the old path could never offer: the private key is inside the
+TPM and cannot be read out, so a copied state file is useless on another machine.
+
+## 3. Seal, unseal, tamper — the envelope and the fail-secure branches
+
+```
+### step: seal
+magic                           b'TPM1'
+sealed_key_len                  256          (RSA-2048 OAEP-SHA256 ciphertext)
+blob bytes                      369
+state bytes                     105
+seal wall time                  2937 ms      (first call, includes certificate creation)
+
+### step: unseal
+is_tpm_sealed_blob              True
+unseal wall time                1310 ms
+recovered                       b'{"status": "normal", "last_seen": 1795000000.0, ...}'
+
+### step: tamper
+flipped sealed-key byte         None
+flipped state-ciphertext byte   None
+```
+
+The tampered-sealed-key case is refused by the TPM itself:
+
+```
+[log DEBUG] TPM unseal failed (rc=1): ERROR: Exception calling "Decrypt" with "2"
+            argument(s): "TPM 2.0: Value is out of range or is not correct for the context."
+```
+
+## 4. Reboot — the key is TPM-persistent, not merely cross-process
+
+Reboot issued 2026-11-26T08:32:50Z (`shutdown /r /t 3`). BitLocker is Off (FullyDecrypted)
+and `sshd`/`LockdownAgent` are Automatic, so the reboot was safe and unattended.
+
+Post-reboot, **the same thumbprint and the same CNG key name**, unsealing the blob written
+before the reboot:
+
+```
+### step: facts
+resolved thumbprint             058EEC36A99E8A6DB0C174AD2617CE9A0E80B952 (EXISTS)
+keyname=te-c40a7660-09ce-4b47-a74a-c8aeaeb419d0
+export=REFUSED :: The requested operation is not supported.
+
+### step: unseal
+is_tpm_sealed_blob              True
+unseal wall time                3827 ms
+recovered                       b'{"status": "normal", "last_seen": 1795000000.0, ...}'
+```
+
+## 5. Delete, then unseal — fail closed, and no new key is minted
+
+```
+### step: delete
+delete_tpm_key()                True
+store after delete              remaining=0
+
+### step: post-delete
+unseal_state                    None
+store after unseal              remaining=0
+```
+
+`remaining=0` after the failed unseal is the point: the read path passes `create=False`, so a
+missing certificate cannot silently become a new key that would make the old blob unreadable
+while pretending to work.
+
+## 6. The mid-run disconnect was Windows Update, not a crash
+
+The session dropped during the post-delete step. The System log says which:
+
+```
+11:32:49  id=1074  C:\WINDOWS\system32\shutdown.exe ... on behalf of MOLE\labadmin
+11:39:06  id=6006  The Event log service was stopped.
+11:40:30  id=6005  The Event log service was started.
+11:42:13  id=1074  C:\WINDOWS\servicing\TrustedInstaller.exe ... for the following reason:
+                   Operating System: Upgrade (Planned)  Reason Code: 0x80020003
+11:43:07  id=6005  The Event log service was started.
+unexpected shutdown? (41 / 1001 / 6008) -> none - every stop was planned
+```
+
+So: one reboot requested by this session, one by TrustedInstaller finishing a planned
+update. There is **no** event 41 (`Kernel-Power`), **no** 1001 (`BugCheck`) and **no** 6008
+(`unexpected shutdown`), i.e. `delete_tpm_key()` did not destabilise the TPM driver.
+
+## 7. Code that produced this
+
+`agent/tpm_seal.py` — the key is addressed by a certificate, not by a CNG key name:
+
+- `_seal_cert_thumbprint(create=...)` — resolve `CN=LockdownStateSealKey` in
+  `Cert:\LocalMachine\My`, create it with `New-SelfSignedCertificate -Provider
+  'Microsoft Platform Crypto Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyUsage
+  KeyEncipherment, DataEncipherment`; cached per process; `create=False` on the read path.
+- `_tpm_seal_key` / `_tpm_unseal_key` — `RSACertificateExtensions::GetRSAPrivateKey` +
+  `RSA::Encrypt/Decrypt` with **OAEP-SHA256** (both OAEP and PKCS#1 round-trip on the PCP key,
+  so the stronger padding is used); 190-byte payload ceiling checked before spawning PowerShell.
+- `delete_tpm_key` — `$rsa.Key.Delete()` **and** `Remove-Item` of the certificate. They die
+  independently: deleting the certificate leaves `te-<guid>` in the TPM, and deleting the key
+  leaves a certificate whose private key can never be used again (both measured here).
+  The old `[CngKey]::Delete('name')` was a static overload .NET Framework does not have, so
+  the previous implementation threw and deleted nothing.
+- `_run_powershell` — one entry point, `-NonInteractive` (a prompt in session 0 has nobody to
+  answer it and would hang a check-in), and one failure formatter that logs **stdout** first:
+  the old code logged stderr only, which is how "TPM key creation failed: " shipped with
+  nothing after it for months.
+
+## 8. Tests
+
+`agent/tests/test_tpm_seal.py`: 21 → 34 tests, all mocked (no TPM in CI), pinning
+certificate addressing, the absent `CngKey.Create`, `-NonInteractive`, OAEP-SHA256,
+thumbprint validation, read-never-creates, delete-both-halves, and the stdout/rc logging
+contract. Full agent suite: **1005 passed**. `scripts/lint-agent.sh`: clean.
+
+## 9. What is still not proven
+
+- **No device has sealed state in production yet.** Every device has been on the DPAPI
+  fallback because the seal path never worked; the first real seal happens on the first
+  check-in after 1.0.5 is installed.
+- **A TPM clear now costs the state file.** Once sealing works, a cleared TPM makes an
+  existing `TPM1` blob unseal to `None`, and `_read_deadman_state` treats that as tampering
+  (`{"status": "stolen", "corrupt": true}`). That is the intended fail-secure direction, but
+  it is a new operational consequence that did not exist while sealing was broken.
+- **The plaintext fallback is still the weak link in the chain** (pre-existing, unchanged):
+  `_read_deadman_state` falls back to reading plaintext JSON when neither the TPM magic nor
+  the DPAPI magic is present, so an attacker who can write the state file can downgrade it to
+  plaintext rather than defeat the seal. Not changed here — it is a design decision, not a bug
+  in this module.
