@@ -1217,7 +1217,11 @@
 ### D-134 — PBL's NV indices live in the TPM platform hierarchy, which stock firmware takes away
 - **Status**: OPEN (found 2026-11-02, session 165, while chasing D-130 gap 2)
 - **Category**: SECURITY / DEPLOYMENT
-- **What the code does**: `PcdPblTpmUsePlatformHierarchy` defaults to **TRUE**
+- **What the code does — CORRECTED 2026-11-26 (S372): `PcdPblTpmUsePlatformHierarchy` now defaults
+  to `FALSE`** (`PblPkg.dec:76`), per the ruling recorded further down this entry. The paragraph
+  below describes the *other* branch, which the .dec keeps only so the failure mode stays
+  reproducible. A reader who trusted the original wording ("defaults to TRUE") would have gone to
+  fix a default that had already been changed — found by reading `PblPkg.dec` instead of this file.
   (`PblPkg.dec:72`), and that selects `TPM_RH_PLATFORM` as the NV auth handle for
   define/read/write (`TpmClient.c:1105`, `1204-1214`, `1322-1330`) with attributes
   `0x420D000D` (`PPWRITE|AUTHWRITE|POLICYWRITE|PPREAD|AUTHREAD|POLICYREAD|NO_DA|`
@@ -1294,6 +1298,26 @@
   Provisioning aligned so enrolment and firmware agree:
   `scripts/provision-qemu-tpm.sh` and `firmware/PblPkg/ci-harness-docker.sh` now
   define NV `0x01C00003` with `-C o -a 0x02060004` instead of `-C p -a 0x420D000D`.
+
+- **Progress (S372, 2026-11-26) — the code half is complete; the capture half needs a rig.**
+  Verified in the tree, not taken from this entry: `PblPkg.dec:76` is `|FALSE|`,
+  `PblTpmReadAkName` authorizes with the index handle, the owner attribute set is `0x02060004`
+  (the `OWNERREAD` the matrix above says was missing), and the provisioning scripts define
+  `-C o -a 0x02060004`. Both bugs the matrix records are therefore fixed, and the QEMU evidence
+  (`artifacts/d134-owner-hierarchy-results.txt`: three arms, all `device_id from AK Name` against
+  platform-randomizing stock OVMF) matches the code.
+  **The target machine is identified and reachable**: MOLE is an `HP EliteBook 830 G6`, BIOS
+  `R70 Ver. 01.36.00`, Infineon TPM 2.0 (`7.85.4555.0`), `TpmPresent/Ready/Owned/Enabled/
+  Activated = True`, Secure Boot **off**, and no `EFI\PBL` on its ESP yet — the "HP machine" the
+  close criteria name.
+  **What the remaining step needs, measured:** (a) a PBL build — this host has `gcc` but no
+  `build`, `nasm` or `iasl`, so the EDK2 toolchain must come from
+  `firmware/PblPkg/ci-harness-docker.sh` or be installed; (b) a **serial capture rig** — the
+  runbook's evidence is `cat /dev/ttyUSB0 | tee …` from a USB-serial adapter wired to the target,
+  i.e. physical equipment; (c) a disruptive boot window on MOLE (ESP/USB boot, then `TPM2_Clear`,
+  then a second boot). None of the three is reachable from a shell alone, so the item stays OPEN
+  on the hardware evidence the criteria demand rather than being closed on QEMU arms those same
+  criteria say cannot answer the firmware half.
   Q2 needs no new code: a missing index already reads as "unprovisioned", so the
   D-131 Q1 path (no `device_id` → refuse to fetch → denied-boot-with-local-unlock)
   is the fail-closed behaviour.

@@ -1,0 +1,69 @@
+# S372 — D-134: the target machine's identity, and what the capture still needs
+
+D-134 stays **OPEN**. This session added no hardware evidence; it removed the two things that were
+blocking the attempt — an unknown target and an unknown procedure cost — and corrected a stale entry
+that would have sent the next reader to fix code that is already fixed.
+
+## The machine (MOLE, reachable now)
+
+Captured over SSH (`ssh -i ~/.ssh/lockdown_lab_ed25519 labadmin@192.168.1.249`, scripts run with
+`-ExecutionPolicy Bypass`):
+
+```
+Model      HP | HP EliteBook 830 G6          SMBIOSBIOSVersion  R70 Ver. 01.36.00
+Serial     5CG0398GCN
+UUID       BE10009B-5867-337C-5024-E390E760DA74
+OS         Microsoft Windows 11 Pro 10.0.26300
+TPM        Present/Ready/Owned/Enabled/Activated = True
+           Manufacturer IFX (Infineon)  ManufacturerVersion 7.85.4555.0   SpecVersion 2.0
+SecureBoot False
+ESP        no EFI\PBL present (no drive letter assigned; checked via Get-Partition GptType)
+```
+
+Those are the fields the runbook's firmware artifact records (`model`, `serial`, `uuid`, `tpm`,
+`secure_boot`), so the eventual D-134 run does not have to re-derive them. `HP EliteBook 830 G6` is
+the "HP machine" the close criteria name.
+
+## The code half, verified in the tree (not taken from the ledger)
+
+The D-134 entry said `PcdPblTpmUsePlatformHierarchy` "defaults to **TRUE**". It does not:
+
+```
+firmware/PblPkg/PblPkg.dec:76            ...|FALSE|BOOLEAN|0x00000009   ("D-134 ruling (2026-11-02)")
+firmware/PblPkg/PblApp/TpmClient.c:1194  Handles[0] = PBL_NV_AK_NAME;   // NV_Read by index handle
+firmware/PblPkg/PblApp/TpmClient.c:1195  Handles[1] = PBL_NV_AK_NAME;
+firmware/PblPkg/PblApp/TpmClient.c:1356  Attr   = 0x02060004;  // AUTHWRITE|AUTHREAD|NO_DA|OWNERREAD
+firmware/PblPkg/PblApp/TpmClient.c:1420  NvAttr = 0x02060004;
+firmware/PblPkg/ci-harness-docker.sh:142 tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004
+scripts/provision-qemu-tpm.sh:115,152    tpm2_nvdefine 0x01C00003 -C o -s 34 -a 0x02060004 -p …
+```
+
+So both defects the ledger's own matrix records are fixed — the missing `OWNERREAD` (which produced
+`0x149 TPM_RC_NV_AUTHORIZATION` rather than `0x9A2`) and the hierarchy-authorized read — and
+provisioning agrees with consumption at `-C o -a 0x02060004`. The QEMU evidence matches:
+`firmware/PblPkg/artifacts/d134-owner-hierarchy-results.txt` shows three arms (owner-stock, owner-pbl,
+platform-stock) all reporting `device_id from AK Name: ABABABAB…ABAB` against stock OVMF that
+randomizes `platformAuth`.
+
+The ledger entry has been corrected in place and now records this as progress, with the stale sentence
+replaced and its replacement dated.
+
+## What the remaining step needs — measured, not assumed
+
+| need | state on this host |
+|---|---|
+| a PBL build | `gcc` present, but **`build`, `nasm`, `iasl` missing**; EDK2 must come from `firmware/PblPkg/ci-harness-docker.sh` or be installed |
+| a serial capture rig | **absent** — the runbook's evidence is `cat /dev/ttyUSB0 \| tee …` from a USB-serial adapter wired to the target; nothing in `PblApp` writes a log to disk, so there is no file-based alternative |
+| a boot window | needs physical action on MOLE: stage `firmware/PblPkg/HARDWARE-TEST-PLAN.md` files on a FAT32 USB, boot from it, run PBL, then `TPM2_Clear` and boot again |
+
+Because none of the three is reachable from this shell, the item stays OPEN. Closing it on QEMU arms
+would contradict its own criteria: *"QEMU cannot answer the firmware half."*
+
+## What the run must show to close it
+
+1. The serial log's pre-registered check, taken before anything else:
+   `[OK] device_id from AK Name: …` — **not** `RC=0x9A2` (platform hierarchy taken away) and **not**
+   `RC=0x18B` (define side), which are the two codes the owner-hierarchy change exists to eliminate.
+2. `TPM2_Clear(RH_OWNER)` afterwards, then a second boot, must read as **unenrolled** rather than
+   silently falling into the cached-verdict → denied-boot path (the D-131 ruling that makes the failure
+   mode safe).
