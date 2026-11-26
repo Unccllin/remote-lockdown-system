@@ -4408,3 +4408,25 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-203
+  statement: 'The external review''s S1, S4, S6 and S7 are fixed, tested with teeth (7 of 8 new tests
+    fail against the pre-fix code) and deployed as Worker version f242942e: create-first-admin requires
+    the deployment ADMIN_TOKEN (401 without it, 503 when none is configured), the ''dev-secret'' token-signing
+    fallback is gone (missing secret throws, login answers 503, verification fails closed), a deleted
+    or demoted admin loses access on the next request because the role comes from the stored record, and
+    shared-token comparisons use timingSafeEqualStr. The break-glass identity (id ''admin-token'') is
+    exempt from the revocation check by a single BREAK_GLASS_ADMIN_ID constant. The remaining review findings
+    S2/S3/S5/S8/S9 are filed as debt D-226..D-230.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'deployed Worker f242942e: 401 on create-admin without token; 559 serverless + 274 dashboard
+    tests green; teeth run 7/8 failed pre-fix'
+  source: S364
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

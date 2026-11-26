@@ -216,7 +216,7 @@ async function uninstallAuth(
     const device = await getDeviceByApiKeyHash(env, apiKeyHash);
     if (device) return { device };
   }
-  if (token && env.ADMIN_TOKEN && token === env.ADMIN_TOKEN) {
+  if (matchesAdminToken(env, token)) {
     return { device: null };
   }
   return null;
@@ -1561,6 +1561,17 @@ async function handleGetAudit(request: Request, env: Env): Promise<Response> {
  * pre-multi-admin behavior working for bootstrap / recovery.
  */
 async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
+  // Review S4: this used to sign tokens with the constant 'dev-secret' when neither JWT_SECRET nor
+  // ADMIN_TOKEN was set, so one missed setup step let anyone mint a super-admin login. Refuse here,
+  // before any password is even checked.
+  if (!env.JWT_SECRET && !env.ADMIN_TOKEN) {
+    return errorResponse(
+      'This deployment has no session secret configured. Set JWT_SECRET (or ADMIN_TOKEN) with ' +
+        '`wrangler secret put`, then retry.',
+      503,
+    );
+  }
+
   const body = await request.text();
   let payload: { username?: string; password?: string; token?: string };
   try {
@@ -1579,11 +1590,10 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   // the password form to non-registered usernames prevents a coincidental
   // admin password from silently escalating to super-admin.
   const breakGlass =
-    (payload.token && payload.token === env.ADMIN_TOKEN) ||
-    (!admin && password && password === env.ADMIN_TOKEN);
+    matchesAdminToken(env, payload.token) || (!admin && matchesAdminToken(env, password));
   if (breakGlass) {
     const sa: Admin = {
-      id: 'admin-token', username: 'admin', password_hash: '', salt: '',
+      id: BREAK_GLASS_ADMIN_ID, username: 'admin', password_hash: '', salt: '',
       role: 'super-admin', created_at: new Date().toISOString(),
     };
     return jsonResponse({
@@ -1636,6 +1646,26 @@ const VALID_ADMIN_ROLES: AdminRole[] = ['viewer', 'operator', 'super-admin'];
  * super-admin auth via /api/admins.
  */
 async function handleCreateFirstAdmin(request: Request, env: Env): Promise<Response> {
+  // Review S1: this route let anyone who reached a fresh deployment first become super-admin —
+  // the account that can lock or unlock every machine in the fleet. It now requires the
+  // deployment's setup token (ADMIN_TOKEN), which the setup wizard asks for, compared in constant
+  // time. "No token configured" must not mean "anyone may bootstrap": a deployment without one
+  // refuses setup rather than falling open.
+  if (!env.ADMIN_TOKEN) {
+    return errorResponse(
+      'Setup token is not configured on this deployment. Set ADMIN_TOKEN, then retry setup.',
+      503,
+    );
+  }
+  const bearer = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  const provided = request.headers.get('X-Setup-Token') || bearer;
+  if (!matchesAdminToken(env, provided)) {
+    return errorResponse(
+      'Setup token required. Send the deployment ADMIN_TOKEN as the X-Setup-Token header.',
+      401,
+    );
+  }
+
   const existing = await listAdmins(env);
   if (existing.length > 0) {
     return errorResponse('Setup already complete. Use /api/admins to manage admins.', 409);
@@ -3021,8 +3051,8 @@ import {
   parseJsonBody, parseKvJson, requestUrl, sha256, sha256HexBytes, timingSafeEqualStr,
 } from './http';
 import {
-  Admin, AdminRole, LEGACY_PBKDF2_ITERATIONS, listAdmins, makeAdmin, pbkdf2Hash, requireRole,
-  saveAdmins, signAdminToken,
+  Admin, AdminRole, BREAK_GLASS_ADMIN_ID, LEGACY_PBKDF2_ITERATIONS, listAdmins, makeAdmin,
+  matchesAdminToken, pbkdf2Hash, requireRole, saveAdmins, signAdminToken,
 } from './admin-auth';
 import { composeEnrollSetupScript } from './installer-scripts';
 import { handlePblRoute } from './pbl/routes';

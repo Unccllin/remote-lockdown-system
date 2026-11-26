@@ -10,6 +10,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { COMMAND_INDEX_KEY, commandKey } from './kv-store';
+import { b64urlEncode, matchesAdminToken } from './admin-auth';
+import { hmacSha256 } from './http';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -1428,7 +1430,7 @@ describe('Serverless Worker', () => {
       // Create the first admin → setupComplete flips to true.
       const createReq = makeRequest('POST', '/api/setup/create-admin', {
         username: 'firstadmin', password: 'supersecret1',
-      });
+      }, { 'X-Setup-Token': 'test-admin-token' });
       const createResp = await worker.fetch(createReq, env);
       expect(createResp.status).toBe(200);
 
@@ -1724,7 +1726,10 @@ describe('Serverless Worker', () => {
       const resp = await worker.fetch(makeRequest('GET', '/api/setup/status'), env);
       const needsSetup = (await parseResponse(resp) as any).needsSetup;
       if (needsSetup) {
-        const r = await worker.fetch(makeRequest('POST', '/api/setup/create-admin', { username, password }), env);
+        const r = await worker.fetch(
+          makeRequest('POST', '/api/setup/create-admin', { username, password }, { 'X-Setup-Token': 'test-admin-token' }),
+          env,
+        );
         return (await parseResponse(r) as any);
       }
       const r = await worker.fetch(
@@ -1744,7 +1749,10 @@ describe('Serverless Worker', () => {
 
     it('setup/create-admin is closed after the first admin exists', async () => {
       await seedAdmin(env, 'sa1', 'password123');
-      const r = await worker.fetch(makeRequest('POST', '/api/setup/create-admin', { username: 'x', password: 'password123' }), env);
+      const r = await worker.fetch(
+        makeRequest('POST', '/api/setup/create-admin', { username: 'x', password: 'password123' }, { 'X-Setup-Token': 'test-admin-token' }),
+        env,
+      );
       expect(r.status).toBe(409);
     });
 
@@ -6389,5 +6397,160 @@ describe('D-225: the mutation queue cannot wedge', () => {
     expect(data.mutation_queue).toHaveProperty('wait_ms');
     // The production bound, not a test one: an operator reading this needs to know the real value.
     expect(data.mutation_queue.wait_ms).toBe(5000);
+  });
+});
+
+/**
+ * Hardening from the external review (`~/Downloads/Remote-Lockdown-Codebase-Review.docx`), S1, S4,
+ * S6 and S7. Each test here fails against the pre-fix code, which is the only reason to add it:
+ * S1's absence meant anyone could bootstrap, S4's meant a published constant could sign a login,
+ * S6's meant a deleted admin stayed valid until the 8 h token expired, and S7's were plain
+ * comparisons of shared secrets.
+ */
+describe('review S1/S4/S6/S7: auth hardening', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; JWT_SECRET?: string };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 'test-jwt-secret' };
+  });
+
+  const SETUP = { 'X-Setup-Token': 'test-admin-token' };
+
+  async function createFirst(headers: Record<string, string> | null = SETUP) {
+    const r = await worker.fetch(
+      makeRequest('POST', '/api/setup/create-admin', { username: 'sa1', password: 'password123' }, headers || {}),
+      env,
+    );
+    return { resp: r, data: (await parseResponse(r)) as any };
+  }
+
+  async function login(username: string, password: string) {
+    const r = await worker.fetch(makeRequest('POST', '/api/auth/login', { username, password }), env);
+    return { resp: r, data: (await parseResponse(r)) as any };
+  }
+
+  it('S1: refuses to create the first admin without the setup token', async () => {
+    const { resp } = await createFirst({});
+
+    expect(resp.status).toBe(401);
+    // …and nothing was created, so the window is still open for the legitimate operator.
+    const status = await worker.fetch(makeRequest('GET', '/api/setup/status'), env);
+    expect(((await parseResponse(status)) as any).needsSetup).toBe(true);
+  });
+
+  it('S1: refuses a wrong setup token', async () => {
+    const { resp } = await createFirst({ 'X-Setup-Token': 'not-the-token' });
+    expect(resp.status).toBe(401);
+  });
+
+  it('S1: a deployment with no ADMIN_TOKEN cannot be bootstrapped at all', async () => {
+    // "No token configured" must not mean "anyone may bootstrap".
+    const bare = { LOCKDOWN_KV: new MockKV() } as unknown as { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+    const r = await worker.fetch(
+      makeRequest('POST', '/api/setup/create-admin', { username: 'sa1', password: 'password123' }),
+      bare,
+    );
+    expect(r.status).toBe(503);
+  });
+
+  it('S4: login refuses to sign when no session secret is configured', async () => {
+    const bare = { LOCKDOWN_KV: new MockKV() } as unknown as { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+    const r = await worker.fetch(
+      makeRequest('POST', '/api/auth/login', { username: 'admin', password: 'anything1' }),
+      bare,
+    );
+    expect(r.status).toBe(503);
+  });
+
+  it('S4: a token minted with the removed "dev-secret" constant is rejected', async () => {
+    // The env must have NO secret, or this test exercises the configured secret instead of the
+    // fallback — which is how a weaker version of it passed while the fallback was still present.
+    const noSecret = { LOCKDOWN_KV: new MockKV() } as unknown as { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV };
+
+    // Exactly what the removed fallback signed: header.payload under the HMAC key 'dev-secret'.
+    const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+    const payload = b64urlEncode(JSON.stringify({
+      id: 'forged', username: 'admin', role: 'super-admin',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }));
+    const sig = b64urlEncode(await hmacSha256('dev-secret', `${header}.${payload}`));
+    const forged = `${header}.${payload}.${sig}`;
+
+    const r = await worker.fetch(
+      makeRequest('GET', '/api/devices', undefined, { Authorization: `Bearer ${forged}` }),
+      noSecret,
+    );
+    expect(r.status).toBe(401);
+  });
+
+  it('S6: a deleted admin loses access on the next request, not on token expiry', async () => {
+    const first = await createFirst();
+    const ownerToken = first.data.token as string;
+
+    // A second admin, so deleting it does not trip the last-super-admin guard.
+    const created = await worker.fetch(
+      makeRequest('POST', '/api/admins', { username: 'op1', password: 'password123', role: 'viewer' },
+        { Authorization: `Bearer ${ownerToken}` }),
+      env,
+    );
+    expect(created.status).toBe(201);
+    const opId = ((await parseResponse(created)) as any).id as string;  // flat shape: {id, username, role}
+    const op = await login('op1', 'password123');
+    expect(op.resp.status).toBe(200);
+
+    // Before deletion the token works.
+    const before = await worker.fetch(
+      makeRequest('GET', '/api/devices', undefined, { Authorization: `Bearer ${op.data.token}` }), env);
+    expect(before.status).toBe(200);
+
+    const del = await worker.fetch(
+      makeRequest('DELETE', `/api/admins/${opId}`, undefined, { Authorization: `Bearer ${ownerToken}` }), env);
+    expect(del.status).toBe(200);
+
+    // After deletion the same token is refused — this is what the 8 h TTL used to allow.
+    const after = await worker.fetch(
+      makeRequest('GET', '/api/devices', undefined, { Authorization: `Bearer ${op.data.token}` }), env);
+    expect(after.status).toBe(401);
+  });
+
+  it('S6: a demotion takes effect without waiting for the token to expire', async () => {
+    const first = await createFirst();
+    const ownerToken = first.data.token as string;
+
+    const created = await worker.fetch(
+      makeRequest('POST', '/api/admins', { username: 'sa2', password: 'password123', role: 'super-admin' },
+        { Authorization: `Bearer ${ownerToken}` }),
+      env,
+    );
+    expect(created.status).toBe(201);
+    const sa2Id = ((await parseResponse(created)) as any).id as string;
+    const sa2 = await login('sa2', 'password123');
+
+    // Super-admin before the demotion.
+    const before = await worker.fetch(
+      makeRequest('GET', '/api/admins', undefined, { Authorization: `Bearer ${sa2.data.token}` }), env);
+    expect(before.status).toBe(200);
+
+    const patched = await worker.fetch(
+      makeRequest('PATCH', `/api/admins/${sa2Id}`, { role: 'viewer' },
+        { Authorization: `Bearer ${ownerToken}` }),
+      env,
+    );
+    expect(patched.status).toBe(200);
+
+    // The same token now carries viewer rights, because the role is read from the store.
+    const after = await worker.fetch(
+      makeRequest('GET', '/api/admins', undefined, { Authorization: `Bearer ${sa2.data.token}` }), env);
+    expect(after.status).toBe(403);
+  });
+
+  it('S7: the shared-token comparison rejects empty and near-miss values', () => {
+    // Behavioural pin for matchesAdminToken — the timing property itself is not measurable here,
+    // but a helper that accepted '' or a one-character-off value would be a hole regardless.
+    expect(matchesAdminToken(env as any, '')).toBe(false);
+    expect(matchesAdminToken(env as any, undefined)).toBe(false);
+    expect(matchesAdminToken(env as any, 'test-admin-toke')).toBe(false);
+    expect(matchesAdminToken(env as any, 'test-admin-tokenx')).toBe(false);
+    expect(matchesAdminToken(env as any, 'test-admin-token')).toBe(true);
   });
 });

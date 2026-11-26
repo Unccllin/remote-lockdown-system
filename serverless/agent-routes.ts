@@ -17,7 +17,9 @@
  * it — this module imports nothing from worker.ts, which is what keeps the split acyclic.
  */
 import type { Env } from './pbl/env';
-import { errorResponse, generateId, hmacSha256, jsonResponse, parseJsonBody, sha256 } from './http';
+import {
+  errorResponse, generateId, hmacSha256, jsonResponse, parseJsonBody, sha256, timingSafeEqualStr,
+} from './http';
 import {
   BiosPassword, Command, Device, LocationReport, activePollSeconds, addAuditEntry,
   addLocationReport, getCheckinMetadata, getCommand, getDeviceByApiKeyHash,
@@ -64,7 +66,9 @@ export async function verifyAgentAuth(
   // hmacAuth.js verifyHmac() — so the same agent can talk to either backend.
   const bodyHash = await sha256(body);
   const expectedSig = await hmacSha256(agentKey, `${timestamp}:${nonce}:${bodyHash}`);
-  if (signature !== expectedSig) {
+  // Constant-time (review S7): the signature is derived from the device's secret key, so a plain
+  // `!==` leaks how much of a forged signature matched.
+  if (!timingSafeEqualStr(signature, expectedSig)) {
     return null;
   }
 

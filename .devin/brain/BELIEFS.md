@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 13:48:17 — 200 beliefs
+Generated: 2026-11-26 14:27:43 — 203 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -146,6 +146,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-186 | proposed | assumed | Dependabot Updates fails on this repo for a dependency-resolution reason (glob is patched only at 14.0.2+, jest 30 pins glob@^13.0.6, so the updater refuses the jest 30->29 downgrade), not for a workflow-permission reason: the permission is already 'write'. The phrase 'write access to the repository is required' in the log is also GitHub's boilerplate link text for the private updates log. |
+
+## cost
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-202 | proposed | assumed | The cost crossover for this serverless design against a KES 2,000-2,500 local VM is ~45-55 devices, not the ~325 stated in docs/SERVERLESS-COST.md: at a 60 s poll one check-in is 1 request + 3 KV reads + 1 write + 1 list, and KV writes/lists cost $5 per million, so 50 devices is ~KES 2,159/month and 100 devices ~KES 5,161/month (twice the VM). The older figure predates S348's per-device command index and counts one read per poll instead of a write and a list. After the D1 read/write cutover, 100/325/1000 devices cost ~KES 843/2,897/9,723 per month. |
 
 ## dashboard
 
@@ -468,12 +474,19 @@ mkfs.fat 4.2 (2021-01-31)
 |---|--------|----------|-----------|
 | B-199 | confirmed | real-media | The first GitHub release of this repository exists: v1.0.5, published (not draft), marked Latest, 26 assets - remote-lockdown-admin-1.0.5.exe/.msi/.AppImage/.dmg plus latest.yml, latest-linux.yml and latest-mac.yml, agent/recovery/watchdog binaries for linux-x64, darwin-x64, darwin-arm64 and windows-x64, SHA256SUMS per platform and agent-release.json. All 12 release.yml jobs are green. The published lockdown-agent-linux-x64 runs and reports build=20261126.69a3e4156d16, and its sha256 matches SHA256SUMS-linux-x64. |
 
+## security
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-203 | confirmed | real-media | The external review's S1, S4, S6 and S7 are fixed, tested with teeth (7 of 8 new tests fail against the pre-fix code) and deployed as Worker version f242942e: create-first-admin requires the deployment ADMIN_TOKEN (401 without it, 503 when none is configured), the 'dev-secret' token-signing fallback is gone (missing secret throws, login answers 503, verification fails closed), a deleted or demoted admin loses access on the next request because the role comes from the stored record, and shared-token comparisons use timingSafeEqualStr. The break-glass identity (id 'admin-token') is exempt from the revocation check by a single BREAK_GLASS_ADMIN_ID constant. The remaining review findings S2/S3/S5/S8/S9 are filed as debt D-226..D-230. |
+
 ## serverless
 
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-196 | confirmed | real-media | The Worker's module-level mutationChain (serverless/worker.ts:365) has no timeout, so one stalled handler wedges /api/agent/checkin and /api/agent/command-ack for the whole isolate: measured live, serialised routes produced no response in 25-40 s while every unserialised route answered in ~0.6 s, wrangler tail showed 'Canceled', the wedge did not clear in ~25 minutes, and only a redeploy (recreating isolates) restored check-ins. Filed as D-225. |
 | B-198 | confirmed | real-media | The Worker now witnesses KV stalls on the check-in path: watchKv() in kv-store.ts arms a 2 s timer (KV_STALL_WARN_MS) and, if the operation is still pending when it fires, records a per-label stall and logs '[kv-stall] <label> has not settled', with kv_inflight (live) and kv_stalls (history) published on GET /api/health. It names D-225's suspect if the wedge recurs but does not identify the original trigger, which remains unknown. Deployed as Worker version 736f27f3; 7 tests, 5 of which fail if the timer is removed. |
+| B-201 | confirmed | real-media | D1 stage 0 is live on the deployed Worker: database lockdown (979c503f-4f95-464e-845f-dae56ba0520b, WEUR) with d1/schema.sql applied and the env.DB binding deployed as version b0bdc068. Replay protection writes to it (nonces grew 2 -> 3 rows across two MOLE check-ins, newest expiry advancing) while devices stayed at 0 rows, so replay rejection is authoritative and no read path changed. The binding must be named DB: wrangler suggests binding='lockdown' but the code reads env.DB. |
 
 ## testing/contract
 

@@ -9314,3 +9314,137 @@ attempt while `consolidate` holds the lock.
   that moves the bill, and it needs a week of observation rather than a code change — and replace
   part B of `docs/COMPANY-SETUP-COST.md` with Cloudflare's measured KV counters once a month of real
   data exists.
+
+---
+
+## Session 364 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `serverless/admin-auth.ts` in full — `resolveAdminAuth` (the break-glass `token ===
+  env.ADMIN_TOKEN` at :28 and the fact that claims come straight from the token), `requireRole`,
+  `listAdmins`/`saveAdmins`/`ADMINS_KEY`, `TOKEN_TTL_SECONDS = 8 * 3600`, `signAdminToken` and
+  `verifyAdminToken` (the `'dev-secret'` fallback at :177 and :198, and the constant-time loop the
+  verifier already uses); `serverless/http.ts:40` (`timingSafeEqualStr`, which returns false on a
+  length mismatch and then XOR-folds — so it is safe for arbitrary-length secrets).
+- **Read**: `serverless/worker.ts` `handleCreateFirstAdmin` (:1638, no auth, 409 once an admin
+  exists), the `handleAuthLogin` break-glass comparisons (`payload.token === env.ADMIN_TOKEN`,
+  `password === env.ADMIN_TOKEN`), the device-token comparison at :219, and the dispatch table
+  (`/api/setup/create-admin` at :1961, `/api/auth/login` at :1918).
+- **Read**: `serverless/agent-routes.ts:67` (`if (signature !== expectedSig)` in
+  `verifyAgentAuth`), `dashboard/src/api/setup.js`, `dashboard/src/pages/SetupPage.jsx` (the form,
+  its validation, and the "this screen only appears once" notice), and the existing tests for these
+  paths (`worker.test.ts:1419-1760`, including `setup/create-admin is closed after the first admin
+  exists`).
+- **Finding**: the four fixes the external review ranks cheapest are also the four that matter most
+  for a client deployment, and three of them are one-liners once the right helper is chosen — the
+  repository already has `timingSafeEqualStr` and the token verifier already compares in constant
+  time, so S7 is a consistency fix, not new crypto. S4's real defect is the literal `'dev-secret'`,
+  not the `ADMIN_TOKEN` fallback: a deployment that set `ADMIN_TOKEN` but not `JWT_SECRET` is still
+  signing with an unguessable secret, so the fix makes *absence* fatal and leaves the fallback
+  documented rather than removing a path deployments may rely on. S6 needs one KV read per admin
+  request — acceptable, because admins are low-cardinality and this is not the agent hot path — but
+  it must not 401 the synthetic `admin-token` break-glass identity, which has no admin record. S1
+  changes the first-run flow, so it is the only one of the four that also touches the dashboard; the
+  live deployment is already past setup (it answers 409), so the change costs nothing today and
+  closes the window for every future deployment.
+
+### IMPLEMENT
+- `serverless/admin-auth.ts`: `requireSessionSecret()` (S4) — the `'dev-secret'` literal is gone, and a
+  missing `JWT_SECRET`/`ADMIN_TOKEN` pair now throws instead of signing with a published constant;
+  `matchesAdminToken()` — one constant-time comparison for the four shared-token sites (S7);
+  `BREAK_GLASS_ADMIN_ID` — one definition for the synthetic bootstrap identity; `resolveAdminAuth`
+  reads the admin list and takes the **role from the record**, so deletion and demotion take effect
+  on the next request (S6), fails closed (401) when verification cannot run, and exempts the
+  break-glass identity by name.
+- `serverless/worker.ts`: `handleCreateFirstAdmin` requires the deployment's `ADMIN_TOKEN` as
+  `X-Setup-Token` or a Bearer token, and returns 503 when none is configured (S1); `handleAuthLogin`
+  refuses with 503 when no session secret exists (S4); the login break-glass comparisons and the
+  device-token comparison use `matchesAdminToken` (S7).
+- `serverless/agent-routes.ts`: the agent HMAC signature comparison uses `timingSafeEqualStr` (S7).
+- `dashboard/src/pages/SetupPage.jsx` + `dashboard/src/api/setup.js`: the wizard asks for the setup
+  token, refuses to submit without it, and sends it as a header.
+- `dashboard/tests/SetupPage.test.jsx` (new, 2 tests) and 8 new serverless tests.
+- `docs/adr/PBL-DEBT-LEDGER.md` + `.devin/graph/GRAPH-SPEC.yaml`: the review's other five security
+  findings filed as **D-226…D-230** with close criteria and effort, because a `.docx` is not a tracker.
+- `docs/artifacts/s364-review-fixes-s1-s4-s6-s7.txt`: the fixes, the teeth measurement and the bug
+  this work introduced.
+
+### Fog cleared
+- **The two "one missed setup step" holes are closed and live.** `POST /api/setup/create-admin`
+  without the deployment token answers **401** on the deployed Worker (it answered 200 before), and
+  a deployment with no `ADMIN_TOKEN` refuses setup with 503 rather than falling open.
+- **A token can no longer be forged from a published constant.** The `dev-secret` fallback is gone;
+  a token signed with it is rejected (test), and login returns 503 naming the missing secret.
+- **A dismissed admin loses access on the next request**, not at the 8 h token expiry — and a
+  demotion takes effect immediately, because the role is read from the record.
+- **All seven of the review's behavioural findings have teeth-checked tests**: 7 of 8 new tests fail
+  against the pre-fix code; the eighth pins a helper whose timing property is not observable here,
+  which is stated rather than claimed.
+- **The remaining five findings are tracked** as D-226…D-230 instead of living in a Downloads folder.
+
+### Fog remaining
+- **D-226 (review S2) is still the worst open hole**: unauthenticated `/api/rearm` re-keys a device
+  from a UUID printed in firmware setup. It needs the firmware-side proof (3–5 days) and is the one
+  item that should gate a client deployment.
+- **D-227 (S3), D-228 (S5), D-229 (S8), D-230 (S9)** are open with close criteria; D-228 and D-229 are
+  roughly a day each, and D-229 can use the D1 binding that is already live.
+- **The review's product/commercial gaps are untouched**: single-tenant deployment, no licence control,
+  no SSO/MFA/audit export, and the employee-notice/ODPC paperwork.
+- **Two review claims remain false in its own text** (it says this machine cannot run the suites, and
+  that 1.0.4 is unbuilt / MOLE is the only Windows builder). Correcting the review is the author's
+  job; `docs/artifacts/s363-review-verification.txt` records the corrections.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; D-225's trigger is still
+  unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-226
+- D-227
+- D-228
+- D-229
+- D-230
+
+### Blockers
+- None for the work done. D-226 needs firmware work and a hardware window; the rest need only time.
+
+### Session artifacts
+- docs/artifacts/s364-review-fixes-s1-s4-s6-s7.txt
+- docs/artifacts/s363-review-verification.txt (the claim-by-claim verification)
+
+### Failure attribution
+- **Layer 4 (verification feedback), a bug of mine caught by a pre-existing test**: S6's existence
+  check 401'd the break-glass identity, because the login route issues it as a *signed* token with no
+  admin record. `POST /api/auth/login validates admin token` caught it immediately. **Harness change**:
+  none needed — this is the suite doing its job; recorded because the fix's own comment now names the
+  exemption so it cannot be "tidied away" later.
+- **Layer 4 again, two weak tests of my own**: the `dev-secret` forgery test passed while the fallback
+  was still present (its env set `JWT_SECRET`, so it never exercised the fallback), and two S6 tests
+  assumed a `{admin: {id}}` response that is actually flat. **Harness change**: a regression test must
+  be run against the pre-fix code before it is trusted — the teeth step caught both, and neither would
+  have been visible in a green suite.
+- **Layer 1 (task specification)**: the review gives effort estimates but not acceptance criteria; the
+  close criteria in D-226…D-230 are therefore my inferences from its prose, and a reader should treat
+  them as proposed rather than agreed.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, 559 passed (was 551; +8 for S1/S4/S6/S7)
+- teeth: all four behaviours reverted -> 7 of 8 new tests fail; restored -> 8 pass
+- `cd dashboard && npx vitest run` -> 31 files, 274 passed (was 272; +2 for the setup token)
+- `cd dashboard && npx eslint … --max-warnings=0` -> exit 0
+- `npx wrangler deploy` -> version `f242942e-c386-4a7d-86b7-3510c1cfa4b1`
+- `POST /api/setup/create-admin` (no token) -> **401** with the new message; `GET /api/devices` (no token) -> 401
+- `GET /api/health` -> `{"status":"ok","mutation_queue":{"stalls":0,"wait_ms":5000}}`
+- `make graph-check` -> all invariants pass (70 debt items, 10 OPEN); `check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- Take **D-226** (review S2): the unauthenticated `/api/rearm` re-key is the remaining Critical and the
+  one thing that should gate a client deployment — decide the proof mechanism (TPM-sealed device
+  secret vs administrator approval) and write it down as an ADR before touching the route.

@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 60 | 65 | ✗ |
+| Debt items | 60 | 70 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 65 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,31 +53,34 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 362 — 2026-11-26
+## Latest session: 364 — 2026-11-26
 
 ### Fog cleared
-- **D1 stage 0 is live and verified**: `env.DB (lockdown) D1 Database` bound in version `b0bdc068`;
-  `nonces` grew 2 → 3 rows across two MOLE check-ins with the newest expiry advancing, and `devices`
-  stayed at 0 rows, so replay rejection is authoritative while every read still comes from KV.
-- **The backup job is not just configured, it is working**, proven from the audit log the cron writes
-  itself: `backup_written backups/2026-11-25T03-00-29-491Z.rmlb (40916 bytes, 2 devices, 8 commands…)`
-  and the same for 2026-11-26 (41186 bytes), after a `backup_restored` drill on 2026-11-24.
-- **The company now has a cost model it can budget against**, with every assumption traced to code
-  (poll interval, per-check-in operations) and every price to Cloudflare's rate card read today, in
-  KES at the CBK rate with the FX exposure stated.
-- **The contradictory crossover figure is gone** rather than left standing next to the new one.
+- **The two "one missed setup step" holes are closed and live.** `POST /api/setup/create-admin`
+  without the deployment token answers **401** on the deployed Worker (it answered 200 before), and
+  a deployment with no `ADMIN_TOKEN` refuses setup with 503 rather than falling open.
+- **A token can no longer be forged from a published constant.** The `dev-secret` fallback is gone;
+  a token signed with it is rejected (test), and login returns 503 naming the missing secret.
+- **A dismissed admin loses access on the next request**, not at the 8 h token expiry — and a
+  demotion takes effect immediately, because the role is read from the record.
+- **All seven of the review's behavioural findings have teeth-checked tests**: 7 of 8 new tests fail
+  against the pre-fix code; the eighth pins a helper whose timing property is not observable here,
+  which is stated rather than claimed.
+- **The remaining five findings are tracked** as D-226…D-230 instead of living in a Downloads folder.
 
 ### Fog remaining
-- **`GOOGLE_API_KEY` is still the `ROT-TEST` placeholder** — owner action, `wrangler secret put`.
-- **The cost model is arithmetic, not measurement.** No month of Cloudflare analytics has been read;
-  the first post-rollout task is to replace the assumed per-check-in workload with the dashboard's
-  KV counters. If the real figure is worse, the crossover moves further down.
-- **D1 stages 1+ are not started** (shadow write, then reads). The ceiling they remove binds above
-  ~1,100 devices.
-- **D1 now costs nothing but will become the write meter** once cutover happens; at 2,000 devices the
-  nonce inserts alone exceed the 50M included rows.
+- **D-226 (review S2) is still the worst open hole**: unauthenticated `/api/rearm` re-keys a device
+  from a UUID printed in firmware setup. It needs the firmware-side proof (3–5 days) and is the one
+  item that should gate a client deployment.
+- **D-227 (S3), D-228 (S5), D-229 (S8), D-230 (S9)** are open with close criteria; D-228 and D-229 are
+  roughly a day each, and D-229 can use the D1 binding that is already live.
+- **The review's product/commercial gaps are untouched**: single-tenant deployment, no licence control,
+  no SSO/MFA/audit export, and the employee-notice/ODPC paperwork.
+- **Two review claims remain false in its own text** (it says this machine cannot run the suites, and
+  that 1.0.4 is unbuilt / MOLE is the only Windows builder). Correcting the review is the author's
+  job; `docs/artifacts/s363-review-verification.txt` records the corrections.
 - Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; D-225's trigger is still
-  unmeasured; FRANKENSTEIN still 1.0.0; build ids remain checkout-dependent.
+  unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
 
 ### Debt items closed
 - None this session.
@@ -88,45 +91,49 @@
 - D-130
 - D-134
 - D-225
+- D-226
+- D-227
+- D-228
+- D-229
+- D-230
 
 ### Blockers
-- None for the work done. `GOOGLE_API_KEY` and hardware remain owner-side.
+- None for the work done. D-226 needs firmware work and a hardware window; the rest need only time.
 
 ### Session artifacts
-- docs/artifacts/s362-d1-stage0-and-cost.txt
-- docs/COMPANY-SETUP-COST.md
+- docs/artifacts/s364-review-fixes-s1-s4-s6-s7.txt
+- docs/artifacts/s363-review-verification.txt (the claim-by-claim verification)
 
 ### Failure attribution
-- **Layer 4 (verification feedback), mine, twice in the first minutes**: I queried `MAX(expires)` on
-  a column that is `expires_at`, and my JSON extractor assumed a top-level `results` key so two
-  queries died with `KeyError` while a third worked. Both were fixed by reading the schema and the
-  actual response shape instead of guessing. **Harness change**: when a query fails on shape, print
-  the raw response before parsing it — a parser that hides the payload turns a wrong column name into
-  a wrong conclusion about the system.
-- **Layer 2 (context provision), and the more expensive one**: `docs/SERVERLESS-COST.md` reads like a
-  finished artefact and carries precise numbers, but its crossover claim predates the per-device
-  command index and counts one read per poll where the code does a write and a list. Nothing marked
-  it as dated, so it would have been quoted to a customer with confidence. **Harness change**: a
-  cost document is a claim about code, so it must name the per-operation workload and the code path
-  it comes from; when that path changes, the number is stale even if the arithmetic is right.
+- **Layer 4 (verification feedback), a bug of mine caught by a pre-existing test**: S6's existence
+  check 401'd the break-glass identity, because the login route issues it as a *signed* token with no
+  admin record. `POST /api/auth/login validates admin token` caught it immediately. **Harness change**:
+  none needed — this is the suite doing its job; recorded because the fix's own comment now names the
+  exemption so it cannot be "tidied away" later.
+- **Layer 4 again, two weak tests of my own**: the `dev-secret` forgery test passed while the fallback
+  was still present (its env set `JWT_SECRET`, so it never exercised the fallback), and two S6 tests
+  assumed a `{admin: {id}}` response that is actually flat. **Harness change**: a regression test must
+  be run against the pre-fix code before it is trusted — the teeth step caught both, and neither would
+  have been visible in a green suite.
+- **Layer 1 (task specification)**: the review gives effort estimates but not acceptance criteria; the
+  close criteria in D-226…D-230 are therefore my inferences from its prose, and a reader should treat
+  them as proposed rather than agreed.
 
 ### VERIFY
-- `npx wrangler d1 create lockdown` -> region WEUR, id `979c503f-4f95-464e-845f-dae56ba0520b`
-- `npx wrangler d1 execute lockdown --file=d1/schema.sql --remote` -> success, 6 tables, 114,688 bytes
-- `SELECT name, type FROM sqlite_master` -> 24 objects; exit condition met (`commands_device_status`,
-  `devices_api_key_hash`, `nonces_expires` all present)
-- `npx wrangler deploy` -> `env.DB (lockdown) D1 Database`, version `b0bdc068`
-- `SELECT COUNT(*), MAX(expires_at) FROM nonces` -> 2 rows / 3 rows 100 s apart; `devices` -> 0
-- `audit_index` + audit entries -> `backup_written` on 2026-11-25 and 2026-11-26, `backup_restored` on 2026-11-24
-- `GET /api/health` -> `{status: ok, mutation_queue {stalls: 0}, kv_inflight {}, kv_stalls {}}`
-- measured footprint -> 165 KV keys, 51.3 MB binaries, D1 112 KB, 2 R2 backups ~41 KB
-- cost model computed from the code's 1 request + 3 reads + 1 write + 1 list per check-in at 60 s
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, 559 passed (was 551; +8 for S1/S4/S6/S7)
+- teeth: all four behaviours reverted -> 7 of 8 new tests fail; restored -> 8 pass
+- `cd dashboard && npx vitest run` -> 31 files, 274 passed (was 272; +2 for the setup token)
+- `cd dashboard && npx eslint … --max-warnings=0` -> exit 0
+- `npx wrangler deploy` -> version `f242942e-c386-4a7d-86b7-3510c1cfa4b1`
+- `POST /api/setup/create-admin` (no token) -> **401** with the new message; `GET /api/devices` (no token) -> 401
+- `GET /api/health` -> `{"status":"ok","mutation_queue":{"stalls":0,"wait_ms":5000}}`
+- `make graph-check` -> all invariants pass (70 debt items, 10 OPEN); `check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- Decide whether to run D1 stage 1 (shadow write, one week, no reads) — it is the only remaining step
-  that moves the bill, and it needs a week of observation rather than a code change — and replace
-  part B of `docs/COMPANY-SETUP-COST.md` with Cloudflare's measured KV counters once a month of real
-  data exists.
+- Take **D-226** (review S2): the unauthenticated `/api/rearm` re-key is the remaining Critical and the
+  one thing that should gate a client deployment — decide the proof mechanism (TPM-sealed device
+  secret vs administrator approval) and write it down as an ADR before touching the route.
 
 ---
 
@@ -139,8 +146,13 @@
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 | D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
+| D-226 | Unauthenticated /api/rearm re-keys a stolen device from its  | OPEN | — |
+| D-227 | Re-enrolment silently clears a device's stolen status with n | OPEN | — |
+| D-228 | Admin login has no attempt limit, lockout or second factor | OPEN | — |
+| D-229 | Enrolment tokens are read then deleted across an eventually  | OPEN | — |
+| D-230 | The deployment's Google API key is returned to every device  | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 65 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (10 of 70 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

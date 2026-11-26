@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
+import { Shield, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle, KeyRound } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { setupApi } from '../api/setup';
 
 export default function SetupPage() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ username: 'admin', password: '', confirmPassword: '' });
+  const [form, setForm] = useState({
+    username: 'admin', password: '', confirmPassword: '', setupToken: '',
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -47,6 +49,11 @@ export default function SetupPage() {
     if (form.password !== form.confirmPassword) {
       errs.confirmPassword = 'Passwords do not match';
     }
+    // Review S1: the deployment token is what closes the "first visitor becomes super-admin" hole,
+    // so an empty field is a hard stop rather than a request the server will reject.
+    if (!form.setupToken || form.setupToken.trim().length === 0) {
+      errs.setupToken = 'Setup token required (the deployment\'s ADMIN_TOKEN)';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -56,7 +63,7 @@ export default function SetupPage() {
     if (!validate()) return;
     setLoading(true);
     try {
-      await setupApi.createAdmin(form.username.trim(), form.password);
+      await setupApi.createAdmin(form.username.trim(), form.password, form.setupToken.trim());
       toast.success('Admin account created! Please log in.');
       navigate('/login', { replace: true });
     } catch (err) {
@@ -171,6 +178,29 @@ export default function SetupPage() {
             {errors.confirmPassword && (
               <p className="text-xs text-red-400 mt-1">{errors.confirmPassword}</p>
             )}
+          </div>
+
+          {/* Setup token — the deployment's ADMIN_TOKEN (review S1) */}
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              <KeyRound size={12} className="inline mr-1" />
+              Setup Token
+            </label>
+            <input
+              type="password"
+              className={`input font-mono ${errors.setupToken ? 'border-red-500/50' : ''}`}
+              value={form.setupToken}
+              onChange={(e) => setForm({ ...form, setupToken: e.target.value })}
+              placeholder="The deployment's ADMIN_TOKEN"
+              autoComplete="off"
+            />
+            {errors.setupToken && (
+              <p className="text-xs text-red-400 mt-1">{errors.setupToken}</p>
+            )}
+            <p className="text-xs text-slate-500 mt-1">
+              Set with <code className="text-slate-400">wrangler secret put ADMIN_TOKEN</code>. Without it
+              anyone who reached this address first could create the first account.
+            </p>
           </div>
 
           {/* Submit */}

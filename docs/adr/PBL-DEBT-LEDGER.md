@@ -2382,10 +2382,16 @@
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 | D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
 | D-225 | The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate | OPEN (S357: a wedged chain made `/api/agent/checkin` and `/api/agent/command-ack` hang while every unserialised route answered in ~0.6 s; cleared by redeploy, not by the code — docs/artifacts/s357-release-1.0.5.txt) | SERVERLESS |
+| D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | OPEN (S364: verified in code — no auth, issues a fresh `api_key_hash`, and reads every device plus one metadata key per device; filed from the external review's S2) | SECURITY |
+| D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | OPEN (S364: `worker.ts:488` and `:672` both assign `status = 'active'`; review S3) | SECURITY |
+| D-228 | Admin login has no attempt limit, lockout or second factor | OPEN (S364: `handleAuthLogin` reads the admin list and verifies PBKDF2 with no counter; review S5) | SECURITY |
+| D-229 | Enrolment tokens are read then deleted across an eventually consistent store | OPEN (S364: `worker.ts:618` get → `:647` delete, so two racers can both pass; review S8) | SECURITY |
+| D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
 
-**Totals** (recounted 2026-11-26 by counting this file's own table rows): **60 items —
-55 CLOSED, 5 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
-D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge). The previous line claimed
+**Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
+55 CLOSED, 10 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
+D-226..D-230 — the five unfixed findings from the 26 November external review). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2513,3 +2519,77 @@ number is derived from the other; each is counted where it lives.
   operation; the check-in path has no `fetch` subrequest), and that production stays quiet —
   which only a deploy can show, and no induced stall can be created in the deployed Worker
   without a test hook worth shipping. Evidence: `docs/artifacts/s358-d225-mutation-queue.txt`.
+
+### D-226 — Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone
+- **Status**: OPEN (found 2026-11-26, S363 verification of the external review; its finding S2)
+- **Category**: SECURITY
+- **What the code does**: `worker.ts:801 handleRearm`, dispatched at `:2186` for `POST /api/rearm`.
+  It takes `{hardware_uuid}` from an unauthenticated body, calls `listDevices(env)` and then
+  `getCheckinMetadata(env, d.id)` for each device until the UUID matches, and for any device whose
+  status is not `active` issues a **new `api_key_hash`** and returns the agent config with it. An
+  audit entry is written; nothing else gates it.
+- **Why it matters**: the hardware UUID is printed in firmware setup and readable by the person
+  holding the machine. A thief can therefore re-key the device the product is supposed to be
+  locking: ACK lock commands without locking, report false locations, and cut the real agent off
+  (its key has just been replaced). The N+1 reads per anonymous request also make it a cheap way to
+  bill the client for reads.
+- **Close criteria**: (a) a re-arm request must prove it came from the genuine firmware — a device
+  secret sealed to the TPM at enrolment, or an administrator-approved hold — with the chosen
+  mechanism written down in an ADR; (b) a rate limit on the route; (c) the device is found by direct
+  lookup, not by scanning the fleet with a metadata read per device; (d) tests for a wrong UUID, a
+  replayed proof and a re-arm while the device is offline; (e) evidence that a stolen-status device
+  cannot be re-keyed by someone with only the UUID.
+- **Estimated effort**: 3–5 days, because the proof touches firmware.
+
+### D-227 — Re-enrolment silently clears a device's `stolen` status with no audit record
+- **Status**: OPEN (found 2026-11-26, S363; review finding S3)
+- **Category**: SECURITY
+- **What the code does**: both enrolment paths (`worker.ts:488` and `:672`) assign
+  `existing.status = 'active'` when the supplied `hardware_uuid` matches a registered device, then
+  `putDevice`. Neither writes an audit entry.
+- **Why it matters**: reinstalling the agent on a stolen laptop with any valid enrolment token —
+  which branch staff hold — erases the stolen flag. Nobody is told, and the theft history is gone.
+- **Close criteria**: (a) re-association preserves the existing status unless an explicit
+  administrator action changes it; (b) every re-association writes an audit entry naming the token
+  and the previous status; (c) a test proving a stolen device stays stolen across re-enrolment;
+  (d) an alert on re-association of a non-active device.
+- **Estimated effort**: 1 day.
+
+### D-228 — Admin login has no attempt limit, lockout or second factor
+- **Status**: OPEN (found 2026-11-26, S363; review finding S5)
+- **Category**: SECURITY
+- **What the code does**: `worker.ts:1557 handleAuthLogin` reads the admin list, finds the username
+  and verifies PBKDF2. There is no attempt counter, no lockout, no CAPTCHA and no second factor
+  anywhere in the tree.
+- **Why it matters**: administrator passwords can be guessed without limit over a public URL, and
+  each attempt costs the client PBKDF2 CPU time on their Cloudflare bill (100k iterations).
+- **Close criteria**: (a) a per-username and per-IP attempt limit with a lockout window, implemented
+  without adding a new binding if possible (KV counter is acceptable given the low rate); (b) a test
+  that N+1 wrong attempts are refused and that a correct attempt after the lockout window succeeds;
+  (c) MFA designed separately (see the review's G-MFA) and not conflated with this fix.
+- **Estimated effort**: 1 day for the limiter; 8–12 weeks for MFA and SSO together.
+
+### D-229 — Enrolment tokens are read then deleted across an eventually consistent store
+- **Status**: OPEN (found 2026-11-26, S363; review finding S8)
+- **Category**: SERVERLESS
+- **What the code does**: `worker.ts:618` reads `enroll_token:<token>`, validates expiry and only
+  then deletes (`:647`), so two concurrent enrolments can both pass the read before either deletes.
+- **Why it matters**: a "single-use" token can be used twice within the KV propagation window, which
+  means one branch's token can enrol a machine it was not issued for.
+- **Close criteria**: (a) the claim is atomic — D1's UNIQUE constraint (the binding is live since
+  S362) is the natural home; (b) a test that two concurrent claims with one token produce exactly
+  one success; (c) if the window is instead accepted, it is documented on the route and in the
+  dashboard's token UI rather than left implicit.
+- **Estimated effort**: 1 day with D1 already bound.
+
+### D-230 — The deployment's Google API key is returned to every device in four enrolment responses
+- **Status**: OPEN (found 2026-11-26, S363; review finding S9)
+- **Category**: SECURITY
+- **What the code does**: `worker.ts:503, 538, 687, 722` spread `google_api_key` into the enrolment
+  and registry responses whenever `env.GOOGLE_API_KEY` is set.
+- **Why it matters**: anyone holding a device — or the response body in a log — can extract a key
+  that is billed to the client, and the key is not restricted to a single API.
+- **Close criteria**: (a) the key is restricted in Google Cloud to the Geolocation API with a daily
+  quota, documented as a deployment step; or (b) the lookup moves server-side and devices receive
+  no key; (c) a test that the response omits the key when the server-side lookup is enabled.
+- **Estimated effort**: half a day for (a), 2–3 days for (b).

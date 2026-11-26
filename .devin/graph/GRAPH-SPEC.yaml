@@ -1574,6 +1574,75 @@ debt_items:
       awaits request.text(), a KV get for auth, a KV get and put for checkin metadata, and a KV
       list for commands, with no fetch subrequest, so an unsettled KV operation is the leading
       hypothesis and the fix must not depend on it.
+  - id: D-226
+    description: >-
+      Unauthenticated /api/rearm re-keys a stolen device from its hardware UUID alone
+    close_criteria: >-
+      Firmware-proven or admin-approved re-arm, rate limiting, direct device lookup, tests, and
+      evidence a stolen device cannot be re-keyed with only the UUID
+    status: OPEN
+    category: SECURITY
+    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    risk_notes: >-
+      worker.ts:801 handleRearm (dispatch :2186): no auth, a new api_key_hash, listDevices plus one
+      getCheckinMetadata per device. Review S2. The UUID is readable in firmware setup, so a thief
+      can re-key the very device the product is locking, and the N+1 reads bill the client.
+
+  - id: D-227
+    description: >-
+      Re-enrolment silently clears a device's stolen status with no audit record
+    close_criteria: >-
+      Preserve status on re-association, audit every re-association, test that a stolen device
+      stays stolen, alert on re-association of a non-active device
+    status: OPEN
+    category: SECURITY
+    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    risk_notes: >-
+      worker.ts:488 and :672 both assign existing.status = 'active' on a hardware_uuid match, then
+      putDevice, with no addAuditEntry. Review S3: any branch staff enrolment token erases the
+      theft record and nobody is told.
+
+  - id: D-228
+    description: >-
+      Admin login has no attempt limit, lockout or second factor
+    close_criteria: >-
+      Per-username and per-IP attempt limit with a lockout window, a test that N+1 attempts are
+      refused and a correct one after the window succeeds, MFA designed separately
+    status: OPEN
+    category: SECURITY
+    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    risk_notes: >-
+      worker.ts:1557 handleAuthLogin: listAdmins + PBKDF2 verify, no counter, no lockout, no MFA in
+      the tree. Review S5: unlimited guessing over a public URL, each attempt costing the client
+      100k PBKDF2 iterations.
+
+  - id: D-229
+    description: >-
+      Enrolment tokens are read then deleted across an eventually consistent store
+    close_criteria: >-
+      Atomic claim (the live D1 UNIQUE constraint is the natural home), a test that two concurrent
+      claims yield exactly one success, or the window documented on the route and in the UI
+    status: OPEN
+    category: SERVERLESS
+    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    risk_notes: >-
+      worker.ts:618 get then :647 delete: two racers can both pass the read inside the KV
+      propagation window, so a single-use token can enrol a machine it was not issued for.
+      Review S8.
+
+  - id: D-230
+    description: >-
+      The deployment's Google API key is returned to every device in four enrolment responses
+    close_criteria: >-
+      Key restricted to the Geolocation API with a daily quota and documented as a deployment step,
+      or the lookup moved server-side with a test that devices receive no key
+    status: OPEN
+    category: SECURITY
+    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    risk_notes: >-
+      worker.ts:503, 538, 687, 722 spread google_api_key into responses. Review S9: anyone holding a
+      device, or the response body in a log, extracts a key billed to the client.
+
 
 invariants:
   - id: I1

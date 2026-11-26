@@ -8,8 +8,15 @@
  */
 import type { Env } from './pbl/env';
 import {
-  b64decode, b64encode, errorResponse, generateId, hmacSha256, jsonResponse, parseKvJson, sha256,
+  b64decode, b64encode, errorResponse, generateId, hmacSha256, parseKvJson, timingSafeEqualStr,
 } from './http';
+/**
+ * The synthetic admin identity used for break-glass access: the raw ADMIN_TOKEN, and the signed
+ * token the login route issues for it. It deliberately has no record in the admin list, so the
+ * revocation check below must exempt it by name rather than treating it as a deleted admin.
+ */
+export const BREAK_GLASS_ADMIN_ID = 'admin-token';
+
 export interface AdminClaims {
   id: string;
   username: string;
@@ -25,12 +32,38 @@ export async function resolveAdminAuth(request: Request, env: Env): Promise<Admi
 
   // Break-glass: the env ADMIN_TOKEN maps to a synthetic super-admin so the
   // Worker is usable before any admin is created (bootstrap / recovery).
-  if (token === env.ADMIN_TOKEN) {
-    return { id: 'admin-token', username: 'admin', role: 'super-admin' };
+  // Compared in constant time: a plain === leaks the shared prefix length,
+  // which is a standard finding in any penetration test (review S7).
+  if (matchesAdminToken(env, token)) {
+    return { id: BREAK_GLASS_ADMIN_ID, username: 'admin', role: 'super-admin' };
   }
 
-  // Otherwise verify a signed session token.
-  return verifyAdminToken(env, token);
+  // Otherwise verify a signed session token. A deployment with no secret configured makes
+  // verifyAdminToken throw; failing closed here (401) is the right answer for a caller, and the
+  // login route reports the misconfiguration to the operator with a 503 and a clear message.
+  let claims: AdminClaims | null;
+  try {
+    claims = await verifyAdminToken(env, token);
+  } catch {
+    return null;
+  }
+  if (!claims) return null;
+
+  // Revocation (review S6): the token alone used to be enough, so a deleted or demoted admin kept
+  // full rights until the token expired — up to TOKEN_TTL_SECONDS. One read of the (low-cardinality)
+  // admin list makes deletion and demotion take effect on the next request, and the role is taken
+  // from the stored record rather than from the token so a demotion cannot be outlived either.
+  //
+  // The synthetic break-glass identity above has no record on purpose and returns before this.
+  // The break-glass identity reaches here too, because the login route issues it as a *signed*
+  // token; it has no record by design, so exempting it by name is the difference between "revoked"
+  // and "never was a row". A real admin id comes from generateId(), so the sentinel cannot collide.
+  if (claims.id === BREAK_GLASS_ADMIN_ID) return claims;
+
+  const admins = await listAdmins(env);
+  const current = admins.find((a) => a.id === claims.id);
+  if (!current) return null;
+  return { id: current.id, username: current.username, role: current.role };
 }
 
 /**
@@ -172,9 +205,43 @@ export function b64urlDecode(s: string): string {
   return atob(s.replace(/-/g, '+').replace(/_/g, '/') + pad);
 }
 
+/**
+ * The secret session tokens are signed with, or a thrown error naming the problem.
+ *
+ * This used to fall back to the literal `'dev-secret'` when neither variable was set, so a
+ * deployment that missed one step signed real administrator tokens with a value printed in this
+ * repository — anyone could mint a super-admin login (review S4). Absence is now fatal instead.
+ *
+ * JWT_SECRET is preferred; ADMIN_TOKEN is accepted as a fallback because it is equally
+ * unguessable and older deployments set only that. What mattered was never which of the two is
+ * used — it was that a *missing* pair silently became a published constant.
+ */
+/**
+ * True when `candidate` equals the deployment's ADMIN_TOKEN, compared in constant time.
+ *
+ * This comparison is a shared secret, so a plain `===` leaks how many leading characters matched —
+ * the standard timing finding (review S7). One helper so the four call sites cannot drift into
+ * three different spellings of it.
+ */
+export function matchesAdminToken(env: Env, candidate: string | null | undefined): boolean {
+  if (!candidate || !env.ADMIN_TOKEN) return false;
+  return timingSafeEqualStr(candidate, env.ADMIN_TOKEN);
+}
+
+export function requireSessionSecret(env: Env): string {
+  const secret = env.JWT_SECRET || env.ADMIN_TOKEN;
+  if (!secret) {
+    throw new Error(
+      'Refusing to sign or verify session tokens: neither JWT_SECRET nor ADMIN_TOKEN is set. ' +
+        'Set one with `wrangler secret put JWT_SECRET` before serving the admin API.',
+    );
+  }
+  return secret;
+}
+
 /** Issue a stateless HMAC-signed session token (JWT-shape: header.payload.sig). */
 export async function signAdminToken(env: Env, admin: Admin): Promise<string> {
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
+  const secret = requireSessionSecret(env);
   const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64urlEncode(
     JSON.stringify({
@@ -195,7 +262,8 @@ export async function verifyAdminToken(
 ): Promise<{ id: string; username: string; role: AdminRole } | null> {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
-  const secret = env.JWT_SECRET || env.ADMIN_TOKEN || 'dev-secret';
+  // Throws when no secret is configured — a token check that cannot verify is not a pass.
+  const secret = requireSessionSecret(env);
   const expected = await hmacSha256(secret, `${parts[0]}.${parts[1]}`);
   const sig = b64urlDecode(parts[2]);
   // Constant-time comparison.

@@ -1,0 +1,92 @@
+# S364 — the four cheapest review findings fixed, with teeth
+
+Source: `~/Downloads/Remote-Lockdown-Codebase-Review.docx`, findings S1, S4, S6, S7 — the ones the
+review ranked hours rather than weeks, and the two Critical/High "one missed setup step" class.
+Deployed as Worker version `f242942e-c386-4a7d-86b7-3510c1cfa4b1`.
+
+## What changed
+
+| finding | fix | where |
+|---|---|---|
+| **S1** setup takeover | `POST /api/setup/create-admin` now requires the deployment's `ADMIN_TOKEN`, compared in constant time, as `X-Setup-Token` or a Bearer token. A deployment with no `ADMIN_TOKEN` returns **503** rather than falling open — "no token configured" must not mean "anyone may bootstrap". The setup wizard gained a token field, and refuses to submit without it. | `worker.ts handleCreateFirstAdmin`, `admin-auth.ts matchesAdminToken`, `dashboard/src/pages/SetupPage.jsx`, `dashboard/src/api/setup.js` |
+| **S4** forged tokens | the literal `'dev-secret'` fallback is gone. `requireSessionSecret()` throws when neither `JWT_SECRET` nor `ADMIN_TOKEN` is set; the login route answers **503** with the reason, and token verification fails closed (**401**) instead of 500. | `admin-auth.ts` |
+| **S6** stale admin rights | `resolveAdminAuth` now reads the admin list and takes the **role from the stored record**, so deletion and demotion take effect on the next request instead of at the 8 h token expiry. | `admin-auth.ts` |
+| **S7** timing leaks | one helper (`matchesAdminToken`) replaces the plain `===` comparisons at the four `ADMIN_TOKEN` sites, and the agent signature check uses the existing `timingSafeEqualStr`. | `worker.ts`, `admin-auth.ts`, `agent-routes.ts` |
+
+S4 keeps the `ADMIN_TOKEN` fallback (an unguessable secret is not the defect); what was removed is
+the *published constant* that a missing pair used to produce. That is stated in the code comment so
+the next reader does not "restore" it deliberately.
+
+## Teeth: 7 of 8 new tests fail against the pre-fix code
+
+Reverting the four behaviours while keeping the exports (so failures are behavioural, not import
+errors):
+
+```
+× S1: refuses to create the first admin without the setup token
+× S1: refuses a wrong setup token
+× S1: a deployment with no ADMIN_TOKEN cannot be bootstrapped at all
+× S4: login refuses to sign when no session secret is configured
+× S4: a token minted with the removed "dev-secret" constant is rejected
+× S6: a deleted admin loses access on the next request, not on token expiry
+× S6: a demotion takes effect without waiting for the token to expire
+  Tests  7 failed | 1 passed | 551 skipped
+```
+
+The eighth (`matchesAdminToken` rejects empty and near-miss values) passes either way **by design**:
+never-matching a wrong value is the pre-existing behaviour, and the property that actually changed —
+constant time — is not observable in a unit test. Recorded rather than dressed up as coverage.
+
+Two of these tests were *weaker than they looked* on first writing, and both were tightened:
+
+- the `dev-secret` forgery test passed while the fallback was still present, because its env also set
+  `JWT_SECRET` — so it exercised the configured secret, not the fallback. It now runs against an env
+  with **no** secret at all.
+- the `S6` tests assumed `POST /api/admins` returned `{admin: {id}}`; it returns a flat
+  `{id, username, role}`. The tests were wrong, not the fix.
+
+## A bug this work introduced, caught by the suite
+
+S6's existence check initially 401'd the **break-glass** identity: the login route issues a *signed*
+token for the synthetic `admin-token` admin, which has no record by design. One `BREAK_GLASS_ADMIN_ID`
+constant now defines that sentinel in one place, and both the raw-token path and the signed-token path
+exempt it explicitly. Found by `POST /api/auth/login validates admin token` — an existing test, not a
+new one.
+
+## Verified live after deploy
+
+```
+npx wrangler deploy                          -> f242942e-c386-4a7d-86b7-3510c1cfa4b1
+GET /api/health                              -> {"status":"ok", ...}
+POST /api/setup/create-admin  (no token)     -> 401
+  {"error":"Setup token required. Send the deployment ADMIN_TOKEN as the X-Setup-Token header."}
+GET /api/devices             (no token)      -> 401
+```
+
+The live deployment is unaffected in behaviour: it already has an admin (so setup answers 409) and
+`JWT_SECRET` is set. What changed is the window a *future* deployment exposes.
+
+## The remaining findings are now tracked, not just described
+
+The other five security findings from the review are filed as debt, with close criteria and effort
+drawn from the review's own analysis, because a `.docx` in a Downloads folder is not a tracker:
+
+| id | finding |
+|---|---|
+| D-226 | unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID (review S2, Critical) |
+| D-227 | re-enrolment silently clears `stolen` with no audit record (S3, High) |
+| D-228 | no login attempt limit or second factor (S5, High) |
+| D-229 | enrolment tokens read-then-deleted across eventually consistent KV (S8, Medium) |
+| D-230 | the deployment's Google key returned to every device (S9, Medium) |
+
+Graph now carries 70 debt items, 10 OPEN; all invariants pass and the ledger check reports 0
+mismatches.
+
+## Gates
+
+```
+npx tsc --noEmit -p .                    exit 0
+cd serverless && npx vitest run          8 files, 559 passed (was 551: +8)
+cd dashboard && npx vitest run           31 files, 274 passed (was 272: +2 for the setup token)
+cd dashboard && npx eslint … --max-warnings=0   exit 0
+```
