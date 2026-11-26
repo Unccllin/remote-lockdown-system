@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 12:35:00 — 197 beliefs
+Generated: 2026-11-26 12:44:08 — 198 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -466,6 +466,7 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-196 | confirmed | real-media | The Worker's module-level mutationChain (serverless/worker.ts:365) has no timeout, so one stalled handler wedges /api/agent/checkin and /api/agent/command-ack for the whole isolate: measured live, serialised routes produced no response in 25-40 s while every unserialised route answered in ~0.6 s, wrangler tail showed 'Canceled', the wedge did not clear in ~25 minutes, and only a redeploy (recreating isolates) restored check-ins. Filed as D-225. |
+| B-198 | confirmed | real-media | The Worker now witnesses KV stalls on the check-in path: watchKv() in kv-store.ts arms a 2 s timer (KV_STALL_WARN_MS) and, if the operation is still pending when it fires, records a per-label stall and logs '[kv-stall] <label> has not settled', with kv_inflight (live) and kv_stalls (history) published on GET /api/health. It names D-225's suspect if the wedge recurs but does not identify the original trigger, which remains unknown. Deployed as Worker version 736f27f3; 7 tests, 5 of which fail if the timer is removed. |
 
 ## testing/contract
 

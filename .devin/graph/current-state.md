@@ -53,29 +53,26 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 359 — 2026-11-26
+## Latest session: 360 — 2026-11-26
 
 ### Fog cleared
-- **The release path can no longer ship an anonymous binary.** `build-windows-artifacts.ps1 -
-  Only agent` on MOLE now prints `Build identity: 20261126.69a3e4156d16`, builds, and verifies
-  `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`; `agent/build.ps1 -AgentOnly`
-  does the same through the shared script and exits 0.
-- **The check has teeth, measured by stripping the stamp**: the build then produces
-  `build=unknown.unknown` and fails with `!! the agent binary carries no stamped build id …`,
-  exit 1, rather than succeeding quietly. Both files were restored afterwards.
-- The S357 fog item "`build=unknown.unknown` is what the CI script produces" is closed by a fix
-  rather than by a note.
+- **The next wedge will name its operation.** Deployed as `736f27f3`; `/api/health` returns
+  `mutation_queue {stalls: 0, wait_ms: 5000}, kv_inflight {}, kv_stalls {}` and MOLE checked in at
+  `09:42:42Z` on 1.0.5 with both views empty — a healthy isolate leaves no trace, which is the
+  expected shape rather than a missing feature.
+- **The instrument has teeth, measured**: deleting the timer from `watchKv` fails 5 of the 7 tests
+  (the two that still pass do not depend on it); restored, 7 pass.
 
 ### Fog remaining
-- **D-225's trigger is still unmeasured** (unchanged): the leading hypothesis is an unsettled KV
-  operation on the check-in path, untested, and the queue has no per-operation timing.
-- **D-225 stays OPEN**: criterion (d) needs a real check-in after an induced stall with no deploy,
-  which needs a test hook in the deployed Worker that is not worth shipping.
-- **`binary:lockscreen` and `binary:installer` are still the pre-1.0.5 builds** — neither is
-  produced by the default build targets and neither is touched by the TPM change, but the fleet
-  downloads them for new installs.
-- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; `GOOGLE_API_KEY` is
-  still the placeholder; D1 cutover not started (optional at 2 devices); FRANKENSTEIN still 1.0.0.
+- **D-225's trigger is still not identified.** The instrument makes the next occurrence name
+  itself; it does not produce one. Closing the item still needs that occurrence.
+- **Only the check-in path is instrumented.** Command-ack and the admin mutations share the same
+  queue and are not measured; widening the labels should follow evidence rather than precede it.
+- **A label brackets a step, not a line** — `checkin.auth` includes the HMAC check and the nonce
+  write. Deliberate: the first question is "pinned or not".
+- **`binary:lockscreen` and `binary:installer` are still pre-1.0.5** (next item).
+- Unchanged: FRANKENSTEIN 1.0.0 (powered off); `GOOGLE_API_KEY` placeholder; D1 cutover not started;
+  D-120/D-129/D-130/D-134 need hardware or owner key material.
 
 ### Debt items closed
 - None this session.
@@ -91,37 +88,32 @@
 - None.
 
 ### Session artifacts
-- docs/artifacts/s359-build-identity.txt
+- docs/artifacts/s360-kv-watchdog.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), twice, both mine and both hidden-by-measurement**:
-  (a) the first build run was piped through `grep`, so `grep` exiting 1 for "no match" became the
-  task's exit code and the build's real output was filtered into an empty log — a check that
-  reported failure while proving nothing. (b) the first version of the change checked
-  `$LASTEXITCODE` after `& stamp-buildinfo.ps1`; that variable reports the last *native* command,
-  not a script's outcome, so a successful stamp was followed by
-  `!! stamping the build identity failed`. **Harness change**: capture a command's exit status
-  separately from any filter applied to its output, and in PowerShell assert `$?`/a thrown error
-  for scripts — never `$LASTEXITCODE`.
+- **Layer 4 (verification feedback), and this time the harness caught me within the same turn**:
+  one edit added `watchKv` to `worker.ts`'s import list (that file never calls it) while omitting the
+  two symbols it does use, and a multi-site edit applied 3 of 5 blocks because two anchors were
+  ambiguous. `tsc` reported both unused and undefined names immediately, and the edit tool listed
+  the five candidate sites for the ambiguous anchors. **Harness change**: none — this is the
+  "fix only what the diagnosis names" loop working as intended; recorded because the first failure
+  mode (an import added to the wrong module) is the same shape as S357's `mod.default` mistake, and
+  a repeated shape is worth naming.
 
 ### VERIFY
-- `scripts/build-windows-artifacts.ps1 -Only agent` on MOLE -> stamp printed, `PE=True`,
-  `--version` carries the stamped id, exit 0
-- `agent/build.ps1 -AgentOnly` on MOLE (run from `agent/`) -> stamped, `OK dist\lockdown-agent.exe`,
-  `--version` carries the stamped id, exit 0
-- teeth: stamp stripped + `_buildinfo.py` reset -> build produced `build=unknown.unknown` and failed
-  at the identity check, exit 1; both files restored
-- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` -> 11 passed
-- ASCII check on both PowerShell scripts -> ascii
-- `agent/.venv/bin/python -m pytest agent/tests/test_version_identity.py` -> 4 passed (the committed
-  `_buildinfo.py` is still the placeholder)
-- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` -> 31 passed
-- `bash -n scripts/*.sh` -> clean
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, 551 passed (was 544); exit code captured separately
+- teeth: timer removed from `watchKv` -> 5 of 7 new tests failed; restored -> 7 passed
+- importers of `kv-store.ts` (`agent-routes`, `alerts`, `backup`, `worker`) all reach the tsc graph
+  through `worker.ts`
+- `npx wrangler deploy` -> version `736f27f3`
+- `curl /api/health` -> `mutation_queue {stalls: 0, wait_ms: 5000}`, `kv_inflight {}`, `kv_stalls {}`
+- KV `device_checkin` -> `last_checkin 2026-11-26T09:42:42Z`, `agent_version 1.0.5`
 
 ### Next session opening
-- Instrument D-225's check-in path (per-KV-operation timing with a logged threshold) so the next
-  stall names the operation instead of leaving the trigger a hypothesis, then rebuild
-  `binary:lockscreen` and `binary:installer` from the 1.0.5 tree.
+- Rebuild `binary:lockscreen` and `binary:installer` from the 1.0.5 tree so the new-install path
+  stops serving pre-1.0.5 binaries, and read `/api/health` `kv_stalls` the next time a check-in
+  fails.
 
 ---
 

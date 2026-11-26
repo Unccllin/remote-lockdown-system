@@ -8962,3 +8962,88 @@ attempt while `consolidate` holds the lock.
 - Instrument D-225's check-in path (per-KV-operation timing with a logged threshold) so the next
   stall names the operation instead of leaving the trigger a hypothesis, then rebuild
   `binary:lockscreen` and `binary:installer` from the 1.0.5 tree.
+
+---
+
+## Session 360 — 2026-11-26
+
+### RULE-ZERO
+**Read**: `serverless/agent-routes.ts:1-40` (module doc, the import list, `verifyAgentAuth`), `:140-215` (the check-in body: auth → `getCheckinMetadata` → `saveCheckinMetadata` → `listCommandsForDevice` → response), `serverless/kv-store.ts:1-30` (the KV layer's charter: "one module per decision", depends only on `Env` + `http.ts`, imports nothing back from `worker.ts`), `serverless/worker.ts:69-80` (`handleHealth`, already carrying `mutation_queue` from S358), `worker.ts:1917` (the check-in is on the mutation chain).
+**Finding**: D-225's remaining question is *which* KV operation never settles, and today nothing measures it. Timing on completion cannot answer it — a hung promise never reaches a `finally` — so the instrument has to be a witness: start a timer, and if the operation has not settled when it fires, name it. That belongs in `kv-store.ts` (it is the KV layer, and both `agent-routes.ts` and `worker.ts` already import from it, so no new dependency edge), and its output has to be visible without `wrangler tail`, so `/api/health` carries it beside `mutation_queue`. The threshold is 2 s: KV reads are tens of milliseconds and the agent's own check-in timeout is 15 s, so a 2 s warning fires while the device is still waiting — early enough to name the culprit for the incident, not just to describe it afterwards.
+
+### IMPLEMENT
+- `serverless/kv-store.ts`: added the in-flight KV watchdog — `KV_STALL_WARN_MS = 2000`,
+  `watchKv(label, op, warnMs)` which registers the operation, arms a timer that fires **while it is
+  still pending**, records a per-label stall (`count`, `last_ms`, `last_at`) and logs
+  `[kv-stall] <label> has not settled after N ms`; plus `kvInFlight()` (live) and `kvStalls()`
+  (history that outlives a hung handler). A promise that never settles never reaches a `finally`,
+  so a witness is the only instrument that can name it.
+- `serverless/agent-routes.ts`: the four KV steps of the check-in are wrapped, labelled by step
+  (`checkin.auth`, `checkin.metadata.get`, `checkin.metadata.put`, `checkin.commands.list`).
+- `serverless/worker.ts`: `GET /api/health` publishes `kv_inflight` and `kv_stalls` beside S358's
+  `mutation_queue`.
+- `serverless/kv-stall.test.ts` (new): 7 tests — a never-settling promise is named and visible from
+  another request, a healthy operation leaves no trace, a rejection propagates and is **not**
+  recorded as a stall, below-threshold slowness does not fire, repeated stalls are counted, health
+  carries both views, and the threshold sits inside the agent's own 15 s timeout.
+- `docs/artifacts/s360-kv-watchdog.txt`: rationale, the wiring, and the teeth measurement.
+
+### Fog cleared
+- **The next wedge will name its operation.** Deployed as `736f27f3`; `/api/health` returns
+  `mutation_queue {stalls: 0, wait_ms: 5000}, kv_inflight {}, kv_stalls {}` and MOLE checked in at
+  `09:42:42Z` on 1.0.5 with both views empty — a healthy isolate leaves no trace, which is the
+  expected shape rather than a missing feature.
+- **The instrument has teeth, measured**: deleting the timer from `watchKv` fails 5 of the 7 tests
+  (the two that still pass do not depend on it); restored, 7 pass.
+
+### Fog remaining
+- **D-225's trigger is still not identified.** The instrument makes the next occurrence name
+  itself; it does not produce one. Closing the item still needs that occurrence.
+- **Only the check-in path is instrumented.** Command-ack and the admin mutations share the same
+  queue and are not measured; widening the labels should follow evidence rather than precede it.
+- **A label brackets a step, not a line** — `checkin.auth` includes the HMAC check and the nonce
+  write. Deliberate: the first question is "pinned or not".
+- **`binary:lockscreen` and `binary:installer` are still pre-1.0.5** (next item).
+- Unchanged: FRANKENSTEIN 1.0.0 (powered off); `GOOGLE_API_KEY` placeholder; D1 cutover not started;
+  D-120/D-129/D-130/D-134 need hardware or owner key material.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None.
+
+### Session artifacts
+- docs/artifacts/s360-kv-watchdog.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), and this time the harness caught me within the same turn**:
+  one edit added `watchKv` to `worker.ts`'s import list (that file never calls it) while omitting the
+  two symbols it does use, and a multi-site edit applied 3 of 5 blocks because two anchors were
+  ambiguous. `tsc` reported both unused and undefined names immediately, and the edit tool listed
+  the five candidate sites for the ambiguous anchors. **Harness change**: none — this is the
+  "fix only what the diagnosis names" loop working as intended; recorded because the first failure
+  mode (an import added to the wrong module) is the same shape as S357's `mod.default` mistake, and
+  a repeated shape is worth naming.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, 551 passed (was 544); exit code captured separately
+- teeth: timer removed from `watchKv` -> 5 of 7 new tests failed; restored -> 7 passed
+- importers of `kv-store.ts` (`agent-routes`, `alerts`, `backup`, `worker`) all reach the tsc graph
+  through `worker.ts`
+- `npx wrangler deploy` -> version `736f27f3`
+- `curl /api/health` -> `mutation_queue {stalls: 0, wait_ms: 5000}`, `kv_inflight {}`, `kv_stalls {}`
+- KV `device_checkin` -> `last_checkin 2026-11-26T09:42:42Z`, `agent_version 1.0.5`
+
+### Next session opening
+- Rebuild `binary:lockscreen` and `binary:installer` from the 1.0.5 tree so the new-install path
+  stops serving pre-1.0.5 binaries, and read `/api/health` `kv_stalls` the next time a check-in
+  fails.

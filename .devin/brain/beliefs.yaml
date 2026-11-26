@@ -4311,3 +4311,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-198
+  statement: 'The Worker now witnesses KV stalls on the check-in path: watchKv() in kv-store.ts arms a
+    2 s timer (KV_STALL_WARN_MS) and, if the operation is still pending when it fires, records a per-label
+    stall and logs ''[kv-stall] <label> has not settled'', with kv_inflight (live) and kv_stalls (history)
+    published on GET /api/health. It names D-225''s suspect if the wedge recurs but does not identify
+    the original trigger, which remains unknown. Deployed as Worker version 736f27f3; 7 tests, 5 of which
+    fail if the timer is removed.'
+  domain: serverless
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'deployed Worker 736f27f3: /api/health returns mutation_queue/kv_inflight/kv_stalls and
+    MOLE checked in at 09:42:42Z; 5 of 7 tests fail when the witness timer is removed'
+  source: S360 implementation + deploy
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
