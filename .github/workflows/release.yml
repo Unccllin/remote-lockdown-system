@@ -33,6 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # I2 verifies that every debt item's cited commit exists, so this job needs the
+          # history. The default shallow clone made every older citation look missing and the
+          # first v1.0.5 run failed on D-135/D-136/D-221/D-222 (S361). ci.yml already carries
+          # this setting for the same reason (S244).
+          fetch-depth: 0
           persist-credentials: false
 
       # --- Graph invariant check (fastest gate, catches structural issues) ---
