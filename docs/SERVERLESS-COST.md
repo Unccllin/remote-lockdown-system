@@ -1,5 +1,16 @@
 # What a fully serverless deployment costs
 
+> **Correction, 2026-11-26 (S362): the crossover figures below are optimistic, and the "Not yet"
+> column is out of date.** The per-check-in workload is 1 request + 3 reads + 1 write + 1 list, and
+> the KV **write/list** meter at $5/million is what scales — which puts the crossover against a
+> KES 2,000–2,500 local VM at roughly **45–55 devices**, not ~325, and 1,000 devices at about
+> **KES 64,600/month** rather than KES 8,300 *until the D1 read/write cutover lands*. The
+> company-facing model, its assumptions and the code each one comes from is
+> [`COMPANY-SETUP-COST.md`](COMPANY-SETUP-COST.md) — use that for quoting. Alerts, encrypted
+> backups to R2, the nonce purge and the shared replay store all exist now (S348–S361); the only
+> item still genuinely missing from the right-hand column is the read/write cutover, whose stage 0
+> is live.
+
 **Measured**: 24 November 2026 · **Currency**: Kenyan shillings only · **FX basis**: 1 USD = KES 130.09
 (open.er-api.com, 2026-11-24). The hosting provider bills in its own currency; the KES figures below are
 that bill converted at this rate, so **FX is part of the cost** — a 10% shilling move is a 10% move here.
@@ -25,11 +36,14 @@ included 50× more generously there and cost a fifth as much each.
 
 | Already serverless | Not yet |
 |---|---|
-| Agent ingress: check-in, enrolment, command acknowledgement, escrow, deadman, location | Scheduled work: the alert tick, the location-retention purge, the backup job |
-| Administrative API and dashboard | Backup and restore to object storage |
-| Binary and installer download endpoints | Shared replay-protection store for request signing |
-| The firmware-facing surface, in CBOR with signatures | Third-party inventory view (answers *not implemented*, by design) |
-| Durable state in a key-value namespace plus an object bucket | Database migration path (there is no relational store in the Worker) |
+| Agent ingress: check-in, enrolment, command acknowledgement, escrow, deadman, location | Reading/writing devices and commands from the relational store (D1 stage 0 is live; the read/write cutover is stage 1+) |
+| Administrative API and dashboard | Third-party inventory view (answers *not implemented*, by design) |
+| Binary and installer download endpoints | |
+| The firmware-facing surface, in CBOR with signatures | |
+| Durable state in a key-value namespace plus an object bucket | |
+| Scheduled work: the hourly alert tick, the retention/nonce purge, the daily encrypted backup (S348–S354, proven by `backup_written` audit entries on 25 and 26 Nov) | |
+| Shared replay-protection store for request signing (D1 `nonces` UNIQUE constraint, live 2026-11-26) | |
+| Backup and restore to object storage, with a restore drill (2026-11-24) | |
 
 So "fully serverless" is not a lift-and-shift with a bigger bill attached: three background jobs and a
 replay store do not exist yet. Their cost is small; their absence is the real gap.
