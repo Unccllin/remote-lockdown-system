@@ -1546,6 +1546,35 @@ debt_items:
 #     (resolved — D-002 CLOSED; all 17 .complete files populated with commit
 #     hash + artifact + date + tests).
 
+  - id: D-225
+    description: "The Worker's serialized mutation chain has no timeout, so one stalled handler \
+                  wedges check-in and command-ack for the whole isolate"
+    close_criteria: "(a) a never-settling mutation cannot block the next one (bounded wait or \
+                    chain reset), asserted by a test that injects a never-settling handler; \
+                    (b) the queue cannot carry a poisoned state across requests - reset on \
+                    timeout or move it to a Durable Object, with the choice written down; \
+                    (c) an operator-visible signal when the queue is stuck; (d) a real check-in \
+                    succeeds after an induced stall WITHOUT a redeploy"
+    status: OPEN
+    category: SERVERLESS
+    found: "session 357: POST /api/agent/checkin and /api/agent/command-ack hung while every \
+            unserialised route answered in ~0.6 s; cleared only by redeploying unchanged code"
+    artifact_ref: "docs/artifacts/s357-release-1.0.5.txt"
+    risk_notes: >-
+      worker.ts:365 keeps a module-level mutationChain and serializeMutation() chains every
+      mutation onto it with no bound, so one handler whose promise never settles blocks all later
+      mutations. The two routes on the chain are the two the agent uses on every poll, so a wedge
+      takes the device offline to the fleet - no check-ins, commands, ACKs or updates - while its
+      network is healthy and every unserialised route answers. Measured live: GET /api/health 200
+      in 0.66 s, GET /api/agent/update 401 in 0.72 s, POST /api/setup/create-admin 409 in 0.56 s,
+      but POST /api/agent/checkin produced no response in 40 s and command-ack none in 25 s;
+      wrangler tail showed "Canceled" (client gave up at 15 s). The wedge did not clear in ~25
+      minutes and was cleared by wrangler deploy (bf0b81f7) recreating isolates - shipping the same
+      bytes must not be the remedy. Which handler stalled first is NOT known: the check-in path
+      awaits request.text(), a KV get for auth, a KV get and put for checkin metadata, and a KV
+      list for commands, with no fetch subrequest, so an unsettled KV operation is the leading
+      hypothesis and the fix must not depend on it.
+
 invariants:
   - id: I1
     rule: "phase_deps_must_be_complete"

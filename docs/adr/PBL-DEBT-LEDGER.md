@@ -2381,13 +2381,14 @@
 | D-219 | Policy signature BLOCK path untested | CLOSED (same scenario as D-215 — test-d215-harness.sh + gen-policy-rot.py; 12 PASS / 0 FAIL. Commit fb10e29; artifact /tmp/pbl-d215-ci/pbl-d215-result.txt) | TEST |
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 | D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
+| D-225 | The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate | OPEN (S357: a wedged chain made `/api/agent/checkin` and `/api/agent/command-ack` hang while every unserialised route answered in ~0.6 s; cleared by redeploy, not by the code — docs/artifacts/s357-release-1.0.5.txt) | SERVERLESS |
 
-**Totals** (measured 2026-11-16 by counting this file's own table rows): **59 items —
-55 CLOSED, 4 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
-D-130 signing certificate, D-134 TPM NV hierarchy). The previous line claimed
+**Totals** (recounted 2026-11-26 by counting this file's own table rows): **60 items —
+55 CLOSED, 5 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
-**64 debt items, 60 CLOSED, 4 OPEN** — because it also carries the legacy
+**65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
 D-001…D-014 series from `DEBT-LEDGER.md` and does not carry D-212…D-220. Neither
 number is derived from the other; each is counted where it lives.
 
@@ -2441,3 +2442,57 @@ number is derived from the other; each is counted where it lives.
 - **Artifacts**: `firmware/PblPkg/artifacts/d224-host-tests.txt`,
   `firmware/PblPkg/artifacts/d224-mutation-check.txt`
 
+
+### D-225 — The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate
+- **Status**: OPEN (found 2026-11-26, session 357, while publishing 1.0.5)
+- **Category**: SERVERLESS / AVAILABILITY
+- **What the code does**: `worker.ts:365` holds a module-level `let mutationChain`, and
+  `serializeMutation(fn)` chains each mutation onto it —
+  `const run = mutationChain.then(fn, fn); mutationChain = run.then(() => undefined, () => undefined)`.
+  The chain exists for a real reason: KV has no compare-and-swap, so two concurrent
+  read-modify-writes lose one (`worker.test.ts` around line 5610 documents the lost update it
+  was added to stop). What it does not have is any bound: the next entry waits on the previous
+  promise **forever** if that promise never settles, and a rejection handler on the *second*
+  chain keeps the head from being poisoned by a *throw*, which is not the same as being
+  poisoned by a *hang*.
+- **Why it matters**: the only two routes on the chain are the two the agent uses on every
+  poll — `POST /api/agent/checkin` and `POST /api/agent/command-ack`, plus the admin
+  flag/recover/track actions. A single stuck handler therefore takes the device offline to the
+  fleet: no check-ins, no commands delivered, no ACKs recorded, no updates offered — while the
+  device's own network is healthy and every unserialised route still answers. There is no
+  signal anywhere that says "the mutation queue is stuck"; the device simply looks quiet, and a
+  quiet device is indistinguishable from a powered-off one.
+- **Measured, not hypothesised** (session 357, live Worker, from the lab laptop):
+
+  | request | result |
+  |---|---|
+  | `GET /api/health` | 200 in 0.66 s |
+  | `GET /api/agent/update?platform=win` | 401 in 0.72 s |
+  | `GET /api/devices` | 401 in 0.60 s |
+  | `POST /api/setup/create-admin` (unserialised) | 409 in 0.56 s |
+  | `POST /api/agent/checkin` (serialised) | **no response in 40 s** |
+  | `POST /api/agent/command-ack` (serialised) | **no response in 25 s** |
+
+  `wrangler tail` showed `POST /api/agent/checkin - Canceled`, i.e. the client gave up after its
+  15 s read timeout while the handler was still pending. MOLE logged a check-in failure every
+  ~53 s from 11:41 until the chain was reset, and could not receive the 1.0.5 release during
+  that window. The wedge did not clear on its own in ~25 minutes.
+- **The remedy used was a redeploy, and that is the defect**: `wrangler deploy` of unchanged
+  code (`bf0b81f7`) recreated the isolates and the unsigned probe answered 401 in 0.73 s.
+  Shipping the same bytes must not be the documented way to unstick a queue; the fix belongs in
+  the code.
+- **What is not yet known**: which handler stalled first. The check-in path awaits
+  `request.text()`, `verifyAgentAuth` (KV get), `getCheckinMetadata` (KV get),
+  `saveCheckinMetadata` (KV put) and `listCommandsForDevice` (KV list) — no `fetch` subrequest
+  — so the most likely candidate is a KV operation whose promise never settled when the client
+  disconnected. That is a hypothesis, not a measurement, and the fix must not depend on it.
+- **Close criteria**: (a) one mutation that never settles cannot block the next — a bounded
+  wait per entry (or a chain that is abandoned on timeout and rebuilt) with the bound asserted
+  by a test that injects a never-settling handler and proves the following mutation still runs;
+  (b) the queue's state is not able to survive a request in a poisoned form — either reset on
+  timeout or moved into something with its own lifetime (a Durable Object), with the choice
+  written down; (c) an operator-visible signal when the queue is stuck (a counter/log line),
+  because "device silent" already has too many innocent explanations; (d) evidence that a real
+  check-in succeeds after an induced stall **without** a deploy.
+- **Artifacts**: `docs/artifacts/s357-release-1.0.5.txt` §6 (probe table, tail evidence,
+  redeploy, and the device recovering).
