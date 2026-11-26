@@ -118,3 +118,46 @@ npx electron-builder --linux --publish never                    exit 0
   macOS is unsigned and `mac.notarize: true` is set with no Apple credentials in the workflow — the
   macOS leg may fail or produce unnotarised DMGs, which Gatekeeper will warn about.
 - **The AppImage is unsigned too**, and was built for x64 only (that is the configured target).
+
+## First CI evidence: the Windows identity gate works, and its id is checkout-dependent
+
+The `Windows artifacts` workflow (also tag-triggered) ran `scripts/build-windows-artifacts.ps1` on
+a real GitHub Windows runner and passed in 1m54s:
+
+```
+Build identity: 20261126.49329a5f3529
+==> verifying the build identity reached the binary
+    lockdown-agent 1.0.5 (frozen=True, build=20261126.49329a5f3529)
+    lockdown-agent.exe     16389423
+    lockdown-installer.exe 15319203
+    lockdown-service.exe    9400787
+```
+
+So S359's stamp step and its identity gate both work where it matters — on the runner that
+publishes. But the id is **not** the one this host computes for the same commit
+(`20261126.69a3e4156d16`), and the reason is worth stating precisely: the hash is taken over the
+**checked-out bytes**, and a Windows checkout with `core.autocrlf` produces CRLF where Linux
+produces LF. Same commit, different bytes, different id.
+
+That is defensible — the id identifies the tree that was built, and a Windows and a Linux binary of
+one commit are not the same artifact — but the comment in `stamp_buildinfo.py` says "a tree stamped
+by either path reports the same id", and that is only true when the file bytes match. Measured:
+true for the tarball-on-MOLE vs Python-on-Linux pair (both `69a3e4156d16`), false across a CRLF
+checkout. **Not fixed here**; the honest fix is to normalise line endings before hashing, which
+changes every existing id and should not be slipped into a release that is mid-flight.
+
+## Pipeline failures found by actually running it (the never-run workflow)
+
+Five separate defects, each one only visible by executing the pipeline:
+
+| # | failure | cause | fix |
+|---|---|---|---|
+| 1 | test job died in 5 s | `ModuleNotFoundError: yaml` — the graph gate ran without PyYAML | install pyyaml, as `ci.yml` does |
+| 2 | graph sweep: 4 × I2 | shallow checkout, so cited commits "do not exist" | `fetch-depth: 0` (cited by I2), as `ci.yml` does |
+| 3 | Agent — tests exit **4** | `pyproject.toml` sets `--timeout=30`; the job installed a hand-listed `pytest`, not `pytest-timeout` | install `requirements-dev.txt` |
+| 4 | `make test-scripts` 1 file red | `test_cross_surface_contract` had been failing since S350: three Worker-only backup routes unclassified | added to `KNOWN_GAPS` with reasons (baseline widened truthfully, nothing closed) |
+| 5 | my own I5 violation | the S361 RULE-ZERO was one paragraph, not path-carrying bullets | rewritten; the ordering note kept honest (block written at close) |
+
+Failures 1, 2 and 3 are the same shape: **`release.yml` was written by copying `ci.yml`'s steps but
+not their prerequisites.** The workflow lints clean and reads correctly; only running it shows the
+difference.

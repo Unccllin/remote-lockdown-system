@@ -417,11 +417,12 @@ jobs:
 
       - run: npm ci
 
-      # Install server production deps (bundled into the Electron app)
-      - run: cd ../server && npm ci --omit=dev
-
-      # Rebuild native modules (sqlite3) against Electron's ABI
-      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
+      # The Electron app is a serverless shell: it bundles its own dependencies plus the built
+      # dashboard, and every API call goes to the Worker. `server/` is neither in `files` nor in
+      # `extraResources`, and nothing in main.js/server-starter.js references it -- so installing
+      # and ABI-rebuilding `../server/node_modules` produced nothing the package uses, while
+      # failing every Electron job with ENOENT on `server/node_modules/package.json` (S361).
+      # The app's own native modules are rebuilt by electron-builder itself.
 
       # Build dashboard (needed by Electron app)
       - run: cd ../dashboard && npm ci && npm run build
@@ -447,15 +448,17 @@ jobs:
   # Build Electron app for macOS (per-arch, native runners)
   #
   # Uses a matrix to build each arch on its native runner:
-  #   - macos-latest (arm64): builds arm64 agent + arm64 sqlite3 → arm64 DMG
-  #   - macos-15-intel (x64): builds x64 agent   + x64 sqlite3   → x64 DMG
+  #   - macos-latest (arm64): builds arm64 agent + arm64 DMG
+  #   - macos-15-intel (x64): builds x64 agent   + x64 DMG
   #
-  # This avoids the arch-mismatch bug where a single runner builds one arch
-  # of agent binary and sqlite3, then bundles it into both DMGs. Both the
-  # agent binary (via build.sh → PyInstaller) and sqlite3 (via electron-rebuild)
-  # are arch-specific — PyInstaller bundles the Python interpreter, and
-  # electron-rebuild compiles against the host ABI. Cross-compiling either
-  # on the wrong runner produces a binary that crashes on launch.
+  # This avoids the arch-mismatch bug where a single runner builds one arch of
+  # agent binary and then bundles it into both DMGs: PyInstaller bundles the
+  # Python interpreter, so the agent binary is arch-specific, and cross-compiling
+  # it on the wrong runner produces a binary that crashes on launch.
+  #
+  # (The app's own native modules are rebuilt by electron-builder for the host
+  # arch. The `../server/node_modules` rebuild these jobs used to run has been
+  # removed: server/ is not packaged and nothing in the app loads it -- S361.)
   #
   # NOTE: We build with --publish never here. Each leg produces its own
   # latest-mac.yml listing only its own arch. If both legs published
@@ -495,13 +498,12 @@ jobs:
 
       - run: npm ci
 
-      # Install server production deps (bundled into the Electron app)
-      - run: cd ../server && npm ci --omit=dev
-
-      # Rebuild sqlite3 against Electron's ABI for this runner's native arch.
-      # No cross-compilation, no stash/restore — the host arch matches the
-      # electron-builder --arch flag below.
-      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
+      # The Electron app is a serverless shell: it bundles its own dependencies plus the built
+      # dashboard, and every API call goes to the Worker. `server/` is neither in `files` nor in
+      # `extraResources`, and nothing in main.js/server-starter.js references it -- so installing
+      # and ABI-rebuilding `../server/node_modules` produced nothing the package uses, while
+      # failing every Electron job with ENOENT on `server/node_modules/package.json` (S361).
+      # The app's own native modules are rebuilt by electron-builder itself.
 
       - run: cd ../dashboard && npm ci && npm run build
 
@@ -689,11 +691,12 @@ jobs:
 
       - run: npm ci
 
-      # Install server production deps (bundled into the Electron app)
-      - run: cd ../server && npm ci --omit=dev
-
-      # Rebuild native modules (sqlite3) against Electron's ABI
-      - run: npx electron-rebuild -f -w sqlite3 -m ../server/node_modules
+      # The Electron app is a serverless shell: it bundles its own dependencies plus the built
+      # dashboard, and every API call goes to the Worker. `server/` is neither in `files` nor in
+      # `extraResources`, and nothing in main.js/server-starter.js references it -- so installing
+      # and ABI-rebuilding `../server/node_modules` produced nothing the package uses, while
+      # failing every Electron job with ENOENT on `server/node_modules/package.json` (S361).
+      # The app's own native modules are rebuilt by electron-builder itself.
 
       - run: cd ../dashboard && npm ci && npm run build
 
