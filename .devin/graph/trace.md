@@ -9047,3 +9047,13 @@ attempt while `consolidate` holds the lock.
 - Rebuild `binary:lockscreen` and `binary:installer` from the 1.0.5 tree so the new-install path
   stops serving pre-1.0.5 binaries, and read `/api/health` `kv_stalls` the next time a check-in
   fails.
+
+---
+
+## Session 361 — 2026-11-26
+
+### RULE-ZERO
+**Written at session close; the reads below happened before the first edit, but the block was not
+logged first, which is out of order for I5 and is recorded as such rather than back-dated.**
+**Read**: `.github/workflows/release.yml` (689 lines: the `v*` trigger, the `test` gate, `publish-agent-binaries` on four runners, `publish-checksums`, `publish-agent-release-metadata`, `release-windows`, `build-macos`/`publish-macos`, `release-linux`); `electron/package.json` (`build` field: publish provider github, artifactName absent, linux AppImage x64, win nsis+msi, mac dmg ×2 with `notarize: true`); `electron/jest.config.js` (electron stubbed by `tests/electron-stub.js`); `electron/tests/electron-stub.js` (no `contextBridge`, and its docstring says additions belong there deliberately); `electron/preload.js` and `main.js` (the `ELECTRON_API_BASE_URL` env channel); `agent/build.sh`; `agent/_buildinfo.py`; `agent/tests/test_version_identity.py`; `git tag -l` and `gh release list` (both empty).
+**Finding**: the GitHub release had never been cut, and two of its inputs were still anonymous. `agent/build.sh` — which builds the Linux and macOS agent binaries bundled into the Electron release — did not stamp `_buildinfo.py` (S359 fixed only the Windows paths), and `preload.js` reported `npm_package_version || '1.0.0'`, which in a packaged app means the UI says 1.0.0 whatever was built. Both are the S286 shape at a new layer, and both would have shipped in the first release. The stamping therefore moves to one Python implementation with three callers, and the version comes from `app.getVersion()` over the env channel `main.js` already uses for the API base URL. Deliberately not fixed: unsigned binaries and `notarize: true` with no Apple credentials — those are policy/credential decisions, and the honest move is to record the risk rather than silently claim signing.

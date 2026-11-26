@@ -1,0 +1,120 @@
+# S361 — first GitHub release: Electron 1.0.5, and two identity gaps fixed on the way
+
+2026-11-26 · `scripts/stamp_buildinfo.py` (new), `agent/build.sh`, `scripts/stamp-buildinfo.ps1`,
+`electron/package.json`, `electron/main.js`, `electron/preload.js`, `electron/tests/*`
+
+## Starting point: nothing has ever been released
+
+```
+git tag -l          -> (empty)
+gh release list     -> (empty)
+```
+
+`release.yml` is 689 lines and triggers on `v*`: gates → agent binaries (4 runners) → checksums →
+signed metadata → Electron Windows, macOS ×2, Linux. It had never run, so this is the first cut.
+
+## Gap 1 — the Linux/macOS agent binaries had no build identity
+
+`agent/build.sh` builds the agent binaries that `release.yml` bundles into the Electron release on
+linux and macOS. It did not stamp `_buildinfo.py`, so those binaries would have shipped
+`build=unknown.unknown` — the S286 defect, already fixed for Windows in S359 and still live here.
+
+The fix moves the computation to `scripts/stamp_buildinfo.py` (one implementation) and makes the
+other two entry points call it: `scripts/stamp-buildinfo.ps1` is now a thin wrapper and
+`agent/build.sh` invokes the Python directly. Three copies would drift; the repo has been here
+before with build logic.
+
+**Equivalence proven, not assumed.** The PowerShell implementation produced
+`20261126.69a3e4156d16` for the tree on MOLE; the Python one, run on the same tree, printed:
+
+```
+Build identity: 20261126.69a3e4156d16
+```
+
+…and the PS wrapper on MOLE, delegating to Python, printed the same value. So moving the
+implementation did not rename any build.
+
+**The release path itself now stamps.** Built through `agent/build.sh --agent-only` on this host:
+
+```
+Build identity: 20261126.69a3e4156d16
+$ dist/lockdown-agent --version
+lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+```
+
+`agent/_buildinfo.py` was restored to its committed placeholders afterwards, and
+`agent/tests/test_version_identity.py` passes (4 tests) — a source checkout still does not
+impersonate a release.
+
+Also fixed in passing: `build.sh` hardcoded `PYTHON="python3"`, which the Windows leg of
+`publish-agent-binaries` runs under Git Bash where only `python` is guaranteed. It now falls back
+when `python3` is absent.
+
+## Gap 2 — the packaged app reported the wrong version
+
+`electron/preload.js` exposed `version: process.env.npm_package_version || '1.0.0'`.
+`npm_package_version` exists only when the app is started through npm, so a **packaged 1.0.5 build
+would display 1.0.0** — an identity that cannot tell two builds apart, one layer below S286.
+
+`main.js` now sets `process.env.ELECTRON_APP_VERSION = app.getVersion()` on the same channel it
+already uses for `ELECTRON_API_BASE_URL`, and the preload reads that first and no longer invents a
+version (`''` instead of `'1.0.0'`).
+
+Teeth — restoring the old expression fails three tests with exactly the lie:
+
+```
+● reports the version main.js hands it — the packaged version
+  Expected: "1.0.5"      Received: "1.0.0"
+● prefers that over npm_package_version when both exist
+  Expected: "1.0.5"      Received: "0.0.0-dev"
+● does not invent a version when neither is set
+  Expected: ""
+```
+
+The tests needed a `contextBridge` in `tests/electron-stub.js` — which is where its own docstring
+says preload dependencies belong — so this exercised the real bridge rather than grepping the
+source. Electron suite: 30 → 35 tests.
+
+(The version bump itself was `npm version 1.0.5 --no-git-tag-version`, so `package.json` and
+`package-lock.json` agree. `electron/package.json` had to be re-edited as text afterwards because
+a `json.dumps` round-trip escaped the em dash and ©; the diff is now exactly two lines.)
+
+## Gap 3 — release asset names contained spaces
+
+The first AppImage came out as `Remote Lockdown Admin-1.0.5.AppImage` while `latest-linux.yml`
+listed `Remote-Lockdown-Admin-1.0.5.AppImage`: electron-builder sanitises the name at upload time.
+A first release should not depend on that hop, so `artifactName` is now explicit
+(`${name}-${version}.${ext}`). Rebuilt, and file and manifest agree:
+
+```
+remote-lockdown-admin-1.0.5.AppImage      123 MB
+latest-linux.yml: url: remote-lockdown-admin-1.0.5.AppImage
+```
+
+## Local smoke build (before spending a tag)
+
+`npx electron-builder --linux --publish never` succeeded from a clean `dist-electron/`:
+`@electron/rebuild` ran, Linux unpacked tree packaged, AppImage + block map + `latest-linux.yml`
+produced, `version: 1.0.5`. One advisory worth knowing rather than fixing now: electron-builder
+warns that `desktopName` is unset, so desktop environments may not associate the running window
+with its `.desktop` entry.
+
+## Gates
+
+```
+agent/.venv/bin/python scripts/test_stamp_buildinfo.py        10 passed
+agent/.venv/bin/python scripts/test_build_windows_artifacts.py 11 passed
+scripts/run-agent-tests.sh                                    1005 passed
+cd electron && npm test                                         35 passed (was 30)
+npx electron-builder --linux --publish never                    exit 0
+```
+
+## What is still not proven
+
+- **The release pipeline itself has never run.** Every job above is unexercised in CI; the tag is
+  the first execution. `publish-agent-binaries` runs `build.sh` on four runners including Windows
+  under Git Bash.
+- **No code signing.** The Windows artifacts are unsigned (Azure Trusted Signing is commented out),
+  macOS is unsigned and `mac.notarize: true` is set with no Apple credentials in the workflow — the
+  macOS leg may fail or produce unnotarised DMGs, which Gatekeeper will warn about.
+- **The AppImage is unsigned too**, and was built for x64 only (that is the configured target).
