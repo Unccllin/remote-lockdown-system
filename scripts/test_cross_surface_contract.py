@@ -97,10 +97,6 @@ KNOWN_GAPS = {
     ("GET", "/api/admin/backups"): "lists R2 backups; R2 is serverless-only (S350), Express backs up via scripts/backup.sh",
     ("POST", "/api/admin/backups"): "creates an encrypted R2 backup; Express has no R2 store",
     ("POST", "/api/admin/restore"): "restores from an R2 backup; Express restores via scripts/restore.sh",
-    # ADR-011 (D-226) replaced "issue a key to anyone with the hardware UUID" with an approval queue,
-    # implemented on the Worker first. Express still ships the old trust model in
-    # server/src/routes/rearm.js, so this is a real, tracked gap rather than a serverless-only design.
-    ("GET", "/api/admin/rearm-requests"): "re-arm approval queue (ADR-011); Express re-arm is still unauthenticated — D-226 stays open for parity",
 }
 
 

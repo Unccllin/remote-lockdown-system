@@ -38,6 +38,7 @@ const metricsRoutes = require('./routes/metrics');
 const adminsRoutes = require('./routes/admins');
 const enrollRoutes = require('./routes/enroll');
 const rearmRoutes = require('./routes/rearm');
+const rearmRequestsRoutes = require('./routes/rearmRequests');
 const downloadRoutes = require('./routes/downloads');
 const hwTestArtifactRoutes = require('./routes/hwTestArtifact');
 const pblRoutes = require('./routes/pbl');
@@ -173,6 +174,8 @@ mountApi('/api/installer', dashboardLimiter, installerRoutes);
 mountApi('/api/health', healthRoutes); // No rate limit — health checks
 app.use('/metrics', metricsRoutes);    // No rate limit — Prometheus scraping
 mountApi('/api/admins', dashboardLimiter, adminsRoutes);
+// Re-arm approvals (ADR-011): operator traffic, super-admin enforced inside the router.
+mountApi('/api/admin/rearm-requests', dashboardLimiter, rearmRequestsRoutes);
 mountApi('/api/hw-test-artifact', dashboardLimiter, hwTestArtifactRoutes);
 // S142: read-only integration inventory (ours — see docs/adr/INTEGRATION-OWNERSHIP.md)
 mountApi('/api/integrations', dashboardLimiter, integrationsRoutes);

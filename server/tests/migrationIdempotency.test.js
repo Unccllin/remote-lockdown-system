@@ -41,6 +41,7 @@ const EXPECTED_VERSIONS = [
   '017_device_efs_certs',
   '018_agent_version',
   '019_location_observed_at',
+  '020_rearm_requests',
 ];
 
 async function appliedVersions() {
