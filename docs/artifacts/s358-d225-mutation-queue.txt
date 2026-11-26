@@ -1,0 +1,79 @@
+# S358 — D-225: the mutation queue can no longer wedge
+
+2026-11-26 · `serverless/worker.ts`, `serverless/worker.test.ts`
+
+## The defect, as filed
+
+`worker.ts:365` kept a module-level `mutationChain` and chained every mutation onto it with
+`mutationChain.then(fn, fn)` — an **unbounded** wait on the previous entry. One handler whose
+promise never settled therefore blocked every later mutation, and the only two routes on the
+chain are the two the agent calls on every poll:
+
+```
+POST /api/agent/checkin        (worker.ts:1917)
+POST /api/agent/command-ack    (worker.ts:1920)
+```
+
+Measured live on 2026-11-26 before the fix: both routes produced no response in 25–40 s while
+every unserialised route answered in ~0.6 s; a real device could not check in for 25 minutes;
+`wrangler tail` showed `Canceled`; a redeploy of unchanged code was the only way to clear it.
+
+## What changed
+
+**The wait is bounded, not the handler.** A Worker cannot cancel a promise, so bounding `fn()`
+would be theatre. Instead:
+
+- `MUTATION_QUEUE_WAIT_MS = 5000` — far above a handler's handful of KV round trips.
+- `settleWithin(previous, waitMs)` resolves `'settled'` or `'timeout'`, always attaching both
+  handlers (so an abandoned promise cannot later surface as an unhandled rejection) and always
+  clearing its timer (so a settled entry does not hold the isolate open).
+- On timeout the entry **proceeds**, increments `mutationQueueStalls`, and logs
+  `[mutation-queue] the previous mutation did not settle within … running this one anyway`.
+- The chain is rebuilt from the *new* entry, so an abandoned predecessor never re-enters the
+  queue — the stall costs at most one bounded wait, not one per request.
+- `mutationQueueStats()` is published on `GET /api/health` as `mutation_queue: {stalls, wait_ms}`.
+  A wedged queue used to be invisible: a device that could not check in looked exactly like a
+  device that was switched off.
+
+**The trade, stated rather than hidden:** this gives up ordering *within an isolate* when the
+bound is exceeded. That is the only ordering the design ever provided — the block comment above
+the queue already says cross-isolate races remain — so the fix removes a liveness failure without
+pretending to add consistency that was never there. A Durable Object is the real answer to
+cross-isolate serialization and is deliberately not attempted here.
+
+## Teeth: both checks fail when the fix is removed
+
+Reverting `serializeMutation` to `mutationChain.then(fn, fn)` (nothing else changed):
+
+```
+helper level   Tests  5 failed | 1 passed   (the six D-225 tests)
+               …the wedge test hangs until vitest's 5 s timeout
+route level    × a real serialized route still answers while the queue is held
+               Error: Test timed out in 5000ms.
+```
+
+The one that passes in the reverted tree is `is not poisoned by a mutation that throws` — a
+rejection did propagate correctly even before; only a *hang* wedged the chain, which is why the
+old code looked fine against every existing test.
+
+With the fix:
+
+```
+npx tsc --noEmit -p .     exit 0
+npx vitest run            7 files, 544 tests passed   (was 537: +7)
+```
+
+The route-level test uses fake timers and holds the chain with a never-settling entry, so it
+proves the property at the dispatcher — a request to `/api/agent/checkin` is admitted after the
+bound and reaches its handler (401 for an unsigned body) — rather than only on the helper.
+
+## Still open on D-225
+
+- **The original trigger is still unknown.** The check-in path awaits `request.text()`, KV
+  get/get/put/list and no `fetch` subrequest; an unsettled KV operation is the leading
+  hypothesis, untested. The fix does not depend on knowing it, but the cause is unmeasured.
+- **Deployed evidence is missing.** The fix stops the *failure mode*; whether production is
+  quiet is only observable after a deploy, and no induced stall can be created in the deployed
+  Worker without a test hook (which is not worth shipping).
+- **Criterion (b) is answered by a documented choice, not by a new mechanism**: reset-on-timeout
+  rather than a Durable Object.

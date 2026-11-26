@@ -8,7 +8,7 @@
  * Run with: npx vitest run
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { COMMAND_INDEX_KEY, commandKey } from './kv-store';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -192,12 +192,22 @@ async function parseResponse(resp: Response): Promise<unknown> {
 
 // We need to import the worker handler
 // Since the worker uses `export default`, we import it dynamically
-let worker: { fetch: (req: Request, env: unknown) => Promise<Response> };
+let worker: {
+  fetch: (req: Request, env: unknown) => Promise<Response>;
+  serializeMutation: <T>(fn: () => Promise<T>, waitMs?: number) => Promise<T>;
+  mutationQueueStats: () => { stalls: number; wait_ms: number };
+};
 let resetKeyCache: () => void;
 
 beforeEach(async () => {
   const mod = await import('./worker.js');
-  worker = mod.default;
+  // The queue helpers are named exports; `mod.default` is the handler object (fetch + scheduled).
+  // Both halves are needed, so the suite's `worker` handle carries the two together.
+  worker = {
+    fetch: mod.default.fetch,
+    serializeMutation: mod.serializeMutation,
+    mutationQueueStats: mod.mutationQueueStats,
+  };
   resetKeyCache = mod.resetKeyCache;
 });
 
@@ -6260,5 +6270,124 @@ describe('ADR-006: per-device secret stores', () => {
     expect(release.status).toBe(200);
     expect(await env.LOCKDOWN_KV.get(`encryption_keys:${a.id}`)).toBeNull();
     expect(await env.LOCKDOWN_KV.get(`bios_passwords:${a.id}`)).toBeNull();
+  });
+});
+
+/**
+ * D-225: the mutation queue must not be able to wedge.
+ *
+ * The queue serialises read-modify-write mutations inside one isolate because KV has no
+ * compare-and-swap (S269). It used to be `mutationChain.then(fn, fn)` — an unbounded wait on the
+ * previous entry — so a single handler whose promise never settled blocked every later mutation.
+ * Measured 2026-11-26 in production: `/api/agent/checkin` and `/api/agent/command-ack` (the only
+ * two routes on the chain) stopped answering while every unserialised route answered in ~0.6 s,
+ * a real device could not check in for 25 minutes, and a redeploy of unchanged code was the only
+ * way to clear it.
+ *
+ * The fix bounds the *wait*, not the handler: an entry that times out proceeds, logs and counts.
+ * These tests pin all three parts, because the failure mode was "queue stuck forever", which no
+ * assertion about mutation *results* can see.
+ */
+describe('D-225: the mutation queue cannot wedge', () => {
+  it('runs a mutation even when the previous one never settles', async () => {
+    // The pathological case: a handler awaiting something that never resolves.
+    const neverSettles = new Promise<void>(() => {});
+    void worker.serializeMutation(() => neverSettles, 20);
+
+    const started = Date.now();
+    const result = await worker.serializeMutation(async () => 'ran-anyway', 20);
+    const elapsed = Date.now() - started;
+
+    expect(result).toBe('ran-anyway');
+    expect(elapsed).toBeLessThan(2000); // it waited the bound, not forever
+  });
+
+  it('does not wait at all when the previous mutation settled', async () => {
+    await worker.serializeMutation(async () => undefined, 5000);
+
+    const started = Date.now();
+    await worker.serializeMutation(async () => undefined, 5000);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('still serialises mutations that settle, in call order', async () => {
+    const order: string[] = [];
+    const slow = worker.serializeMutation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      order.push('first');
+    });
+    const fast = worker.serializeMutation(async () => {
+      order.push('second');
+    });
+
+    await Promise.all([slow, fast]);
+    expect(order).toEqual(['first', 'second']);
+  });
+
+  it('is not poisoned by a mutation that throws', async () => {
+    await expect(
+      worker.serializeMutation(async () => {
+        throw new Error('handler blew up');
+      }),
+    ).rejects.toThrow('handler blew up');
+
+    await expect(worker.serializeMutation(async () => 'after-failure')).resolves.toBe(
+      'after-failure',
+    );
+  });
+
+  it('counts and logs a stall, so a wedged queue is visible', async () => {
+    const before = worker.mutationQueueStats().stalls;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      void worker.serializeMutation(() => new Promise<void>(() => {}), 20);
+      await worker.serializeMutation(async () => 'ok', 20);
+
+      const after = worker.mutationQueueStats();
+      expect(after.stalls).toBeGreaterThan(before);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('[mutation-queue]'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a real serialized route still answers while the queue is held', async () => {
+    // The helper being bounded is not the property that failed in production — the route was.
+    // Hold the chain exactly the way a stalled handler did, then dispatch a real request at
+    // /api/agent/checkin, which is one of the two routes on it. Only releasing the bound admits
+    // it, so this fails if the timeout is ever removed from the queue. Fake timers keep it fast.
+    vi.useFakeTimers();
+    try {
+      void worker.serializeMutation(() => new Promise<void>(() => {}));
+
+      const pending = worker.fetch(makeRequest('POST', '/api/agent/checkin', {}), {
+        ADMIN_TOKEN: 'test-admin-token',
+        LOCKDOWN_KV: new MockKV(),
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const resp = await pending;
+      // It reached the handler and was refused by auth; before the fix it never got that far.
+      expect(resp.status).toBe(401);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes the stall counter on /api/health', async () => {
+    const resp = await worker.fetch(
+      makeRequest('GET', '/api/health'),
+      { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV() },
+    );
+    const data = (await parseResponse(resp)) as {
+      mutation_queue: { stalls: number; wait_ms: number };
+    };
+
+    expect(resp.status).toBe(200);
+    expect(data.mutation_queue).toHaveProperty('stalls');
+    expect(data.mutation_queue).toHaveProperty('wait_ms');
+    // The production bound, not a test one: an operator reading this needs to know the real value.
+    expect(data.mutation_queue.wait_ms).toBe(5000);
   });
 });

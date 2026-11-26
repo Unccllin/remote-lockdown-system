@@ -67,10 +67,14 @@ function newestFirst<T extends { created_at?: string | null }>(rows: T[]): T[] {
 }
 
 async function handleHealth(): Promise<Response> {
+  // D-225: a wedged mutation queue used to be invisible — a device that could not check in
+  // looked exactly like a device that was switched off. Publishing the counter costs nothing
+  // (it is a module variable, not a KV read) and makes the condition visible without tail.
   return jsonResponse({
     status: 'ok',
     timestamp: new Date().toISOString(),
     serverless: true,
+    mutation_queue: mutationQueueStats(),
   });
 }
 
@@ -361,15 +365,84 @@ async function handleUninstallAuthVerify(request: Request, env: Env): Promise<Re
  * A promise chain serialises requests served by the same isolate, which is the only case that
  * can be fixed without Durable Objects. Cross-isolate races remain for those stores; the fix is
  * the same one, applied store by store.
+ *
+ * The chain must not be able to wedge (D-225). `mutationChain.then(fn, fn)` waits forever, so one
+ * handler whose promise never settles took every later mutation with it — and the only routes on
+ * the chain are `/api/agent/checkin` and `/api/agent/command-ack`, the two the agent calls on
+ * every poll. Measured 2026-11-26: both hung while every unserialised route answered in ~0.6 s,
+ * a device could not check in for 25 minutes, and only a redeploy cleared it.
+ *
+ * So the **wait** is bounded, not the handler (a Worker cannot cancel one anyway): an entry that
+ * times out waiting proceeds, logs, and counts. That trades ordering *within an isolate* — the
+ * only ordering this design ever provided — for liveness, which is the right way round here: a
+ * lost update on an enrolment or a list is a bug, while a wedged queue is an outage.
  */
+
+/**
+ * How long a mutation waits for the previous one before running anyway.
+ *
+ * Generous next to a handler's handful of KV round trips, and finite, which is the whole point.
+ * Overridable per call so a test can use milliseconds instead of seconds.
+ */
+export const MUTATION_QUEUE_WAIT_MS = 5000;
+
 let mutationChain: Promise<unknown> = Promise.resolve();
-function serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
-  const run = mutationChain.then(fn, fn);
+let mutationQueueStalls = 0;
+
+/**
+ * Resolve `'settled'` when `promise` settles and `'timeout'` when `ms` elapses first.
+ *
+ * Both handlers are always attached, so an abandoned promise cannot surface as an unhandled
+ * rejection later, and the timer is cleared so a settled entry does not hold the isolate open.
+ */
+function settleWithin(promise: Promise<unknown>, ms: number): Promise<'settled' | 'timeout'> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve('timeout');
+      }
+    }, ms);
+    const finish = (): void => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        resolve('settled');
+      }
+    };
+    promise.then(finish, finish);
+  });
+}
+
+export function serializeMutation<T>(
+  fn: () => Promise<T>,
+  waitMs: number = MUTATION_QUEUE_WAIT_MS,
+): Promise<T> {
+  const previous = mutationChain;
+  const run = (async (): Promise<T> => {
+    if ((await settleWithin(previous, waitMs)) === 'timeout') {
+      mutationQueueStalls += 1;
+      console.warn(
+        `[mutation-queue] the previous mutation did not settle within ${waitMs} ms — running ` +
+          'this one anyway so the endpoint stays reachable (D-225). Two mutations in this ' +
+          `isolate may now overlap; stalls so far: ${mutationQueueStalls}.`,
+      );
+    }
+    return fn();
+  })();
+  // Whatever happened above, the chain must continue from a settled promise, so an abandoned
+  // predecessor never re-enters the queue.
   mutationChain = run.then(
     () => undefined,
     () => undefined,
   );
   return run;
+}
+
+/** Observability hook (D-225): how often a mutation had to abandon the queue. */
+export function mutationQueueStats(): { stalls: number; wait_ms: number } {
+  return { stalls: mutationQueueStalls, wait_ms: MUTATION_QUEUE_WAIT_MS };
 }
 
 async function handleEnroll(request: Request, env: Env): Promise<Response> {

@@ -2496,3 +2496,20 @@ number is derived from the other; each is counted where it lives.
   check-in succeeds after an induced stall **without** a deploy.
 - **Artifacts**: `docs/artifacts/s357-release-1.0.5.txt` §6 (probe table, tail evidence,
   redeploy, and the device recovering).
+- **Progress (S358, 2026-11-26)**: the liveness half is fixed and the item stays OPEN only for the
+  deployed evidence. `serializeMutation` now bounds the **wait** on the previous entry
+  (`MUTATION_QUEUE_WAIT_MS = 5000`) instead of waiting forever, and an entry that times out
+  proceeds, increments a counter and logs `[mutation-queue] …`. The chain is rebuilt from the new
+  entry, so an abandoned predecessor never re-enters the queue and the stall costs one bounded
+  wait rather than one per request. `mutationQueueStats()` is published on `GET /api/health` as
+  `mutation_queue: {stalls, wait_ms}` so a wedged queue is visible without `wrangler tail`.
+  Criterion (b) is answered by that documented choice (reset-on-timeout) rather than by a Durable
+  Object, which is named in the code as the real cross-isolate answer and deliberately not
+  attempted here. Seven tests in `worker.test.ts` pin it, and both the helper-level wedge test and
+  a dispatcher-level test (`a real serialized route still answers while the queue is held`, fake
+  timers, 5 s bound) fail when the old unbounded chain is put back — measured, not assumed.
+  `npx tsc --noEmit -p .` exit 0; `npx vitest run` 544 passed (was 537).
+  **What is still unproven**: the original trigger (the leading hypothesis is an unsettled KV
+  operation; the check-in path has no `fetch` subrequest), and that production stays quiet —
+  which only a deploy can show, and no induced stall can be created in the deployed Worker
+  without a test hook worth shipping. Evidence: `docs/artifacts/s358-d225-mutation-queue.txt`.
