@@ -62,7 +62,7 @@ def _build_readclock_command() -> bytes:
     return struct.pack(">HII", TPM_ST_NO_SESSIONS, 10, TPM_CC_READ_CLOCK)
 
 
-def parse_readclock_response(resp: bytes) -> dict | None:
+def parse_readclock_response(resp: bytes | None) -> dict | None:
     """Parse a TPM2_ReadClock response into counter fields.
 
     Pure function — separated from the TBS submission so it is unit-testable
@@ -112,7 +112,10 @@ def read_tpm_counters() -> dict | None:
         return None
 
     try:
-        tbs = ctypes.windll.tbs
+        tbs = getattr(ctypes, "windll", None)
+        if tbs is None:  # not present on non-Windows hosts
+            raise AttributeError("windll")
+        tbs = tbs.tbs
     except (OSError, AttributeError):
         log.debug("TBS (tbs.dll) not available")
         return None

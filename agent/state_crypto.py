@@ -145,8 +145,11 @@ def _dpapi_protect(plaintext: bytes) -> bytes | None:
                 ("pbData", ctypes.POINTER(ctypes.c_char)),
             ]
 
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:  # not present on non-Windows hosts
+            raise AttributeError("windll")
+        crypt32 = windll.crypt32
+        kernel32 = windll.kernel32
 
         # Prepare input blob
         in_blob = DATA_BLOB()
@@ -205,8 +208,11 @@ def _dpapi_unprotect(ciphertext: bytes) -> bytes | None:
                 ("pbData", ctypes.POINTER(ctypes.c_char)),
             ]
 
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:  # not present on non-Windows hosts
+            raise AttributeError("windll")
+        crypt32 = windll.crypt32
+        kernel32 = windll.kernel32
 
         # Prepare input blob
         in_blob = DATA_BLOB()

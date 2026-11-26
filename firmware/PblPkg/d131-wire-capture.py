@@ -408,8 +408,7 @@ def generate_assets(
     # already published (GET /v1/admin/key-info -> kid + spki). Generating a local key in
     # that case would pin a signer that never answers, which is exactly what kept the
     # firmware from verifying this server's verdicts (S239).
-    external_signer = bool(verdict_kid_hex and verdict_spki_hex)
-    if external_signer:
+    if verdict_kid_hex and verdict_spki_hex:  # external signer supplies kid + spki
         verdict_kid = bytes.fromhex(verdict_kid_hex)
         verdict_spki = bytes.fromhex(verdict_spki_hex)
         # The firmware fails closed on an absent chain (D-205), so an external signer
@@ -486,6 +485,8 @@ def generate_assets(
             .sign(verdict_ca_key, hashes.SHA256())
         )
         verdict_leaf_der = verdict_leaf.public_bytes(serialization.Encoding.DER)
+        # local key: leaf first, ROOT last (the form CborDecode.c:924 chains; external signers supply their own)
+        verdict_chain = [verdict_leaf_der, verdict_ca_der]
         verdict_spki = verdict_key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,

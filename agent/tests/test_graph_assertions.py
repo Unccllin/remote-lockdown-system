@@ -10,29 +10,29 @@ Debt items covered:
   on top of the original I4/I5/I7 invariant checks.
 """
 
+import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-# Add graph directory to path
 _GRAPH_DIR = Path(__file__).resolve().parent.parent.parent / ".devin" / "graph"
-sys.path.insert(0, str(_GRAPH_DIR))
-from graph_assert import (  # noqa: E402
-    GraphViolationError,
-    artifact_supports_claim,
-    assert_all_invariants,
-    assert_artifact_quality,
-    assert_claimed_closures_are_real,
-    assert_debt_close_has_evidence,
-    assert_enforcement_path_status,
-    assert_open_debt_list_matches_ledger,
-    assert_orchestrator_knows_all_phases,
-    assert_phase_deps_met,
-    assert_rule_zero_quality,
-    assert_session_end_quality,
-)
+spec = importlib.util.spec_from_file_location("graph_assert", _GRAPH_DIR / "graph_assert.py")
+assert spec is not None and spec.loader is not None
+_graph_assert = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(_graph_assert)
+GraphViolationError = _graph_assert.GraphViolationError
+artifact_supports_claim = _graph_assert.artifact_supports_claim
+assert_all_invariants = _graph_assert.assert_all_invariants
+assert_artifact_quality = _graph_assert.assert_artifact_quality
+assert_claimed_closures_are_real = _graph_assert.assert_claimed_closures_are_real
+assert_debt_close_has_evidence = _graph_assert.assert_debt_close_has_evidence
+assert_enforcement_path_status = _graph_assert.assert_enforcement_path_status
+assert_open_debt_list_matches_ledger = _graph_assert.assert_open_debt_list_matches_ledger
+assert_orchestrator_knows_all_phases = _graph_assert.assert_orchestrator_knows_all_phases
+assert_phase_deps_met = _graph_assert.assert_phase_deps_met
+assert_rule_zero_quality = _graph_assert.assert_rule_zero_quality
+assert_session_end_quality = _graph_assert.assert_session_end_quality
 
 
 class TestI5RuleZeroQuality:
@@ -519,7 +519,7 @@ class TestI2DebtCloseEvidence:
 
     @staticmethod
     def _baselined_orphan() -> str:
-        from graph_assert import load_orphan_baseline
+        load_orphan_baseline = _graph_assert.load_orphan_baseline
 
         orphans = load_orphan_baseline()
         assert orphans, "the orphan baseline should not be empty while history is rewritten"

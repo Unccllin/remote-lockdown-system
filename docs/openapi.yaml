@@ -1494,8 +1494,7 @@ paths:
     post:
       tags: [Agent]
       summary: "S4: escrow the encryption key BEFORE arming the lockdown"
-      description: "The agent calls this before encrypting during a lockdown: it sends the freshly generated key bound to the lockdown command_id and the server persists it encrypted at rest, so the key is escrowed before the point of no return. If escrow fails the agent refuses to encrypt — a device stays unlocked rather than locked-out. Idempotent on (device_id, command_id): retries are safe."
-      description: "S4: Escrow-before-arm — dedicated key-escrow endpoint. The agent calls this BEFORE it starts encrypting during a lockdown. It sends the freshly-generated encryption key bound to the lockdown command_i"
+      description: "S4: Escrow-before-arm — dedicated key-escrow endpoint. The agent calls this BEFORE it starts encrypting during a lockdown. It sends the freshly-generated encryption key bound to the lockdown command_id and the server persists it encrypted at rest, so the key is escrowed before the point of no return. If escrow fails the agent refuses to encrypt — a device stays unlocked rather than locked-out. Idempotent on (device_id, command_id): retries are safe."
       security: []
       responses:
         '200':

@@ -1100,7 +1100,9 @@ debt_items:
 
   - id: D-120
     description: "BitLocker lock state never measured on a real protected volume (BCD and FVE parsing implemented)"
-    close_criteria: "Measure a real BitLocker-protected volume and report locked/unlocked from FVE VMK metadata plus TPM state, not from the BCD heuristic"
+    close_criteria: >-
+      Measure a real BitLocker-protected volume and report locked/unlocked from
+      FVE VMK metadata plus TPM state, not from the BCD heuristic
     status: OPEN
     category: TODO
 

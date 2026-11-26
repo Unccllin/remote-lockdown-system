@@ -200,8 +200,9 @@ class TestSimulatedServer:
 
         assert result["device_id"] == device["id"]
         assert result["status"] == "stolen"
-        assert result["command"] is not None
-        assert result["command"]["type"] == "lockdown"
+        command = result["command"]
+        assert isinstance(command, dict)
+        assert command["type"] == "lockdown"
 
     def test_checkin_unregistered_device_returns_error(self):
         """checkin for an unregistered hostname returns an error."""
@@ -238,9 +239,11 @@ class TestSimulatedServer:
         server.recover_device(device["id"])
 
         result = server.checkin("HP-TEST-001")
-        assert result["command"]["type"] == "unlock"
-        assert result["command"]["key_material"] == "base64key=="
-        assert result["command"]["bios_password"] == "BIOSpw123"
+        command = result["command"]
+        assert isinstance(command, dict)
+        assert command["type"] == "unlock"
+        assert command["key_material"] == "base64key=="
+        assert command["bios_password"] == "BIOSpw123"
 
     def test_command_ack_stores_key_and_bios_password(self):
         """command_ack stores the encryption key and BIOS password."""

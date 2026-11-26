@@ -46,12 +46,13 @@ class TestParseResponse:
     def test_safe_zero(self):
         resp = _make_response(reset_count=1, restart_count=1, safe=0)
         out = tpm_clock.parse_readclock_response(resp)
+        assert out is not None
         assert out["clock_safe"] is False
 
     def test_short_buffer_returns_none(self):
         assert tpm_clock.parse_readclock_response(b"\x00" * 10) is None
         assert tpm_clock.parse_readclock_response(b"") is None
-        assert tpm_clock.parse_readclock_response(None) is None
+        assert tpm_clock.parse_readclock_response(None) is None  # pyright: ignore[arg-type]  # intentional None input, pinned by this test
 
     def test_non_success_code_returns_none(self):
         resp = _make_response(reset_count=5, restart_count=12, resp_code=0x00000100)
@@ -61,6 +62,7 @@ class TestParseResponse:
         # reset=0x01020304, restart=0x05060708 — verify byte order.
         resp = _make_response(reset_count=0x01020304, restart_count=0x05060708)
         out = tpm_clock.parse_readclock_response(resp)
+        assert out is not None
         assert out["reset_count"] == 0x01020304
         assert out["restart_count"] == 0x05060708
 

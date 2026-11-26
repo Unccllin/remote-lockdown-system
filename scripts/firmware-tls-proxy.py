@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import http.server
+from typing import Any
 import ssl
 import sys
 import urllib.error
@@ -38,7 +39,7 @@ class ForwardingHandler(http.server.BaseHTTPRequestHandler):
     target = "http://127.0.0.1:3001"
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, fmt: str, *args) -> None:  # noqa: D102 - quieter default
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: D102 - quieter default
         return
 
     def _forward(self) -> None:

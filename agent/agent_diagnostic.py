@@ -63,7 +63,10 @@ def main():
     try:
         import ctypes
 
-        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:  # not present on non-Windows hosts
+            raise AttributeError("windll")
+        is_admin = windll.shell32.IsUserAnAdmin()
     except (OSError, AttributeError):
         is_admin = False
     check("Running as admin", is_admin, "Agent needs admin for scheduled tasks")
@@ -226,7 +229,9 @@ def main():
 
     section("REGISTRY RUN KEY")
     try:
-        import winreg
+        import importlib
+
+        winreg = importlib.import_module("winreg")  # not present on non-Windows hosts
 
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,

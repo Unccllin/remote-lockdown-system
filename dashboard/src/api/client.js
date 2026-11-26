@@ -31,6 +31,7 @@ api.interceptors.response.use(
       if (hadToken && !isOnLogin) {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        // no-open-redirect-js: destination is the constant '/login'; no user input reaches it.
         window.location.href = '/login';
       } else if (hadToken) {
         // On the login page with a stale token — just clear it, no redirect.

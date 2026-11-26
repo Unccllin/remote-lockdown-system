@@ -361,6 +361,7 @@ class TestEnablePba:
             assert result["pin"] == "123456"
             # Verify state was persisted
             state = bitlocker_pba._load_pba_state()
+            assert state is not None
             assert state["protector_id"] == "{PROTO-XYZ}"
 
     @patch("bitlocker_pba.add_tpm_pin_protector")

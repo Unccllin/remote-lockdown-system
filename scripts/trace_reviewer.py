@@ -515,7 +515,7 @@ def compute_sha256(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def review_session(label: str, body: str, session_idx: int = 0, all_sessions: list = None) -> SessionReview:
+def review_session(label: str, body: str, session_idx: int = 0, all_sessions: list | None = None) -> SessionReview:
     """Run all checks against one session block.
 
     If all_sessions is provided (list of (label, body) tuples), claims for

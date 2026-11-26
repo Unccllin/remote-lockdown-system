@@ -755,6 +755,7 @@ router.post('/:id/stop-track', requireAuth, requireRole('operator'), async (req,
  */
 router.get('/:id/locations', requireAuth, async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+  // no-sql-in-code-js: values bind via $1/$2; only the fixed fragment from coalescedTimeOrderSql (column-name validated) is interpolated.
   const result = await pool.query(
     `SELECT * FROM location_reports
      WHERE device_id = $1
@@ -775,6 +776,7 @@ router.get('/:id/locations', requireAuth, async (req, res) => {
  * arrived later.
  */
 router.get('/:id/location/latest', requireAuth, async (req, res) => {
+  // no-sql-in-code-js: values bind via $1; only the fixed fragment from coalescedTimeOrderSql (column-name validated) is interpolated.
   const result = await pool.query(
     `SELECT * FROM location_reports
      WHERE device_id = $1

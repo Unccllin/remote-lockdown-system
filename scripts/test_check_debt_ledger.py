@@ -8,8 +8,7 @@ would believe twenty-plus items were finished. This guard compares the two and t
 detailed entry as authoritative.
 """
 
-# pyright: reportMissingImports=false  (pytest lives in the component venv, not
-# in the checker's interpreter — the same convention as firmware/PblPkg/test-d205.py)
+# pyright: reportMissingImports=false
 from __future__ import annotations
 
 import sys

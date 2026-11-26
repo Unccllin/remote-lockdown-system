@@ -310,6 +310,8 @@ def cmd_refute(args):
     flagged = [d for d in b.get("dependents", []) if find_belief(store, d)]
     for dep_id in flagged:
         dep = find_belief(store, dep_id)
+        if dep is None:  # unreachable: flagged pre-filtered by find_belief; guard for type checker
+            continue
         dep.setdefault("notes", "")
         dep["notes"] = (dep["notes"] + f" [STALE: depended on refuted {args.id}]").strip()
         if dep["status"] == "confirmed":

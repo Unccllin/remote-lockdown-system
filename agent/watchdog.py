@@ -95,7 +95,7 @@ def start_agent() -> subprocess.Popen:
     return proc
 
 
-def stop_agent(proc: subprocess.Popen) -> None:
+def stop_agent(proc: subprocess.Popen | None) -> None:
     if proc and proc.poll() is None:
         log.warning("Stopping agent PID %d", proc.pid)
         try:
@@ -226,8 +226,9 @@ def main() -> None:
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown)
-    if hasattr(signal, "SIGBREAK"):  # Windows
-        signal.signal(signal.SIGBREAK, _shutdown)
+    sigbreak = getattr(signal, "SIGBREAK", None)  # Windows-only
+    if sigbreak is not None:
+        signal.signal(sigbreak, _shutdown)
 
     _agent_proc = start_agent()
 

@@ -26,6 +26,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,7 +99,7 @@ class SimulatedServer:
         self.audit_log.append({"action": "recover_requested", "device_id": device_id})
         return cmd
 
-    def checkin(self, hostname, mac_address=None, hardware_uuid=None):
+    def checkin(self, hostname, mac_address=None, hardware_uuid=None) -> dict[str, Any]:
         """Agent checks in → server returns device status + pending command."""
         device = None
         for d in self.devices.values():
@@ -117,7 +118,7 @@ class SimulatedServer:
                 break
 
         # Build command response
-        command_response = None
+        command_response: dict[str, Any] | None = None
         if pending_cmd:
             command_response = {
                 "id": pending_cmd["id"],

@@ -510,6 +510,7 @@ def test_per_platform_signatures_are_served_and_verify(workdir):
     agent_module = _agent_module()
     if agent_module is None:
         pytest.skip("agent module not importable here (needs cryptography)")
+    assert agent_module is not None
 
     private, public = _keypair(workdir)
     win_binary = workdir / "lockdown-agent-windows.exe"
