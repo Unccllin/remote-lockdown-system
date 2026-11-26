@@ -8779,3 +8779,92 @@ attempt while `consolidate` holds the lock.
 - Fix D-225 in code (bound each `serializeMutation` entry and reset the chain on timeout, with a
   test that injects a never-settling handler), then confirm FRANKENSTEIN converges to 1.0.5 when
   it is next powered on.
+
+---
+
+## Session 358 — 2026-11-26
+
+### RULE-ZERO
+**Read**: `.devin/graph/current-state.md`; the S357 block; `docs/adr/PBL-DEBT-LEDGER.md` D-225 (filed last session); `serverless/worker.ts:345-373` (the queue and its doc comment), `worker.ts:1810-1930` (dispatch, the five serialized call sites at 1911/1917/1920/2062/2065/2068), `worker.ts:69-76` (`handleHealth`); `serverless/worker.test.ts:188-200` (how the suite reaches non-default exports) and `:274-286` (health assertions use `toHaveProperty`, so an added field is safe); `serverless/tsconfig.json` plus `@cloudflare/workers-types:366` (so `setTimeout`/`clearTimeout` are typed and available in a Worker).
+**Finding**: the chain is a correctness device with a liveness hole. It exists because KV has no compare-and-swap: without it two read-modify-writes in one isolate lose one (the S269 observation, and the ADR-002/003 comment says per-entity records removed the cause for devices and commands but enrolments and the two remaining lists still race). Nothing about that changes. What is missing is a bound: `mutationChain.then(fn, fn)` waits forever, so one handler whose promise never settles takes every later mutation — and the only two routes on the chain are the two the agent calls on every poll. The fix that preserves both properties is to bound the **wait on the previous entry** (5 s, far above a handler's handful of KV round trips) and to proceed when it expires, logging and counting the event, rather than to bound the handlers themselves (which cannot be cancelled in a Worker anyway). Bounding the wait loses only ordering *within* an isolate, and ordering across isolates was never provided — the block comment says so explicitly — so the trade removes a liveness failure without pretending to add consistency the design never had.
+**Deliberately not done**: a Durable Object. It is the real answer to cross-isolate serialization (criterion (b) offers it), but it is a new binding, a new migration path and a new failure mode, and this session's job is to stop one stuck promise from taking check-ins offline. The choice is recorded in the code so the next reader does not have to rediscover it.
+
+### IMPLEMENT
+- `serverless/worker.ts`: `serializeMutation` bounds the **wait** on the previous entry
+  (`MUTATION_QUEUE_WAIT_MS = 5000`) instead of waiting forever. `settleWithin()` resolves
+  `settled`/`timeout`, always attaches both handlers (an abandoned promise cannot surface later
+  as an unhandled rejection) and always clears its timer. On timeout the entry proceeds, increments
+  `mutationQueueStalls`, logs `[mutation-queue] the previous mutation did not settle within …`, and
+  the chain is rebuilt from the new entry so an abandoned predecessor never re-enters the queue.
+- `serverless/worker.ts`: `mutationQueueStats()` published on `GET /api/health` as
+  `mutation_queue: {stalls, wait_ms}` — the operator-visible signal criterion (c) asked for, since
+  a wedged queue previously looked exactly like a powered-off device.
+- `serverless/worker.test.ts`: 537 → 544 tests. Six pin the queue (never-settling predecessor,
+  no wait when the predecessor settled, ordering preserved, rejection does not poison, stall counted
+  and logged, counter published on health) and a seventh dispatches a real `/api/agent/checkin`
+  while the chain is held under fake timers — the route, not just the helper.
+- Deployed: `npx wrangler deploy` → version `0671c600`; `/api/health` reports
+  `mutation_queue {stalls: 0, wait_ms: 5000}`, unsigned check-in 401 in 0.51 s, MOLE checking in
+  every ~67 s on 1.0.5 with the TPM certificate reused (`(EXISTS)`).
+- `docs/artifacts/s358-d225-mutation-queue.txt`: the defect, the fix, the trade, and both teeth
+  measurements.
+
+### Fog cleared
+- **The queue can no longer wedge, and that is proven both ways.** Reverting to
+  `mutationChain.then(fn, fn)` makes 5 of the 6 helper tests fail (the wedge test hangs to vitest's
+  5 s timeout) and makes the dispatcher-level test time out at 5000 ms; with the fix the route is
+  admitted after the bound and reaches its handler. `npx tsc --noEmit -p .` exit 0, 544 tests pass.
+- **The wedge is now observable.** `GET /api/health` carries the stall counter, so the next
+  occurrence is a number and a log line instead of a silent device.
+
+### Fog remaining
+- **D-225's original trigger is still unmeasured.** The check-in path awaits `request.text()`,
+  KV get/get/put/list and no `fetch` subrequest, so an unsettled KV operation leads the
+  hypothesis; the fix deliberately does not depend on knowing it.
+- **D-225 stays OPEN** because criterion (d) — a real check-in after an *induced* stall with no
+  deploy — cannot be produced without a test hook in the deployed Worker, which is not worth
+  shipping. What is measured instead: the fix is deployed and devices check in normally.
+- **Criterion (b) is a documented choice, not a new mechanism**: reset-on-timeout rather than a
+  Durable Object. The DO remains the real cross-isolate answer and is named in the code as such.
+- Unchanged from S357: D-120/D-129/D-130/D-134 need hardware or owner key material;
+  `GOOGLE_API_KEY` is still the placeholder; D1 cutover not started; FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None. D-225 is mitigated and observable; what remains of it needs no hardware and no credential.
+
+### Session artifacts
+- docs/artifacts/s358-d225-mutation-queue.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback)**: my first run of the new tests failed with
+  `worker.mutationQueueStats is not a function` because the suite's `worker` handle was
+  `mod.default` and the queue helpers are *named* exports — the tests, not the fix, were wrong.
+  The harness caught it in one run because the test calls the API the way the dispatcher does.
+  **Harness change**: none needed — this is the case the suite already handles well; recorded so the
+  next reader does not read five red tests as a broken fix.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 7 files, 544 passed (was 537)
+- teeth check 1: old unbounded chain restored -> 5 failed / 1 passed among the six queue tests
+- teeth check 2: same revert -> `a real serialized route still answers while the queue is held`
+  timed out at 5000 ms; restored -> 544 passed
+- `npx wrangler deploy` -> version `0671c600`
+- `curl /api/health` -> `"mutation_queue": {"stalls": 0, "wait_ms": 5000}`
+- `curl -X POST /api/agent/checkin` (unsigned) -> 401 in 0.51 s
+- KV `device_checkin` -> `last_checkin 2026-11-26T09:21:57Z`, `agent_version 1.0.5`
+- MOLE `agent.log` -> `TPM seal certificate F35451B3… (EXISTS)` on successive check-ins
+
+### Next session opening
+- Measure D-225's trigger (instrument the check-in path's KV awaits for one deploy, or leave it as
+  a bounded-risk defect), and bring FRANKENSTEIN to 1.0.5 next time it is powered on.

@@ -53,45 +53,27 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 357 — 2026-11-26
+## Latest session: 358 — 2026-11-26
 
 ### Fog cleared
-- **TPM sealing works on real hardware, for the first time.** On MOLE (TPM 2.0 Infineon): the
-  key is `te-c40a7660-…` under the Platform Crypto Provider, export is **refused**, a 369-byte
-  `TPM1` blob sealed and unsealed across a reboot with the same thumbprint and key name, both
-  tamper cases returned `None` (the TPM itself answered `Value is out of range or is not correct
-  for the context`), and after `delete_tpm_key` the unseal failed closed while minting nothing.
-  Artifact: `docs/artifacts/s357-tpm-cert-seal.txt`.
-- **The release reached a device by itself.** MOLE's supervisor verified the ed25519 signature,
-  swapped the binary and restarted (`pending update: applied`), and the new build logged
-  `TPM seal certificate … (CREATED)` then `(EXISTS)`. `.deadman` is now 373 bytes with magic
-  `TPM1`; `device_checkin` reports `agent_version 1.0.5`, `update_verification signature`.
-- **The old binary's failure is now recorded from production, not just from a probe**: its last
-  two lines before updating were `TPM key creation failed: ` (empty) and `falling back to
-  DPAPI/plaintext` — exactly the S355 defect, in the field.
-- **A live production defect was found and named.** `/api/agent/checkin` and
-  `/api/agent/command-ack` — the only two routes on the module-level `mutationChain` — hung for
-  >25 minutes while every unserialised route answered in ~0.6 s; a redeploy cleared it. Filed as
-  D-225 with the probe table and the close criteria.
-- **MOLE is a build host, not just a test host**: Python 3.14.8 at `C:\Python314\python.exe`
-  with tkinter and pip, so PyInstaller runs there. The older "MOLE has no Python" memory is stale.
+- **The queue can no longer wedge, and that is proven both ways.** Reverting to
+  `mutationChain.then(fn, fn)` makes 5 of the 6 helper tests fail (the wedge test hangs to vitest's
+  5 s timeout) and makes the dispatcher-level test time out at 5000 ms; with the fix the route is
+  admitted after the bound and reaches its handler. `npx tsc --noEmit -p .` exit 0, 544 tests pass.
+- **The wedge is now observable.** `GET /api/health` carries the stall counter, so the next
+  occurrence is a number and a log line instead of a silent device.
 
 ### Fog remaining
-- **D-225's first stalled handler is not identified.** The check-in path awaits KV get/get/put/list
-  and no `fetch` subrequest, so an unsettled KV operation is the leading hypothesis — untested.
-  The queue also has no operator-visible signal, so a wedged fleet looks exactly like a quiet one.
-- **`build=unknown.unknown` is what the CI script produces.** `scripts/build-windows-artifacts.ps1`
-  does not stamp `_buildinfo.py`, so a release built that way loses the identity S286 requires.
-  Not fixed here; the release was built through `agent/build.ps1` instead.
-- **The plaintext fallback in `_read_deadman_state` is still the weak link** (pre-existing): the
-  state file can be downgraded to plaintext JSON rather than defeated cryptographically. A design
-  decision, not a bug in `tpm_seal`.
-- **A TPM clear now costs the state file.** With sealing working, a cleared TPM makes an existing
-  `TPM1` blob unseal to `None`, which the caller treats as tampering (`status: stolen`). Intended
-  fail-secure direction, but a new operational consequence that did not exist while sealing was
-  broken.
-- **FRANKENSTEIN is still on 1.0.0** (powered off), so the fleet is split 1.0.5 / 1.0.0.
-- **`GOOGLE_API_KEY` is still the `ROT-TEST` placeholder**; D1 cutover not started.
+- **D-225's original trigger is still unmeasured.** The check-in path awaits `request.text()`,
+  KV get/get/put/list and no `fetch` subrequest, so an unsettled KV operation leads the
+  hypothesis; the fix deliberately does not depend on knowing it.
+- **D-225 stays OPEN** because criterion (d) — a real check-in after an *induced* stall with no
+  deploy — cannot be produced without a test hook in the deployed Worker, which is not worth
+  shipping. What is measured instead: the fix is deployed and devices check in normally.
+- **Criterion (b) is a documented choice, not a new mechanism**: reset-on-timeout rather than a
+  Durable Object. The DO remains the real cross-isolate answer and is named in the code as such.
+- Unchanged from S357: D-120/D-129/D-130/D-134 need hardware or owner key material;
+  `GOOGLE_API_KEY` is still the placeholder; D1 cutover not started; FRANKENSTEIN still 1.0.0.
 
 ### Debt items closed
 - None this session.
@@ -104,54 +86,34 @@
 - D-225
 
 ### Blockers
-- None for the work done. D-225 can recur at any time and would silently take devices offline
-  again until a redeploy, which is why it is filed rather than noted.
+- None. D-225 is mitigated and observable; what remains of it needs no hardware and no credential.
 
 ### Session artifacts
-- docs/artifacts/s357-tpm-cert-seal.txt
-- docs/artifacts/s357-release-1.0.5.txt
+- docs/artifacts/s358-d225-mutation-queue.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback) — this session's own misses were both text-shaped checks that
-  proved nothing.** (a) "Verify the build embeds 1.0.5" was implemented by byte-scanning the exe;
-  PyInstaller compresses the payload, so the probe reported 0 occurrences of *both* 1.0.4 and
-  1.0.5 and could never have failed. (b) "Verify the graph counts" was implemented by counting
-  `- id: D-` strings, which read 65 while the YAML actually held 64, because the entry landed
-  after `invariants:` and parsed as an invariant. **Harness change**: a check must assert the
-  property through the same semantics the consumer uses — run the binary (`--version`), parse the
-  YAML (`yaml.safe_load` and count `debt_items`) — because a check that cannot fail is a log line,
-  not a check.
-- **Layer 1 (task specification) — "publish 1.0.4" was under-specified by the prior session.** The
-  instruction named a version without noting that MOLE already ran a 1.0.4 build, which would have
-  made the release a no-op for the only machine that needed it. **Harness change**: a release
-  instruction must name what the fleet currently reports, not only the version to publish.
+- **Layer 4 (verification feedback)**: my first run of the new tests failed with
+  `worker.mutationQueueStats is not a function` because the suite's `worker` handle was
+  `mod.default` and the queue helpers are *named* exports — the tests, not the fix, were wrong.
+  The harness caught it in one run because the test calls the API the way the dispatcher does.
+  **Harness change**: none needed — this is the case the suite already handles well; recorded so the
+  next reader does not read five red tests as a broken fix.
 
 ### VERIFY
-- `agent/.venv/bin/python -m pytest agent/tests/test_tpm_seal.py` -> 34 passed
-- `scripts/run-agent-tests.sh` -> 1005 passed
-- `scripts/lint-agent.sh` -> ruff check + format clean
-- MOLE `mole_tpm_verify.py` steps: delete -> `True`/`remaining=0`; facts -> cert created, key
-  `te-c40a7660-…`, `export=REFUSED`; seal -> 256-byte sealed key, 369-byte blob; unseal -> exact
-  bytes; tamper (key byte, state byte) -> `None`; after reboot -> same thumbprint, unseal exact;
-  delete -> `True`; post-delete -> `None` with `remaining=0`
-- MOLE `Get-Tpm` -> TpmReady True, SpecVersion 2.0/1.38; BitLocker Off before the reboot
-- `powershell -File agent/build.ps1` -> `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`
-- `scripts/sign-release-metadata.py` -> `agent-release.json` (win, 16856661 bytes)
-- `openssl pkeyutl -verify -rawin -pubin` over `v1:1.0.5:09a2d3e6…` -> **Signature Verified Successfully**
-- KV read-back (`wrangler kv key get … --remote`) -> three binaries hash-identical, `agent_release`
-  byte-identical
-- MOLE `agent.log` -> `Update signature verified (ed25519, pinned key)`, `SHA-256 OK`,
-  `pending update: applied`, `build=20261126.69a3e4156d16`, `TPM seal certificate … (CREATED)`
-- KV `device_checkin` -> `agent_version 1.0.5`, `update_verification signature`
-- MOLE `.deadman` -> 373 bytes, magic `TPM1`
-- `make graph-check` -> all invariants pass (65 debt items, 5 OPEN, 7 invariants)
-- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
-- `npx wrangler deploy` -> version `bf0b81f7` (unchanged code; clears the wedged chain)
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 7 files, 544 passed (was 537)
+- teeth check 1: old unbounded chain restored -> 5 failed / 1 passed among the six queue tests
+- teeth check 2: same revert -> `a real serialized route still answers while the queue is held`
+  timed out at 5000 ms; restored -> 544 passed
+- `npx wrangler deploy` -> version `0671c600`
+- `curl /api/health` -> `"mutation_queue": {"stalls": 0, "wait_ms": 5000}`
+- `curl -X POST /api/agent/checkin` (unsigned) -> 401 in 0.51 s
+- KV `device_checkin` -> `last_checkin 2026-11-26T09:21:57Z`, `agent_version 1.0.5`
+- MOLE `agent.log` -> `TPM seal certificate F35451B3… (EXISTS)` on successive check-ins
 
 ### Next session opening
-- Fix D-225 in code (bound each `serializeMutation` entry and reset the chain on timeout, with a
-  test that injects a never-settling handler), then confirm FRANKENSTEIN converges to 1.0.5 when
-  it is next powered on.
+- Measure D-225's trigger (instrument the check-in path's KV awaits for one deploy, or leave it as
+  a bounded-risk defect), and bring FRANKENSTEIN to 1.0.5 next time it is powered on.
 
 ---
 
