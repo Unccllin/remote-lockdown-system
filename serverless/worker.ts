@@ -70,11 +70,17 @@ async function handleHealth(): Promise<Response> {
   // D-225: a wedged mutation queue used to be invisible — a device that could not check in
   // looked exactly like a device that was switched off. Publishing the counter costs nothing
   // (it is a module variable, not a KV read) and makes the condition visible without tail.
+  //
+  // kv_inflight names the operation that is pending right now (the suspect, while it hangs);
+  // kv_stalls keeps the history after a hung handler has stopped logging. Together they answer
+  // "which KV call" instead of "the queue was stuck".
   return jsonResponse({
     status: 'ok',
     timestamp: new Date().toISOString(),
     serverless: true,
     mutation_queue: mutationQueueStats(),
+    kv_inflight: kvInFlight(),
+    kv_stalls: kvStalls(),
   });
 }
 
@@ -3028,5 +3034,5 @@ import {
 export { resetKeyCache } from './pbl/keys';
 import {
   AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredLocations, purgeExpiredNonces, saveCheckinMetadata, saveHwArtifacts,
-  saveKeysForDevice, updateCommand,
+  saveKeysForDevice, updateCommand, kvInFlight, kvStalls,
 } from './kv-store';

@@ -1400,3 +1400,96 @@ export async function addAuditEntry(env: Env, deviceId: string, action: string, 
   const index = await listAuditIndex(env);
   await saveAuditIndex(env, [...index, { id: entry.id, device_id: deviceId }]);
 }
+
+// ---------------------------------------------------------------------------
+// In-flight KV watchdog (D-225)
+// ---------------------------------------------------------------------------
+//
+// D-225 was "the mutation queue wedged and nobody knows why": the check-in route stopped
+// answering for 25 minutes, a device could not check in, and the only remedy was a redeploy.
+// The leading hypothesis is a KV operation whose promise never settles, and a promise that never
+// settles cannot be timed on completion — a `finally` never runs. So the instrument is a witness:
+// a timer that fires while the operation is still pending and names it.
+//
+// Threshold: KV reads are tens of milliseconds and the agent's own check-in timeout is 15 s, so
+// 2 s fires while the device is still waiting — early enough to name the culprit during the
+// incident instead of describing it afterwards.
+//
+// Two views, because they answer different questions:
+//   kvInFlight()  what is pending *right now*, and for how long (a live hang)
+//   kvStalls()    what has ever exceeded the threshold, per label (the history that survives)
+// Both are bounded by the number of distinct labels, not by request count.
+
+/** How long a KV operation may stay pending before it is logged as a stall. */
+export const KV_STALL_WARN_MS = 2000;
+
+interface KvStall {
+  count: number;
+  last_ms: number;
+  last_at: string;
+}
+
+const kvInFlightOps = new Map<string, number>();
+const kvStallHistory = new Map<string, KvStall>();
+
+/**
+ * Run a KV operation with a stall witness attached. Returns the operation's own promise.
+ *
+ * The label is what identifies the operation in the log and on `/api/health`, so it must name the
+ * step rather than the store: `checkin.metadata.get` says what to look at, `get` does not.
+ */
+export function watchKv<T>(
+  label: string,
+  op: () => Promise<T>,
+  warnMs: number = KV_STALL_WARN_MS,
+): Promise<T> {
+  const startedAt = Date.now();
+  kvInFlightOps.set(label, startedAt);
+
+  const timer = setTimeout(() => {
+    // Still registered means it has not settled. Record it where a later request can read it:
+    // the hung handler may never return, so its own log line is the only voice it gets.
+    const elapsed = Date.now() - startedAt;
+    const previous = kvStallHistory.get(label);
+    kvStallHistory.set(label, {
+      count: (previous?.count ?? 0) + 1,
+      last_ms: elapsed,
+      last_at: new Date(startedAt).toISOString(),
+    });
+    console.warn(
+      `[kv-stall] ${label} has not settled after ${elapsed} ms - a pending KV operation is what ` +
+        'wedges the mutation queue (D-225). See /api/health kv_inflight / kv_stalls.',
+    );
+  }, warnMs);
+
+  const finish = (): void => {
+    clearTimeout(timer);
+    kvInFlightOps.delete(label);
+  };
+
+  return op().then(
+    (value) => {
+      finish();
+      return value;
+    },
+    (error) => {
+      finish();
+      throw error;
+    },
+  );
+}
+
+/** KV operations pending right now, with elapsed milliseconds. Empty on a healthy isolate. */
+export function kvInFlight(): Record<string, number> {
+  const now = Date.now();
+  const pending: Record<string, number> = {};
+  for (const [label, startedAt] of kvInFlightOps) pending[label] = now - startedAt;
+  return pending;
+}
+
+/** Every label that has exceeded the threshold, with how often and how long. Survives the hang. */
+export function kvStalls(): Record<string, KvStall> {
+  const history: Record<string, KvStall> = {};
+  for (const [label, stall] of kvStallHistory) history[label] = { ...stall };
+  return history;
+}

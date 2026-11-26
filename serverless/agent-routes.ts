@@ -23,7 +23,7 @@ import {
   addLocationReport, getCheckinMetadata, getCommand, getDeviceByApiKeyHash,
   groupPbaCredentials, listBiosPasswordsForDevice, listCommandsForDevice, listKeysForDevice,
   normalizeAgentVersion, normalizeUpdateVerification, putDevice, rememberNonce,
-  saveBiosPasswordsForDevice, saveCheckinMetadata, saveKeysForDevice, updateCommand,
+  saveBiosPasswordsForDevice, saveCheckinMetadata, saveKeysForDevice, updateCommand, watchKv,
 } from './kv-store';
 
 // ---------------------------------------------------------------------------
@@ -126,7 +126,10 @@ async function agentRuntimeSettings(env: Env): Promise<{ google_api_key: string 
 
 export async function handleAgentCheckin(request: Request, env: Env): Promise<Response> {
   const body = await request.text();
-  const device = await verifyAgentAuth(request, env, body);
+  // D-225: every KV step below is watched, because a KV operation that never settles is what
+  // wedged this route for 25 minutes in production and left no trace of which one it was. The
+  // label names the step, not the store, so a stall report says what to look at.
+  const device = await watchKv('checkin.auth', () => verifyAgentAuth(request, env, body));
   if (!device) {
     return errorResponse('Authentication failed', 401);
   }
@@ -153,8 +156,11 @@ export async function handleAgentCheckin(request: Request, env: Env): Promise<Re
   // update_verification falls back to the stored value when this check-in omits
   // it, mirroring the Express server's `COALESCE($6, update_verification)`: an
   // older agent must not reset a known mode to "unknown" on every check-in.
-  const existingMetadata = await getCheckinMetadata(env, device.id);
-  await saveCheckinMetadata(env, device.id, {
+  const existingMetadata = await watchKv('checkin.metadata.get', () =>
+    getCheckinMetadata(env, device.id),
+  );
+  await watchKv('checkin.metadata.put', () =>
+    saveCheckinMetadata(env, device.id, {
     last_checkin: new Date().toISOString(),
     mac_address: mac_address || device.mac_address,
     hardware_uuid: hardware_uuid || device.hardware_uuid,
@@ -172,13 +178,16 @@ export async function handleAgentCheckin(request: Request, env: Env): Promise<Re
     agent_version_at: normalizeAgentVersion(payload.agent_version ?? request.headers.get('X-Agent-Version'))
       ? new Date().toISOString()
       : (existingMetadata?.agent_version_at ?? null),
-  });
+    }),
+  );
   // The check-in deliberately writes NO device record: it updates only `device_checkin:<id>`,
   // so it cannot race with an ACK's status write on `device:<id>` (KV-RACE-001, ADR-003).
 
   // Check for pending commands (oldest first). Per-device index, not the global one:
   // the global read costs one key per command in the fleet on every poll (S348).
-  const commands = await listCommandsForDevice(env, device.id);
+  const commands = await watchKv('checkin.commands.list', () =>
+    listCommandsForDevice(env, device.id),
+  );
   const pendingCmds = commands
     .filter((c) => c.device_id === device.id && c.status === 'pending')
     .sort((a, b) => a.created_at.localeCompare(b.created_at));

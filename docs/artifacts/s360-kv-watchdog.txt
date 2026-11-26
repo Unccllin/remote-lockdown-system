@@ -1,0 +1,102 @@
+# S360 — D-225's instrument: name the KV operation that stops answering
+
+2026-11-26 · `serverless/kv-store.ts`, `serverless/agent-routes.ts`, `serverless/worker.ts`,
+`serverless/kv-stall.test.ts` (new) · deployed as Worker version `736f27f3`
+
+## Why timing alone cannot answer the question
+
+D-225 is fixed (S358: the mutation queue's wait is bounded), but its **trigger is still unknown**.
+The hypothesis is a KV operation whose promise never settles. You cannot time that from completion:
+a promise that never settles never reaches a `finally`, so the timing code is never the code that
+runs. The instrument therefore has to be a **witness** — a timer that fires while the operation is
+still pending and names it.
+
+## What was added
+
+In `kv-store.ts` (the KV layer — both `agent-routes.ts` and `worker.ts` already import from it, so
+no new dependency edge):
+
+```ts
+export const KV_STALL_WARN_MS = 2000;
+
+export function watchKv<T>(label: string, op: () => Promise<T>, warnMs = KV_STALL_WARN_MS): Promise<T>
+export function kvInFlight(): Record<string, number>        // pending right now, elapsed ms
+export function kvStalls(): Record<string, {count, last_ms, last_at}>   // history that survives
+```
+
+Two views because they answer different questions. `kv_inflight` is the live hang — what a *second*
+request can see while the first one is stuck. `kv_stalls` is the history, because the hung handler
+may never get to log again and its counter must outlive it.
+
+Threshold rationale: KV reads are tens of milliseconds and the agent's own check-in timeout is
+15 s, so 2 s warns **while the device is still waiting** — early enough to name the culprit during
+the incident rather than describe it afterwards.
+
+Wired into the four KV steps of the check-in, labelled by step rather than by store:
+
+```
+checkin.auth             verifyAgentAuth → agent_key:<hash> + device:<id>
+checkin.metadata.get     device_checkin:<id>
+checkin.metadata.put     device_checkin:<id>
+checkin.commands.list    the per-device command index
+```
+
+`GET /api/health` now publishes both views beside the S358 counter:
+
+```json
+{ "status": "ok", "mutation_queue": {"stalls": 0, "wait_ms": 5000}, "kv_inflight": {}, "kv_stalls": {} }
+```
+
+## Teeth: removing the witness fails five tests
+
+`kv-stall.test.ts` (7 tests, new file) — with the timer block deleted from `watchKv`:
+
+```
+❯ kv-stall.test.ts (7 tests | 5 failed)
+   × names an operation that has not settled, in the log and on health
+   × leaves no trace when the operation settles in time
+   × propagates a rejection and still clears the in-flight entry
+   × does not fire before the threshold
+   × counts repeated stalls for the same label
+```
+
+Restored: 7 passed. The two that pass either way are the assertion that `/api/health` carries the
+keys and the threshold range check, which do not depend on the timer.
+
+The tests cover the case that matters (a never-settling promise is named in the log and appears in
+both views), the healthy case (no trace, no log), rejection (propagates, **not** recorded as a
+stall — it answered), below-threshold slowness (no false positive), repeated stalls (counted), and
+that the threshold sits inside the agent's own timeout.
+
+## Verified in production after deploy
+
+```
+npx wrangler deploy                     → 736f27f3
+curl /api/health                        → mutation_queue {stalls: 0}, kv_inflight {}, kv_stalls {}
+KV device_checkin:14e7dafb…             → last_checkin 2026-11-26T09:42:42Z, agent 1.0.5
+```
+
+Both views empty on a healthy isolate is the expected result: they are populated only while an
+operation is pending past 2 s, or after one has been.
+
+## Gates
+
+```
+npx tsc --noEmit -p .     exit 0
+npx vitest run            8 files, 551 passed   (was 544: +7)
+```
+
+Importers of `kv-store.ts` are `agent-routes.ts`, `alerts.ts`, `backup.ts` and `worker.ts`; all
+reach the `tsconfig` graph through `worker.ts`, so the cascade was checked by the compiler and not
+only by the two test files.
+
+## What this does not claim
+
+- **D-225 stays OPEN.** The instrument does not find the trigger; it makes the next occurrence
+  name itself. Closing the item still needs that occurrence (or a deliberately induced stall, which
+  would require a test hook in production).
+- **Not applied to command-ack or the admin mutations.** The check-in is where the wedge was
+  observed and it is the hottest path; widening the labels is cheap but should follow evidence.
+- **A stall is not proof of a KV bug specifically.** The label brackets the whole step, so a stall
+  on `checkin.auth` means "during authentication", which includes the HMAC check and the nonce
+  write. That is deliberate: the first answer needed is *pinned or not*, not *which line*.
