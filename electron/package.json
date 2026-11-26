@@ -1,6 +1,6 @@
 {
   "name": "remote-lockdown-admin",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Remote Device Lockdown System — Admin Desktop App",
   "author": {
     "name": "Remote Lockdown",
@@ -193,7 +193,8 @@
       "owner": "unccllin",
       "repo": "remote-lockdown-system"
     },
-    "generateUpdatesFilesForAllChannels": true
+    "generateUpdatesFilesForAllChannels": true,
+    "artifactName": "${name}-${version}.${ext}"
   },
   "license": "UNLICENSED",
   "private": true

@@ -16,8 +16,11 @@ const { contextBridge } = require('electron');
 // In serverless mode: the Worker URL (e.g. 'https://worker.dev/api').
 const apiBaseUrl = process.env.ELECTRON_API_BASE_URL || null;
 
+// Set by main.js from app.getVersion() before the window loads. The npm_package_version
+// fallback only covers `npm start`; a packaged build has the env var, so the UI reports the
+// version that was actually packaged instead of a hardcoded guess.
 contextBridge.exposeInMainWorld('electronApp', {
-  version: process.env.npm_package_version || '1.0.0',
+  version: process.env.ELECTRON_APP_VERSION || process.env.npm_package_version || '',
   platform: process.platform,
   isElectron: true,
   apiBaseUrl,

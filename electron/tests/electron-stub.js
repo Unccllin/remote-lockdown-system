@@ -18,6 +18,10 @@
 const noop = () => {};
 const fn = () => jest.fn();
 
+// What a preload exposed, so a test can assert the bridge's contents instead of grepping
+// preload.js for a string (S361). Keyed by the exposeInMainWorld name.
+const exposed = {};
+
 const app = {
   whenReady: () => Promise.resolve(),
   on: noop,
@@ -94,6 +98,14 @@ module.exports = {
   Notification: class {
     show = noop;
   },
+  // A preload's only real dependency on `electron`. Recording it is what makes the bridge
+  // testable in Node.
+  contextBridge: {
+    exposeInMainWorld: (key, value) => {
+      exposed[key] = value;
+    },
+  },
   // Exposed so a test can assert something was called if it ever needs to.
   __jest: fn,
+  __exposed: exposed,
 };

@@ -133,6 +133,10 @@ app.whenReady().then(async () => {
 
     // Inject the Worker URL into the preload script
     process.env.ELECTRON_API_BASE_URL = config.worker_url;
+    // The version the UI reports must be the version that was packaged. `npm_package_version`
+    // only exists when the app is started through npm; a packaged app has no such env, so the
+    // preload's fallback made a 1.0.5 build display 1.0.0 (the S286 shape, one layer down).
+    process.env.ELECTRON_APP_VERSION = app.getVersion();
     console.log('[main] API base URL:', config.worker_url);
 
     // In dev mode, load directly from the Vite dev server — no static server needed.
@@ -186,7 +190,7 @@ app.on('before-quit', () => {
   if (serverInfo) {
     try {
       serverInfo.server.close();
-    } catch (e) {
+    } catch {
       // Ignore errors during shutdown
     }
   }
