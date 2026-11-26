@@ -9566,3 +9566,118 @@ attempt while `consolidate` holds the lock.
 - Bring `server/src/routes/rearm.js` onto ADR-011 (same approval flow, Express side, with the table and
   admin routes it needs) so the two backends stop disagreeing about whether a hardware UUID is a
   credential — that is the only thing keeping D-226 open.
+
+---
+
+## Session 366 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `server/src/routes/rearm.js` in full (the whole 100-line handler, including the docstring
+  that defends "the Computrace model"), `server/src/routes/admins.js` (`router.use(requireAuth,
+  requireRole('super-admin'))` as the house pattern), `server/src/middleware/auth.js` (`requireAuth`
+  verifying with an explicit `HS256` allowlist, `requireRole` and `ROLE_HIERARCHY`),
+  `server/src/index.js` (`mountApi(prefix, ...handlers)` and the existing limiters).
+- **Read**: `server/src/db/migrations/019_location_observed_at.sql` **and**
+  `server/src/db/migrations-sqlite/019_location_observed_at.sql` (two dialects, and why: no UUID type,
+  no `NOW()`, idempotency from the runner's `schema_migrations` bookkeeping),
+  `server/src/db/migrations/001_base.sql` (`audit_log`'s `device_id`/`admin_id`/`action`/`detail` shape),
+  `server/tests/rearm.routes.test.js`, `server/tests/mockPool.js` (`sql.includes(pattern)`,
+  longest-pattern-first, default `{rows: []}`) and `server/tests/helpers.js` (`makeToken` roles,
+  `createApp` interpolating `/api/<key>`).
+- **Finding**: the Express half is not a port, it is the *same* decision applied to a different
+  storage model — Postgres rows instead of KV keys — and the traps are dialect-shaped: 020 needed two
+  files, and SQLite has neither `UUID` nor `NOW()`, so timestamps are ISO strings written by the route.
+  The single-use property has to be a `DELETE` before the `UPDATE`, not a `status` flip, because a flip
+  is exactly what two racing callers would both read.
+- **Finding, and the reason this closes now**: the authority lives in the admin queue, so the teeth are
+  there, not in the rearm route — reinstating the old branch fails only 2 of 8, because a denial is
+  refused earlier and the approved path issues a key either way. Recorded rather than dressed up as
+  parity with the Worker's 6-of-9.
+
+### IMPLEMENT
+- `server/src/db/migrations/020_rearm_requests.sql` + `…-sqlite/020_rearm_requests.sql`: one row per
+  device with `status`, `decided_by` and an `expires_at` set only on approval; a `(status, requested_at)`
+  index for the queue.
+- `server/src/routes/rearm.js`: rewritten to the ADR-011 flow — record or refresh a pending request,
+  audit `rearm_requested`, answer 409; consume an approved, unexpired row **before** issuing the key,
+  audit `rearm_approval_used`, return the plain-text script with `nosniff`; drop and re-ask on a stale
+  approval; refuse a denied request with 403; keep the identical 404 for unknown and active devices.
+- `server/src/routes/rearmRequests.js` (new): `GET /` (pending queue joined to `devices`),
+  `POST /:deviceId/approve|deny`, super-admin only, both audited, `UPDATE … WHERE status = 'pending'`.
+- `server/src/index.js`: mounted at `/api/admin/rearm-requests` under the dashboard limiter.
+- `server/tests/rearm.routes.test.js` rewritten (8 tests) and `server/tests/rearmRequests.routes.test.js`
+  added (9 tests); `server/tests/migrationIdempotency.test.js` gained `020` in its enumerated list.
+- `scripts/test_cross_surface_contract.py`: the KNOWN_GAPS entry added in S365 deleted, because the
+  baseline is shrink-only and Express now serves the route.
+- `docs/adr/PBL-DEBT-LEDGER.md` + `.devin/graph/GRAPH-SPEC.yaml`: **D-226 CLOSED** with commit and
+  artifact; totals 65/56/9 in the ledger, 70/61/9 in the graph.
+- `docs/artifacts/s366-d226-express-parity.txt`: the change, the teeth measurement and both incidental
+  failures.
+
+### Fog cleared
+- **Both backends now agree that a hardware UUID is not a credential.** A stolen laptop cannot re-key
+  itself on either: the request is recorded, an administrator decides, and the approval is single-use
+  and expires in 15 minutes.
+- **D-226 is closed with evidence that resolves**: commit `6794058`, artifact
+  `docs/artifacts/s366-d226-express-parity.txt`, 17 tests across the two suites, and the pre-fix
+  behaviour reinstated to show which tests actually fail.
+- **The cross-surface contract's baseline shrank**, which is what it exists to force.
+
+### Fog remaining
+- **No dashboard panel for approvals.** The endpoints are tested and the queue is queryable; a client's
+  IT staff would not want `curl`, so this is the natural follow-up.
+- **Express is not deployed by this repository** — it is the self-hosted backend, so this change is
+  verified by the suite rather than by a live call (the lab runs the Worker).
+- **The TPM-sealed proof stays deferred behind D-134**, per ADR-011, with the reason recorded.
+- Unchanged: D-227 (stolen-status reset), D-228 (login limiting), D-229 (enrol-token race), D-230
+  (Google key exposure); D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured;
+  `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- **D-226 — CLOSED** (ADR-011 approval on both backends): commit `6794058` (Express; Worker deployed as
+  `408f2cdf` in S365), artifact `docs/artifacts/s366-d226-express-parity.txt`.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-227
+- D-228
+- D-229
+- D-230
+
+### Blockers
+- None.
+
+### Session artifacts
+- docs/artifacts/s366-d226-express-parity.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), mine, and it cost a run**: I invoked `npx jest` directly and read
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` from `postgres-compat.test.js` as a code failure. The
+  suite needs `--experimental-vm-modules`, which only the `npm test` script supplies. **Harness change**:
+  run a suite through the command the repository documents for it; when a failure names a Node flag, the
+  invocation is the first suspect, not the code.
+- **Layer 4 again, and the check working as designed**: adding migration 020 failed
+  `migrationIdempotency.test.js` (it enumerates the list) and closing the gap failed the cross-surface
+  contract (its baseline is shrink-only). Both were *expected* consequences of doing the work, not
+  defects — recorded because a future reader will hit the same two and should not "fix" them by
+  loosening the tests.
+
+### VERIFY
+- `cd server && npm test` -> 56 suites, **908 passed** (was 896; +12 across the two re-arm suites, minus
+  none) — note `npm test`, not `npx jest`
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- teeth: old "issue on demand" branch restored -> 2 of 8 rearm tests failed (named above); restored -> 8 passed
+- `python3 scripts/test_cross_surface_contract.py` -> 25 passed (after deleting the closed-gap entry)
+- `make graph-check` -> all invariants pass (70 items, 61 CLOSED, 9 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+- migrations: `020_rearm_requests` present in both `migrations/` and `migrations-sqlite/`, applied by the
+  idempotency suite on a fresh database
+
+### Next session opening
+- Build the dashboard approval panel for re-arm requests (the endpoints and the 15-minute approval
+  semantics are tested and stable), or take D-228 (login attempt limiting) — the last High-severity
+  review finding that is a day of work.

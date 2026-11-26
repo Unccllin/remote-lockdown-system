@@ -4451,3 +4451,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-205
+  statement: 'D-226 is closed: both backends require administrator approval for re-arm (ADR-011). The
+    Worker does it in KV with a hwid:<uuid> pointer and rearm_request:<device_id> rows (S365, deployed
+    408f2cdf); Express does it with migration 020 (rearm_requests, Postgres and SQLite) and a super-admin
+    queue at /api/admin/rearm-requests; both consume the approval by deleting the row before issuing a
+    key, both expire it after 15 minutes, and both answer an identical 404 for unknown and active devices.
+    Commit 6794058; server suite 908 passed.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'server suite 908 passed; teeth: pre-fix branch fails 2 of 8 Express rearm tests; graph-check
+    passes with D-226 CLOSED; commit 6794058'
+  source: S366
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

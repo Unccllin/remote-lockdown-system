@@ -2382,16 +2382,16 @@
 | D-220 | BLOCK-intent returns propagate error to BDS (BootOrder advance bypass) | CLOSED (`PblApp.c` policy-sig-fail and anti-rollback paths returned `EFI_SECURITY_VIOLATION` — per Boot#### semantics a non-success return advances BDS to the next boot option (Windows boots). Fixed via `PblBlockHalt()` — lock screen + MOR + ResetSystem + CpuDeadLoop, never returns; chain-load return checked at all 3 call sites, fail-closed on error. Note: D-219's harness passed the buggy code — it checked serial lines, not post-BLOCK behavior. QEMU+swtpm: fve 16/0, docker 15/0, persistence 16/0. Commit this session; artifacts /tmp/pbl-fve-ci/, /tmp/pbl-ci-persist/) | SECURITY |
 | D-224 | No host-side tests for TPM command construction or COSE verification with test keys | CLOSED (S266: host_tpm.c fakes EFI_TCG2_PROTOCOL->SubmitCommand so the shipped construction code runs and its bytes are asserted — 86 checks; COSE verify with throwaway ES256 keys — 12 checks; mutation-checked; commit e0dbec8) | TEST |
 | D-225 | The Worker's serialized mutation chain has no timeout, so one stalled handler wedges check-in and command-ack for the whole isolate | OPEN (S357: a wedged chain made `/api/agent/checkin` and `/api/agent/command-ack` hang while every unserialised route answered in ~0.6 s; cleared by redeploy, not by the code — docs/artifacts/s357-release-1.0.5.txt) | SERVERLESS |
-| D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | OPEN (S364: verified in code — no auth, issues a fresh `api_key_hash`, and reads every device plus one metadata key per device; filed from the external review's S2) | SECURITY |
+| D-226 | Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone | CLOSED (S366: ADR-011 — approval on BOTH backends; Worker `408f2cdf` + Express commit `6794058`, 17 tests, 6-of-9 and 2-of-8 fail against the pre-fix code; docs/artifacts/s366-d226-express-parity.txt) | SECURITY |
 | D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | OPEN (S364: `worker.ts:488` and `:672` both assign `status = 'active'`; review S3) | SECURITY |
 | D-228 | Admin login has no attempt limit, lockout or second factor | OPEN (S364: `handleAuthLogin` reads the admin list and verifies PBKDF2 with no counter; review S5) | SECURITY |
 | D-229 | Enrolment tokens are read then deleted across an eventually consistent store | OPEN (S364: `worker.ts:618` get → `:647` delete, so two racers can both pass; review S8) | SECURITY |
 | D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
 
 **Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
-55 CLOSED, 10 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+56 CLOSED, 9 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
-D-226..D-230 — the five unfixed findings from the 26 November external review). The previous line claimed
+D-227..D-230 — the four unfixed findings from the 26 November external review; D-226 closed in S366). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2521,7 +2521,8 @@ number is derived from the other; each is counted where it lives.
   without a test hook worth shipping. Evidence: `docs/artifacts/s358-d225-mutation-queue.txt`.
 
 ### D-226 — Unauthenticated `/api/rearm` re-keys a stolen device from its hardware UUID alone
-- **Status**: OPEN (found 2026-11-26, S363 verification of the external review; its finding S2)
+- **Status**: CLOSED (2026-11-26, S366; Worker in commit `408f2cdf`'s deploy, Express in commit `6794058`)
+  — evidence: `docs/artifacts/s366-d226-express-parity.txt`
 - **Category**: SECURITY
 - **What the code does**: `worker.ts:801 handleRearm`, dispatched at `:2186` for `POST /api/rearm`.
   It takes `{hardware_uuid}` from an unauthenticated body, calls `listDevices(env)` and then
@@ -2561,6 +2562,19 @@ number is derived from the other; each is counted where it lives.
   adopt ADR-011 before this can close. A dashboard approval panel is the second follow-up (the
   endpoints exist and are tested; approving by `curl` is workable for a recovery tool, not for a
   client's IT staff).
+- **Progress (S366) — Express parity done, and the item closes.** `server/src/routes/rearm.js` now
+  speaks the same model: migration 020 adds `rearm_requests` (one row per device, `status`,
+  `decided_by`, `expires_at` only on an approval); `POST /api/rearm` records or refreshes a pending
+  request, audits `rearm_requested` and answers 409; a super-admin approves or denies through
+  `GET/POST /api/admin/rearm-requests` (requireAuth + requireRole, both decisions audited, the UPDATE
+  scoped to `status = 'pending'`); the approval is consumed before the key is issued and expires after
+  15 minutes. The 404 for unknown and active devices stays identical, so neither backend can be probed
+  for which UUIDs exist. 17 tests across the two suites; teeth measured by reinstating the old branch
+  (2 of 8 rearm tests fail — a denied device is refused earlier either way — and 6 of 9 on the Worker).
+  Commit `6794058`. The cross-surface contract's KNOWN_GAPS entry was deleted, which is what its
+  shrink-only rule requires once a recorded gap is served.
+- **Follow-up, not a close criterion**: no dashboard panel for approvals yet (the endpoints exist and
+  are tested; `curl` is acceptable for a recovery tool, not for a client's IT staff).
 - **Note on complexity**: `handleRearm` now sits at cyclomatic complexity 17 (threshold 15). An
   extraction of the issue-script branch was attempted and reverted — it broke the file's syntax and
   every branch is already pinned by a test, so the honest move was to stop rather than churn a

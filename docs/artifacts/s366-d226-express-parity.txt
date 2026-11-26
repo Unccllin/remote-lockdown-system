@@ -1,0 +1,80 @@
+# S366 — D-226 closed: Express adopts ADR-011, so both backends agree
+
+Commit `6794058` · Worker counterpart `408f2cdf` (S365) · decision record
+`docs/adr/ADR-011-rearm-requires-approval.md`
+
+## Why this was the thing keeping D-226 open
+
+S365 fixed the Worker, and the ledger deliberately did **not** close D-226: `server/src/routes/rearm.js`
+had the identical hole, unauthenticated, and its docstring defended it —
+
+> This is the Computrace model: the platform is owned, the identifier is stable, and possession of the
+> flagged machine is what authorises recovery.
+
+That is exactly the rationale the external review disputes, so the two backends disagreed about whether
+a hardware UUID is a credential. Fixing one and closing the item would have been the ledger drift this
+repository has spent sessions correcting.
+
+## What changed on Express
+
+| piece | change |
+|---|---|
+| migration `020_rearm_requests` (Postgres **and** SQLite) | one row per device: `hardware_uuid`, `hostname`, `requested_at`, `source_ip`, `status`, `decided_at`, `decided_by`, and an `expires_at` that is set **only** on an approval |
+| `POST /api/rearm` | records or refreshes a pending request, audits `rearm_requested`, answers **409** — issues no key. The identical 404 for unknown and active devices is preserved, so the route still cannot be probed for which UUIDs exist |
+| approved path | the row is **deleted before** the key is issued (two racing callers cannot both be served), `rearm_approval_used` is audited, and the response is still the plain-text script with `nosniff` |
+| expiry | 15 minutes; a stale approval is dropped and the device is asked to request again rather than honouring an old decision |
+| `GET /api/admin/rearm-requests` | the pending queue, joined to `devices` for the device's current status — super-admin only |
+| `POST /api/admin/rearm-requests/:deviceId/(approve\|deny)` | super-admin only, audited as `rearm_approved` / `rearm_denied`, and the `UPDATE` is scoped to `status = 'pending'` so one decision cannot overwrite another |
+
+`server/src/index.js` mounts the queue next to the other admin surfaces, under the dashboard rate
+limiter — it is operator traffic, not agent traffic.
+
+## Teeth
+
+Restoring the old branch (`if (request && request.status === 'approved')` → `if (true)`, i.e. issue on
+demand) fails **2 of the 8** re-arm tests:
+
+```
+● a flagged device is recorded as pending and gets 409 — no key
+● every flagged status may ASK (409), not receive a key
+```
+
+Only two, and the reason is worth recording rather than glossing: the denied-device test still passes
+because a denial is refused **earlier** in the handler (before the approval branch), and the approved
+test passes either way because both paths issue a key. On the Worker the same experiment failed 6 of 9
+because every branch sits behind that one check. The pair of results is honest: the Express teeth are
+narrower, and the queue suite (9 tests) is what pins the authority — unauthenticated 401, operator 403,
+the 15-minute expiry, both audit actions, and the already-decided 404.
+
+## Two incidental failures this surfaced, both real
+
+1. **`tests/migrationIdempotency.test.js` enumerates the migration list**, so adding `020` failed it
+   with "+1". That is the test doing its job — a fresh database must still apply every migration — and
+   the expectation was updated.
+2. **The cross-surface contract failed the moment the gap closed**, because its `KNOWN_GAPS` baseline is
+   shrink-only by design: a recorded gap that Express now serves must be deleted, or the list rots. The
+   entry added in S365 is gone.
+
+## Gates
+
+```
+cd server && npm test                      56 suites, 908 passed (was 896)
+cd server && npx eslint src/ tests/ --max-warnings=0   exit 0
+python3 scripts/test_cross_surface_contract.py        25 passed
+make graph-check                          all invariants pass (70 items, 61 CLOSED, 9 OPEN)
+python3 scripts/check_debt_ledger.py      0 mismatches
+```
+
+Note for the next reader: `npm test`, not `npx jest`. The suite needs `--experimental-vm-modules`
+(the script supplies it); a bare `npx jest` dies in `postgres-compat.test.js` with
+`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG`, which looks like a code failure and is not one. I lost a
+run to that before checking the script.
+
+## What is still not done (deliberately, and not close criteria)
+
+- **No dashboard panel for approvals.** The endpoints are tested; approving by `curl` is acceptable for
+  a recovery tool but not for a client's IT staff.
+- **The TPM-sealed alternative stays deferred behind D-134** — the decision record says why, and the
+  request/approval records are the shape an automatic proof would write.
+- **Express is not deployed by this repository.** It is the self-hosted backend; the lab deployment runs
+  the Worker, so this change is verified by the suite rather than by a live call.

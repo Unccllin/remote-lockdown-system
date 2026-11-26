@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 60 | 70 | ✗ |
+| Debt items | 61 | 70 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 61 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,29 +53,30 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 365 — 2026-11-26
+## Latest session: 366 — 2026-11-26
 
 ### Fog cleared
-- **A stolen laptop can no longer re-key itself on the Worker.** Presenting the UUID produces a pending
-  request an administrator can see and deny; the route answers 409 and issues nothing (verified live).
-- **The anonymous route can no longer be used to bill the client for reads**: one indexed lookup
-  replaces the fleet scan plus one metadata key per device, and the route is rate limited.
-- **The decision is on the record** in ADR-011, including why the TPM-sealed alternative is deferred
-  behind D-134 rather than dismissed.
+- **Both backends now agree that a hardware UUID is not a credential.** A stolen laptop cannot re-key
+  itself on either: the request is recorded, an administrator decides, and the approval is single-use
+  and expires in 15 minutes.
+- **D-226 is closed with evidence that resolves**: commit `6794058`, artifact
+  `docs/artifacts/s366-d226-express-parity.txt`, 17 tests across the two suites, and the pre-fix
+  behaviour reinstated to show which tests actually fail.
+- **The cross-surface contract's baseline shrank**, which is what it exists to force.
 
 ### Fog remaining
-- **`server/src/routes/rearm.js` still has the identical hole**, and its docstring defends the trust
-  model the review disputes. This is why D-226 stays OPEN; the two backends now disagree.
-- **No dashboard panel for approvals.** The endpoints are tested; `curl` is not a client IT workflow.
-- **`handleRearm` is at cyclomatic complexity 17** (threshold 15). The extraction was attempted and
-  reverted after breaking the file; every branch is pinned by a test, so the style metric lost to
-  correctness on purpose.
+- **No dashboard panel for approvals.** The endpoints are tested and the queue is queryable; a client's
+  IT staff would not want `curl`, so this is the natural follow-up.
+- **Express is not deployed by this repository** — it is the self-hosted backend, so this change is
+  verified by the suite rather than by a live call (the lab runs the Worker).
+- **The TPM-sealed proof stays deferred behind D-134**, per ADR-011, with the reason recorded.
 - Unchanged: D-227 (stolen-status reset), D-228 (login limiting), D-229 (enrol-token race), D-230
   (Google key exposure); D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured;
   `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
 
 ### Debt items closed
-- None this session. D-226 is materially advanced but not closed — the Express route keeps it open.
+- **D-226 — CLOSED** (ADR-011 approval on both backends): commit `6794058` (Express; Worker deployed as
+  `408f2cdf` in S365), artifact `docs/artifacts/s366-d226-express-parity.txt`.
 
 ### Debt items still open
 - D-120
@@ -83,48 +84,44 @@
 - D-130
 - D-134
 - D-225
-- D-226
 - D-227
 - D-228
 - D-229
 - D-230
 
 ### Blockers
-- None for the Worker work. D-226's remainder is ordinary engineering (Express parity + a dashboard
-  panel), not hardware.
+- None.
 
 ### Session artifacts
-- docs/artifacts/s365-d226-rearm-approval.txt
-- docs/adr/ADR-011-rearm-requires-approval.md
+- docs/artifacts/s366-d226-express-parity.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), twice, both mine**: (a) reusing a single `Request` object for the
-  "retry after approval" attempt sent an empty body, because a body can only be read once — the test
-  reported 400 and I briefly suspected the handler; (b) asserting the literal `api_key` inside the
-  generated install script, when the config is base64-encoded, could never pass. **Harness change**: a
-  test that exercises a *retry* must build a fresh request per attempt, and an assertion about
-  generated output should target something that is actually plaintext in it (or, better, the state
-  change the output implies — the stored hash).
-- **Layer 4 again, and the sharpest lesson of the session**: my extraction of the issue-script branch
-  broke `worker.ts`'s syntax because I sliced between two anchors that did not bracket the block. `tsc`
-  caught it in the same turn. **Harness change**: when replacing a block by offset, read the exact
-  first and last lines *after* locating them, not just the anchor strings — and keep a copy before the
-  edit, which is what made the restore instant here.
+- **Layer 4 (verification feedback), mine, and it cost a run**: I invoked `npx jest` directly and read
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` from `postgres-compat.test.js` as a code failure. The
+  suite needs `--experimental-vm-modules`, which only the `npm test` script supplies. **Harness change**:
+  run a suite through the command the repository documents for it; when a failure names a Node flag, the
+  invocation is the first suspect, not the code.
+- **Layer 4 again, and the check working as designed**: adding migration 020 failed
+  `migrationIdempotency.test.js` (it enumerates the list) and closing the gap failed the cross-surface
+  contract (its baseline is shrink-only). Both were *expected* consequences of doing the work, not
+  defects — recorded because a future reader will hit the same two and should not "fix" them by
+  loosening the tests.
 
 ### VERIFY
-- `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, 567 passed (was 559; +8 re-arm tests)
-- teeth: pre-fix behaviour reinstated -> 6 of 9 re-arm tests failed; restored -> 9 passed
-- `python3 scripts/test_cross_surface_contract.py` -> 25 passed
-- `make graph-check` -> all invariants pass; `check_debt_ledger.py` -> 0 mismatches
-- `npx wrangler deploy` -> version `408f2cdf-c622-491f-85e5-e9f129d94c32`
-- live: `POST /api/rearm` with MOLE's real (active) UUID -> 404; `{}` -> 400;
-  `GET /api/admin/rearm-requests` unauthenticated -> 401
+- `cd server && npm test` -> 56 suites, **908 passed** (was 896; +12 across the two re-arm suites, minus
+  none) — note `npm test`, not `npx jest`
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- teeth: old "issue on demand" branch restored -> 2 of 8 rearm tests failed (named above); restored -> 8 passed
+- `python3 scripts/test_cross_surface_contract.py` -> 25 passed (after deleting the closed-gap entry)
+- `make graph-check` -> all invariants pass (70 items, 61 CLOSED, 9 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+- migrations: `020_rearm_requests` present in both `migrations/` and `migrations-sqlite/`, applied by the
+  idempotency suite on a fresh database
 
 ### Next session opening
-- Bring `server/src/routes/rearm.js` onto ADR-011 (same approval flow, Express side, with the table and
-  admin routes it needs) so the two backends stop disagreeing about whether a hardware UUID is a
-  credential — that is the only thing keeping D-226 open.
+- Build the dashboard approval panel for re-arm requests (the endpoints and the 15-minute approval
+  semantics are tested and stable), or take D-228 (login attempt limiting) — the last High-severity
+  review finding that is a day of work.
 
 ---
 
@@ -137,13 +134,12 @@
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 | D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
-| D-226 | Unauthenticated /api/rearm re-keys a stolen device from its  | OPEN | — |
 | D-227 | Re-enrolment silently clears a device's stolen status with n | OPEN | — |
 | D-228 | Admin login has no attempt limit, lockout or second factor | OPEN | — |
 | D-229 | Enrolment tokens are read then deleted across an eventually  | OPEN | — |
 | D-230 | The deployment's Google API key is returned to every device  | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (10 of 70 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (9 of 70 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

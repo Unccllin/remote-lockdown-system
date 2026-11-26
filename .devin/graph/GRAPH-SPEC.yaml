@@ -1580,9 +1580,10 @@ debt_items:
     close_criteria: >-
       Firmware-proven or admin-approved re-arm, rate limiting, direct device lookup, tests, and
       evidence a stolen device cannot be re-keyed with only the UUID
-    status: OPEN
+    status: CLOSED
     category: SECURITY
-    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    commit_ref: "6794058 — ADR-011 approval on Worker and Express"
+    artifact_ref: "docs/artifacts/s366-d226-express-parity.txt"
     risk_notes: >-
       worker.ts:801 handleRearm (dispatch :2186): no auth, a new api_key_hash, listDevices plus one
       getCheckinMetadata per device. Review S2. The UUID is readable in firmware setup, so a thief
