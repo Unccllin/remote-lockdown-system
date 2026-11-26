@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 15:57:57 — 209 beliefs
+Generated: 2026-11-26 16:05:23 — 210 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -557,6 +557,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-190 | confirmed | emulated | An outcome test cannot prove a lock works: S343 measured 12 concurrent memory captures producing 12/12 correct results while the lost-update race was still present, and only 40 writers exposed it. The store locks are therefore pinned by a primitive-level test (process A holds store_lock, process B must not enter until release) parametrised over both memory.py and brain.py, whose store_lock bodies are independent copies. Its teeth are LOCK_EX -> LOCK_SH, which leaves a working lock that excludes nobody. |
+
+## ui
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-210 | confirmed | code-read | The dashboard has a re-arm approval panel (D-226 follow-up, S371): route 'rearm-requests' behind RequireRole super-admin, page dashboard/src/pages/RearmRequestsPage.jsx calling /api/admin/rearm-requests (served by both backends), with a two-click decision because approving re-keys a machine and cuts off the live agent, and the 15-minute single-use expiry stated where the decision is made. 6 tests; dashboard 274 to 280. |
 
 ## verification
 

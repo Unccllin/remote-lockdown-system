@@ -2574,8 +2574,10 @@ number is derived from the other; each is counted where it lives.
   (2 of 8 rearm tests fail — a denied device is refused earlier either way — and 6 of 9 on the Worker).
   Commit `6794058`. The cross-surface contract's KNOWN_GAPS entry was deleted, which is what its
   shrink-only rule requires once a recorded gap is served.
-- **Follow-up, not a close criterion**: no dashboard panel for approvals yet (the endpoints exist and
-  are tested; `curl` is acceptable for a recovery tool, not for a client's IT staff).
+- **Follow-up, done in S371**: the dashboard panel for approvals exists
+  (`dashboard/src/pages/RearmRequestsPage.jsx`, route `rearm-requests`, super-admin gated; six tests,
+  dashboard 274 → 280) — evidence `docs/artifacts/s371-rearm-approval-panel.txt`. It was not a close
+  criterion, which is why D-226 stayed closed while it was outstanding.
 - **Note on complexity**: `handleRearm` now sits at cyclomatic complexity 17 (threshold 15). An
   extraction of the issue-script branch was attempted and reverted — it broke the file's syntax and
   every branch is already pinned by a test, so the honest move was to stop rather than churn a

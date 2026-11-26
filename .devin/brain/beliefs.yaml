@@ -4555,3 +4555,21 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-210
+  statement: 'The dashboard has a re-arm approval panel (D-226 follow-up, S371): route ''rearm-requests''
+    behind RequireRole super-admin, page dashboard/src/pages/RearmRequestsPage.jsx calling /api/admin/rearm-requests
+    (served by both backends), with a two-click decision because approving re-keys a machine and cuts
+    off the live agent, and the 15-minute single-use expiry stated where the decision is made. 6 tests;
+    dashboard 274 to 280.'
+  domain: ui
+  status: confirmed
+  evidence_level: code-read
+  provenance: dashboard vitest 280 passed in 32 files; eslint 0; vite build green
+  source: S371
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

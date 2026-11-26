@@ -10072,3 +10072,82 @@ attempt while `consolidate` holds the lock.
   hardware or the owner's signing certificate, and D-225 needs the KV-stall trigger to recur (its witness
   is deployed). The one actionable code item is the **dashboard panel for re-arm approvals** — the
   endpoints are tested and stable, and `curl` is not a client IT workflow.
+
+---
+
+## Session 371 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `dashboard/src/App.jsx` (route table and the `RequireRole` pattern), `src/components/DashboardLayout.jsx`
+  (the `isSuperAdmin` nav block), `src/api/admins.js` + `src/api/client.js` (`baseURL` is `/api` or the
+  Worker URL, so paths are relative to `/api`), `src/pages/AdminsPage.jsx` (the house pattern for a
+  super-admin page: load on mount, toast on error with an actionable sentence, table + badges), and the
+  serverless/Express re-arm endpoints from S365–S366.
+- **Read**: `docs/artifacts/s365-d226-rearm-approval.txt` and the D-226 ledger progress note — which said in
+  as many words that the panel did not exist and that approving by `curl` is not a client IT workflow.
+- **Finding**: the panel is small but the *affordance* is the substance. Approving re-keys a machine and cuts
+  off the agent that is currently talking to the server, so a single stray click on a table row is the wrong
+  control: the decision takes two clicks, and the 15-minute expiry is stated where the decision happens
+  rather than only in the docs. Reloading the queue after deciding rather than splicing the row costs one
+  request and removes the "another admin already did this" class of confusion.
+
+### IMPLEMENT
+- `dashboard/src/api/rearm.js` (new): `listRearmRequests`, `approveRearmRequest`, `denyRearmRequest` against
+  `/api/admin/rearm-requests`, which both backends serve — so the page works in Express and serverless mode.
+- `dashboard/src/pages/RearmRequestsPage.jsx` (new): the pending queue (device, status, hardware UUID,
+  requested-at, source IP), two-click Approve/Deny, refresh, empty state, and the expiry notice.
+- `dashboard/src/App.jsx` + `src/components/DashboardLayout.jsx`: route `rearm-requests` under
+  `RequireRole role="super-admin"` and a nav entry beside Admins.
+- `dashboard/tests/RearmRequestsPage.test.jsx` (new): 6 cases.
+- `docs/artifacts/s371-rearm-approval-panel.txt`; the D-226 ledger follow-up line now says the panel
+  exists instead of saying it does not.
+
+### Fog cleared
+- **Re-arm approvals are now doable by a human without `curl`**: the queue shows what is pending, the
+  decision is deliberate, and the expiry is visible where it matters.
+- **The D-226 follow-up is closed and the ledger says so** — the note that read "no dashboard panel for
+  approvals yet" would otherwise have been the kind of stale line this repository keeps finding.
+
+### Fog remaining
+- **D-120, D-129, D-130, D-134** need Windows/HP hardware or the owner's signing certificate.
+- **D-225** needs the KV-stall trigger to recur; its witness is deployed and names the operation.
+- **`GOOGLE_API_KEY` is still the placeholder**, so devices get honest IP-level location; setting a real
+  restricted key is an owner action with a documented step.
+- **No re-arm approval notification reaches an administrator out of band** — the queue is pull-only. A
+  device asking for recovery does not email anyone; the operator has to look, or be told by the technician.
+
+### Debt items closed
+- None. This session closed a D-226 *follow-up*, and D-226 itself was closed in S366.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None for this work. The five remaining items need hardware, owner credentials, or an occurrence.
+
+### Session artifacts
+- docs/artifacts/s371-rearm-approval-panel.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), mine, and the second time in two sessions**: I inserted an icon into a
+  multi-line `import` with a regex, producing `FileText,, KeyRound`, and `vite build` failed on it. The build
+  named file and column within a second, which is the harness working. **Harness change**: edit import
+  blocks by reading and rewriting them; a pattern that lands "somewhere in the braces" is not an edit, and
+  the previous session's offset-based block replacement failed the same way.
+
+### VERIFY
+- `cd dashboard && npx vitest run` -> 32 files, **280 passed** (was 274; +6)
+- `cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0` -> exit 0
+- `cd dashboard && npx vite build` -> built (after repairing the import the first attempt broke)
+- `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- Nothing in the tree can move the remaining five: take **D-134** (TPM NV hierarchy) first when a Windows
+  machine with a real TPM is available, since its outcome decides whether D-129/D-130's hardware work can
+  reuse the same sealing path — and until then, the only open code work is the out-of-band notification for
+  re-arm requests noted under "Fog remaining".

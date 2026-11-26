@@ -53,29 +53,24 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 370 — 2026-11-26
+## Latest session: 371 — 2026-11-26
 
 ### Fog cleared
-- **A placeholder key is never served by either backend.** `ROT-TEST-…` (the value actually deployed),
-  `changeme`, `placeholder`, `your-key`, `example…`, `xxx…` are "no key": the field is omitted and the
-  runtime settings report `null`, so the agent's city-level fallback is a known state rather than a silent
-  failure.
-- **All five 26 November review findings are closed** — D-226, D-227, D-228, D-229, D-230.
-- The deployment requirement is written where an operator will find it, not only in the ledger.
+- **Re-arm approvals are now doable by a human without `curl`**: the queue shows what is pending, the
+  decision is deliberate, and the expiry is visible where it matters.
+- **The D-226 follow-up is closed and the ledger says so** — the note that read "no dashboard panel for
+  approvals yet" would otherwise have been the kind of stale line this repository keeps finding.
 
 ### Fog remaining
-- **A real key is still extractable by any device** — inherent to the chosen design. Restriction and quota
-  bound the damage; the server-side-lookup alternative (the review's preferred end state) reworks the
-  agent's offline resolve path and is deferred, not dismissed.
-- **Nothing verifies a key's scope** — the Worker cannot ask Google whether a key is restricted.
-- **`GOOGLE_API_KEY` is still the placeholder in production**, so devices get honest IP-level location
-  until an owner sets a real, restricted key. That is now an owner action with a documented step.
-- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; FRANKENSTEIN still
-  1.0.0; no dashboard panel for re-arm approvals.
+- **D-120, D-129, D-130, D-134** need Windows/HP hardware or the owner's signing certificate.
+- **D-225** needs the KV-stall trigger to recur; its witness is deployed and names the operation.
+- **`GOOGLE_API_KEY` is still the placeholder**, so devices get honest IP-level location; setting a real
+  restricted key is an owner action with a documented step.
+- **No re-arm approval notification reaches an administrator out of band** — the queue is pull-only. A
+  device asking for recovery does not email anyone; the operator has to look, or be told by the technician.
 
 ### Debt items closed
-- **D-230 — CLOSED** (placeholder geolocation key refused, restriction documented): commit `c28cb9b`,
-  artifact `docs/artifacts/s370-d230-geolocation-key.txt`.
+- None. This session closed a D-226 *follow-up*, and D-226 itself was closed in S366.
 
 ### Debt items still open
 - D-120
@@ -85,35 +80,30 @@
 - D-225
 
 ### Blockers
-- None. The remaining five need hardware, owner credentials, or an occurrence.
+- None for this work. The five remaining items need hardware, owner credentials, or an occurrence.
 
 ### Session artifacts
-- docs/artifacts/s370-d230-geolocation-key.txt
+- docs/artifacts/s371-rearm-approval-panel.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), mine, caught by the existing suite**: my first placeholder pattern
-  matched `/test/`, so 22 legitimate fixtures using `test-google-key` were classified as placeholders and
-  two ruling-C tests failed. **Harness change**: when introducing a rule that classifies existing data,
-  grep the suites for that data *first* — the fixtures are the specification of what "placeholder" should
-  and should not mean.
-- **Layer 1 (task specification)**: "restrict the key" cannot be verified from here (it is a Google Cloud
-  console action), so the code half and the documentation half are deliberately separated in the artifact
-  rather than implying the restriction was applied.
+- **Layer 4 (verification feedback), mine, and the second time in two sessions**: I inserted an icon into a
+  multi-line `import` with a regex, producing `FileText,, KeyRound`, and `vite build` failed on it. The build
+  named file and column within a second, which is the harness working. **Harness change**: edit import
+  blocks by reading and rewriting them; a pattern that lands "somewhere in the braces" is not an edit, and
+  the previous session's offset-based block replacement failed the same way.
 
 ### VERIFY
-- `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, **585 passed** (was 582; +3)
-- `cd server && npm test` -> 57 suites, **918 passed** (was 916; +2)
-- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
-- ruling-C tests (`google_api_key … present when GOOGLE_API_KEY is set`) unchanged and passing
+- `cd dashboard && npx vitest run` -> 32 files, **280 passed** (was 274; +6)
+- `cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0` -> exit 0
+- `cd dashboard && npx vite build` -> built (after repairing the import the first attempt broke)
 - `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
 - `python3 scripts/check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- The five items left need something this machine does not have: D-120/D-129/D-130/D-134 need Windows/HP
-  hardware or the owner's signing certificate, and D-225 needs the KV-stall trigger to recur (its witness
-  is deployed). The one actionable code item is the **dashboard panel for re-arm approvals** — the
-  endpoints are tested and stable, and `curl` is not a client IT workflow.
+- Nothing in the tree can move the remaining five: take **D-134** (TPM NV hierarchy) first when a Windows
+  machine with a real TPM is available, since its outcome decides whether D-129/D-130's hardware work can
+  reuse the same sealing path — and until then, the only open code work is the out-of-band notification for
+  re-arm requests noted under "Fog remaining".
 
 ---
 

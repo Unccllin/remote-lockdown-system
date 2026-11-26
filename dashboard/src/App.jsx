@@ -11,6 +11,7 @@ import EnrollDevicePage from './pages/EnrollDevicePage';
 import MapPage from './pages/MapPage';
 import HealthPage from './pages/HealthPage';
 import AdminsPage from './pages/AdminsPage';
+import RearmRequestsPage from './pages/RearmRequestsPage';
 import AlertsPage from './pages/AlertsPage';
 import PblDevicesPage from './pages/PblDevicesPage';
 import PblDeviceDetailPage from './pages/PblDeviceDetailPage';
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="pbl-devices/:id" element={<RequireRole role="operator"><PblDeviceDetailPage /></RequireRole>} />
         <Route path="pbl-policy" element={<RequireRole role="super-admin"><PblPolicyPage /></RequireRole>} />
         <Route path="admins" element={<RequireRole role="super-admin"><AdminsPage /></RequireRole>} />
+        <Route path="rearm-requests" element={<RequireRole role="super-admin"><RearmRequestsPage /></RequireRole>} />
       </Route>
     </Routes>
   );

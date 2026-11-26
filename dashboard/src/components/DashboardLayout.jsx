@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   ShieldAlert, Monitor, ClipboardList, LogOut, Plus, Map as MapIcon,
-  LayoutDashboard, Menu, X, Activity, UserCog, Cloud, Bell, Cpu, FileText,
+  LayoutDashboard, Menu, X, Activity, UserCog, Cloud, Bell, Cpu, FileText, KeyRound,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useServerlessMode } from '../hooks/useServerlessMode';
@@ -60,6 +60,7 @@ export default function DashboardLayout() {
   // /api/admins CRUD (S4-serverless P1), so admin management works in both
   // Express and serverless mode.
   if (isSuperAdmin) {
+    navItems.push({ to: '/rearm-requests', icon: KeyRound, label: 'Re-arm Requests' });
     navItems.push({ to: '/admins', icon: UserCog, label: 'Admins' });
     navItems.push({ to: '/pbl-policy', icon: FileText, label: 'PBL Policy' });
   }

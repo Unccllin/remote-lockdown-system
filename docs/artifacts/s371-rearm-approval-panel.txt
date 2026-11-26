@@ -1,0 +1,55 @@
+# S371 — the re-arm approval panel (D-226 follow-up)
+
+D-226 closed in S366 with a deliberate follow-up: the approval endpoints existed and were tested, but
+approving meant `curl`, which is not a workflow a client's IT staff can use. This adds the panel.
+
+## What was added
+
+- `dashboard/src/api/rearm.js` — `listRearmRequests`, `approveRearmRequest`, `denyRearmRequest` against
+  `/api/admin/rearm-requests`, which **both backends serve** (Express and the Worker), so the page works
+  in either deployment mode.
+- `dashboard/src/pages/RearmRequestsPage.jsx` — the pending queue (device, current status, hardware UUID,
+  requested-at, source IP), an explicit **two-click decision** (Approve/Deny → Confirm/Cancel), and a
+  refresh. After a decision it reloads rather than splicing the row: another admin may have decided the
+  same request, and the queue is the authority on what is still pending.
+- Route `rearm-requests` gated with `RequireRole role="super-admin"`, and a nav entry beside Admins.
+- The 15-minute expiry is stated **where the decision is taken**, not only in the docs: an approval is
+  single-use and time-limited, so the technician at the machine has to retry inside that window, and an
+  administrator approving at leisure would otherwise be confused by a request that silently re-asked.
+
+## Design notes worth keeping
+
+- **Two clicks, deliberately.** Approving re-keys a machine and cuts off its current agent credentials;
+  a single stray click in a table row is the wrong affordance for that.
+- **Reload after deciding.** It costs one request and removes a whole class of "the other admin already
+  did this" confusion.
+- **No client-side role logic.** The page renders for whoever reaches it; the route guard and the
+  server-side `requireRole('super-admin')` are the enforcement, which is where it belongs.
+
+## Tests (6) — dashboard 272 → 280
+
+Lists the queue with device and status; states the 15-minute window; empty state rather than an empty
+table; approve requires the confirmation click and then reloads (`listRearmRequests` called twice);
+deny never calls approve; cancel decides nothing.
+
+## Gates
+
+```
+cd dashboard && npx vitest run                       32 files, 280 passed (was 274)
+cd dashboard && npx eslint src/ tests/ --ext .js,.jsx --max-warnings=0   exit 0
+cd dashboard && npx vite build                       ✓ built
+```
+
+## A mistake, recorded
+
+My first attempt inserted the `KeyRound` icon into `DashboardLayout.jsx` with a regex over the multi-line
+import, producing `FileText,, KeyRound` and failing the build. `vite build` named the file and column
+immediately. This is the second time in two sessions that a clever regex edit broke a file that a plain
+read-and-rewrite would not have: **import blocks get edited by reading them, not by pattern.**
+
+## Still open after this
+
+- **D-120, D-129, D-130, D-134** need Windows/HP hardware or the owner's signing certificate.
+- **D-225** needs the KV-stall trigger to occur again; its witness is deployed and names the operation.
+- **`GOOGLE_API_KEY`** is still the placeholder, so devices get honest IP-level location (D-230's
+  documented deployment step covers setting a real, restricted key).
