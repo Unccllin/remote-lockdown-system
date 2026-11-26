@@ -4291,3 +4291,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-197
+  statement: 'The Windows build identity is stamped by scripts/stamp-buildinfo.ps1, called by BOTH entry
+    points (agent/build.ps1 and scripts/build-windows-artifacts.ps1, the latter being what CI runs on
+    a v* tag), and build-windows-artifacts.ps1 fails the build when dist/lockdown-agent.exe --version
+    does not report build=YYYYMMDD.12hex. Verified on MOLE by real builds both ways: stamped build exits
+    0 with build=20261126.69a3e4156d16, and with the stamp stripped the build fails with ''the agent binary
+    carries no stamped build id'' (exit 1).'
+  domain: ci-build
+  status: confirmed
+  evidence_level: hardware
+  provenance: two real builds on MOLE (stamped exit 0; stamp stripped -> exit 1 with the identity message),
+    both entry points
+  source: S359 MOLE builds + teeth test
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

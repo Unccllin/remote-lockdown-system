@@ -53,27 +53,29 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 358 — 2026-11-26
+## Latest session: 359 — 2026-11-26
 
 ### Fog cleared
-- **The queue can no longer wedge, and that is proven both ways.** Reverting to
-  `mutationChain.then(fn, fn)` makes 5 of the 6 helper tests fail (the wedge test hangs to vitest's
-  5 s timeout) and makes the dispatcher-level test time out at 5000 ms; with the fix the route is
-  admitted after the bound and reaches its handler. `npx tsc --noEmit -p .` exit 0, 544 tests pass.
-- **The wedge is now observable.** `GET /api/health` carries the stall counter, so the next
-  occurrence is a number and a log line instead of a silent device.
+- **The release path can no longer ship an anonymous binary.** `build-windows-artifacts.ps1 -
+  Only agent` on MOLE now prints `Build identity: 20261126.69a3e4156d16`, builds, and verifies
+  `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`; `agent/build.ps1 -AgentOnly`
+  does the same through the shared script and exits 0.
+- **The check has teeth, measured by stripping the stamp**: the build then produces
+  `build=unknown.unknown` and fails with `!! the agent binary carries no stamped build id …`,
+  exit 1, rather than succeeding quietly. Both files were restored afterwards.
+- The S357 fog item "`build=unknown.unknown` is what the CI script produces" is closed by a fix
+  rather than by a note.
 
 ### Fog remaining
-- **D-225's original trigger is still unmeasured.** The check-in path awaits `request.text()`,
-  KV get/get/put/list and no `fetch` subrequest, so an unsettled KV operation leads the
-  hypothesis; the fix deliberately does not depend on knowing it.
-- **D-225 stays OPEN** because criterion (d) — a real check-in after an *induced* stall with no
-  deploy — cannot be produced without a test hook in the deployed Worker, which is not worth
-  shipping. What is measured instead: the fix is deployed and devices check in normally.
-- **Criterion (b) is a documented choice, not a new mechanism**: reset-on-timeout rather than a
-  Durable Object. The DO remains the real cross-isolate answer and is named in the code as such.
-- Unchanged from S357: D-120/D-129/D-130/D-134 need hardware or owner key material;
-  `GOOGLE_API_KEY` is still the placeholder; D1 cutover not started; FRANKENSTEIN still 1.0.0.
+- **D-225's trigger is still unmeasured** (unchanged): the leading hypothesis is an unsettled KV
+  operation on the check-in path, untested, and the queue has no per-operation timing.
+- **D-225 stays OPEN**: criterion (d) needs a real check-in after an induced stall with no deploy,
+  which needs a test hook in the deployed Worker that is not worth shipping.
+- **`binary:lockscreen` and `binary:installer` are still the pre-1.0.5 builds** — neither is
+  produced by the default build targets and neither is touched by the TPM change, but the fleet
+  downloads them for new installs.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; `GOOGLE_API_KEY` is
+  still the placeholder; D1 cutover not started (optional at 2 devices); FRANKENSTEIN still 1.0.0.
 
 ### Debt items closed
 - None this session.
@@ -86,34 +88,40 @@
 - D-225
 
 ### Blockers
-- None. D-225 is mitigated and observable; what remains of it needs no hardware and no credential.
+- None.
 
 ### Session artifacts
-- docs/artifacts/s358-d225-mutation-queue.txt
+- docs/artifacts/s359-build-identity.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback)**: my first run of the new tests failed with
-  `worker.mutationQueueStats is not a function` because the suite's `worker` handle was
-  `mod.default` and the queue helpers are *named* exports — the tests, not the fix, were wrong.
-  The harness caught it in one run because the test calls the API the way the dispatcher does.
-  **Harness change**: none needed — this is the case the suite already handles well; recorded so the
-  next reader does not read five red tests as a broken fix.
+- **Layer 4 (verification feedback), twice, both mine and both hidden-by-measurement**:
+  (a) the first build run was piped through `grep`, so `grep` exiting 1 for "no match" became the
+  task's exit code and the build's real output was filtered into an empty log — a check that
+  reported failure while proving nothing. (b) the first version of the change checked
+  `$LASTEXITCODE` after `& stamp-buildinfo.ps1`; that variable reports the last *native* command,
+  not a script's outcome, so a successful stamp was followed by
+  `!! stamping the build identity failed`. **Harness change**: capture a command's exit status
+  separately from any filter applied to its output, and in PowerShell assert `$?`/a thrown error
+  for scripts — never `$LASTEXITCODE`.
 
 ### VERIFY
-- `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 7 files, 544 passed (was 537)
-- teeth check 1: old unbounded chain restored -> 5 failed / 1 passed among the six queue tests
-- teeth check 2: same revert -> `a real serialized route still answers while the queue is held`
-  timed out at 5000 ms; restored -> 544 passed
-- `npx wrangler deploy` -> version `0671c600`
-- `curl /api/health` -> `"mutation_queue": {"stalls": 0, "wait_ms": 5000}`
-- `curl -X POST /api/agent/checkin` (unsigned) -> 401 in 0.51 s
-- KV `device_checkin` -> `last_checkin 2026-11-26T09:21:57Z`, `agent_version 1.0.5`
-- MOLE `agent.log` -> `TPM seal certificate F35451B3… (EXISTS)` on successive check-ins
+- `scripts/build-windows-artifacts.ps1 -Only agent` on MOLE -> stamp printed, `PE=True`,
+  `--version` carries the stamped id, exit 0
+- `agent/build.ps1 -AgentOnly` on MOLE (run from `agent/`) -> stamped, `OK dist\lockdown-agent.exe`,
+  `--version` carries the stamped id, exit 0
+- teeth: stamp stripped + `_buildinfo.py` reset -> build produced `build=unknown.unknown` and failed
+  at the identity check, exit 1; both files restored
+- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` -> 11 passed
+- ASCII check on both PowerShell scripts -> ascii
+- `agent/.venv/bin/python -m pytest agent/tests/test_version_identity.py` -> 4 passed (the committed
+  `_buildinfo.py` is still the placeholder)
+- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` -> 31 passed
+- `bash -n scripts/*.sh` -> clean
 
 ### Next session opening
-- Measure D-225's trigger (instrument the check-in path's KV awaits for one deploy, or leave it as
-  a bounded-risk defect), and bring FRANKENSTEIN to 1.0.5 next time it is powered on.
+- Instrument D-225's check-in path (per-KV-operation timing with a logged threshold) so the next
+  stall names the operation instead of leaving the trigger a hypothesis, then rebuild
+  `binary:lockscreen` and `binary:installer` from the 1.0.5 tree.
 
 ---
 

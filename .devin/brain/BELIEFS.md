@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 12:11:56 — 196 beliefs
+Generated: 2026-11-26 12:35:00 — 197 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -133,6 +133,12 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-058 | confirmed | code-read | Admin usernames follow one contract, defined in server/src/validation/username.js: the value is TRIMMED before use, allowed characters are letters, digits and _ @ . -, length is 3-100 on creation while login accepts shorter values so a legacy account can still sign in, and the password is never trimmed. Before S203 three routes each had their own rule (login allowed _ @ . -, setup/create-admin and admins/create allowed only _ -) and none trimmed, so a username accepted at creation could be rejected at login, and padded input failed with 'username contains invalid characters' — a message that reads like a wrong password. The dashboard also submitted the username untrimmed and its setup form used a narrower allowlist than login. |
+
+## ci-build
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-197 | confirmed | hardware | The Windows build identity is stamped by scripts/stamp-buildinfo.ps1, called by BOTH entry points (agent/build.ps1 and scripts/build-windows-artifacts.ps1, the latter being what CI runs on a v* tag), and build-windows-artifacts.ps1 fails the build when dist/lockdown-agent.exe --version does not report build=YYYYMMDD.12hex. Verified on MOLE by real builds both ways: stamped build exits 0 with build=20261126.69a3e4156d16, and with the stamp stripped the build fails with 'the agent binary carries no stamped build id' (exit 1). |
 
 ## ci/dependabot
 

@@ -8868,3 +8868,97 @@ attempt while `consolidate` holds the lock.
 ### Next session opening
 - Measure D-225's trigger (instrument the check-in path's KV awaits for one deploy, or leave it as
   a bounded-risk defect), and bring FRANKENSTEIN to 1.0.5 next time it is powered on.
+
+---
+
+## Session 359 — 2026-11-26
+
+### RULE-ZERO
+**Read**: `agent/build.ps1:62-88` (the stamping block: SHA-256 over all `*.py` except `_buildinfo.py`, `-BuildCommit` override, UTC `yyyyMMdd`, writes `_buildinfo.py`), `agent/_buildinfo.py` (committed `unknown` placeholders), `agent/tests/test_version_identity.py` (pins the shape `YYYYMMDD.12hex`, the `--version` string, and that the *committed* file stays a placeholder), `scripts/build-windows-artifacts.ps1` (the release path; verifies size + `MZ` and nothing about identity), `.github/workflows/windows-artifacts.yml` (runs that script on `windows-latest`, tag-triggered, uploads the exes), `scripts/test_build_windows_artifacts.py` (source-level guards: ASCII-only, builds every spec it claims, verifies what it produces, Makefile delegates), `agent/agent.py:232-270` (`AGENT_BUILD`, `version_string()`).
+**Finding**: the identity rule is enforced only on the path nobody ships from. `agent/build.ps1` stamps `_buildinfo.py`; `scripts/build-windows-artifacts.ps1` — which CI runs on `v*` tags and which produced the binaries published as 1.0.5 only because this session ran `build.ps1` by hand on MOLE — does not, so its output reports `lockdown-agent <version> (frozen=True, build=unknown.unknown)`. S357's own first build proved it. Every rule that matters here already has a home ("build logic lives in scripts/"), so the stamping moves into `scripts/stamp-buildinfo.ps1` and both callers invoke it rather than one owning a copy — a second copy is the drift this repo's build notes are full of.
+**Not doing**: touching `_buildinfo.py`'s committed placeholder (a test pins it), or making the Makefile aware of this (it delegates).
+
+### IMPLEMENT
+- `scripts/stamp-buildinfo.ps1` (new): the single implementation of the build identity — SHA-256
+  over `agent/*.py` except `_buildinfo.py`, sorted by name, `-BuildCommit` override, UTC
+  `yyyyMMdd`, writes `_buildinfo.py` as ASCII, prints `Build identity: <date>.<commit>`.
+- `agent/build.ps1`: its private hashing block is replaced by a call to that script. The
+  duplicate is gone, which is what the test now asserts (`ComputeHash` must not reappear).
+- `scripts/build-windows-artifacts.ps1` (the CI/release path): stamps before the first PyInstaller
+  call, and afterwards runs `dist\lockdown-agent.exe --version`, failing the build unless it
+  reports `build=YYYYMMDD.12hex`. Both call the stamp with `&`, never `pwsh` — `pwsh` is absent on
+  a plain Windows 10/11 host — and the stamp script `throw`s rather than `exit`s, because it is
+  invoked from inside another script.
+- `scripts/test_build_windows_artifacts.py`: 8 → 11 tests pinning that both entry points stamp
+  in-process, that the stamp precedes the first PyInstaller call, that no duplicate hash
+  implementation returns, that the identity check runs before the failure exit, and that the new
+  script is ASCII-only.
+- `docs/artifacts/s359-build-identity.txt`: the defect, both real runs, and the teeth measurement.
+
+### Fog cleared
+- **The release path can no longer ship an anonymous binary.** `build-windows-artifacts.ps1 -
+  Only agent` on MOLE now prints `Build identity: 20261126.69a3e4156d16`, builds, and verifies
+  `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`; `agent/build.ps1 -AgentOnly`
+  does the same through the shared script and exits 0.
+- **The check has teeth, measured by stripping the stamp**: the build then produces
+  `build=unknown.unknown` and fails with `!! the agent binary carries no stamped build id …`,
+  exit 1, rather than succeeding quietly. Both files were restored afterwards.
+- The S357 fog item "`build=unknown.unknown` is what the CI script produces" is closed by a fix
+  rather than by a note.
+
+### Fog remaining
+- **D-225's trigger is still unmeasured** (unchanged): the leading hypothesis is an unsettled KV
+  operation on the check-in path, untested, and the queue has no per-operation timing.
+- **D-225 stays OPEN**: criterion (d) needs a real check-in after an induced stall with no deploy,
+  which needs a test hook in the deployed Worker that is not worth shipping.
+- **`binary:lockscreen` and `binary:installer` are still the pre-1.0.5 builds** — neither is
+  produced by the default build targets and neither is touched by the TPM change, but the fleet
+  downloads them for new installs.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; `GOOGLE_API_KEY` is
+  still the placeholder; D1 cutover not started (optional at 2 devices); FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None.
+
+### Session artifacts
+- docs/artifacts/s359-build-identity.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), twice, both mine and both hidden-by-measurement**:
+  (a) the first build run was piped through `grep`, so `grep` exiting 1 for "no match" became the
+  task's exit code and the build's real output was filtered into an empty log — a check that
+  reported failure while proving nothing. (b) the first version of the change checked
+  `$LASTEXITCODE` after `& stamp-buildinfo.ps1`; that variable reports the last *native* command,
+  not a script's outcome, so a successful stamp was followed by
+  `!! stamping the build identity failed`. **Harness change**: capture a command's exit status
+  separately from any filter applied to its output, and in PowerShell assert `$?`/a thrown error
+  for scripts — never `$LASTEXITCODE`.
+
+### VERIFY
+- `scripts/build-windows-artifacts.ps1 -Only agent` on MOLE -> stamp printed, `PE=True`,
+  `--version` carries the stamped id, exit 0
+- `agent/build.ps1 -AgentOnly` on MOLE (run from `agent/`) -> stamped, `OK dist\lockdown-agent.exe`,
+  `--version` carries the stamped id, exit 0
+- teeth: stamp stripped + `_buildinfo.py` reset -> build produced `build=unknown.unknown` and failed
+  at the identity check, exit 1; both files restored
+- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` -> 11 passed
+- ASCII check on both PowerShell scripts -> ascii
+- `agent/.venv/bin/python -m pytest agent/tests/test_version_identity.py` -> 4 passed (the committed
+  `_buildinfo.py` is still the placeholder)
+- `agent/.venv/bin/python scripts/test_check_firmware_todos.py` -> 31 passed
+- `bash -n scripts/*.sh` -> clean
+
+### Next session opening
+- Instrument D-225's check-in path (per-KV-operation timing with a logged threshold) so the next
+  stall names the operation instead of leaving the trigger a hypothesis, then rebuild
+  `binary:lockscreen` and `binary:installer` from the 1.0.5 tree.
