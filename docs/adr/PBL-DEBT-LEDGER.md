@@ -2386,13 +2386,13 @@
 | D-227 | Re-enrolment silently clears a device's `stolen` status with no audit record | CLOSED (S368: status preserved on both backends, audit carries `previous_status`, flagged re-association notifies; commit `38009ba`) | SECURITY |
 | D-228 | Admin login has no attempt limit, lockout or second factor | CLOSED (S367: 5/username and 20/IP per 15 minutes on both backends, commit `548cedf`; the oracle rejected the first version's sentinel-username IP gate, which locked every login globally — see the progress note) | SECURITY |
 | D-229 | Enrolment tokens are read then deleted across an eventually consistent store | CLOSED (S369: D1 PRIMARY KEY claim with ON CONFLICT DO NOTHING, KV fallback documented; Express was already atomic — commit `a39cc61`) | SERVERLESS |
-| D-230 | The deployment's Google API key is returned to every device in four enrolment responses | OPEN (S364: `worker.ts:503,538,687,722`; review S9) | SECURITY |
+| D-230 | The deployment's Google API key is returned to every device in four enrolment responses | CLOSED (S370: placeholder refused by both backends, restriction documented as a deployment step; commit `c28cb9b`) | SECURITY |
 
 **Totals** (recounted 2026-11-26 by counting this file's own table rows): **65 items —
-59 CLOSED, 6 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
+60 CLOSED, 5 OPEN** (D-120 real-media/VMK-lock-state, D-129 real hardware,
 D-130 signing certificate, D-134 TPM NV hierarchy, D-225 Worker mutation-chain wedge, and
-D-230 — the last unfixed finding from the 26 November external review; D-226 closed in S366,
-D-227 in S368, D-228 in S367, D-229 in S369). The previous line claimed
+all five 26 November review findings closed: D-226 in S366, D-227 in S368, D-228 in S367,
+D-229 in S369, D-230 in S370). The previous line claimed
 56/51/5 and listed D-224 as open, three figures that contradicted both this table
 (D-224 is CLOSED) and the graph. The graph tracks a different, larger set —
 **65 debt items, 60 CLOSED, 5 OPEN** — because it also carries the legacy
@@ -2656,7 +2656,8 @@ number is derived from the other; each is counted where it lives.
   when the atomic path is forced off. Commit `a39cc61`; evidence `docs/artifacts/s369-d229-enrol-claim.txt`.
 
 ### D-230 — The deployment's Google API key is returned to every device in four enrolment responses
-- **Status**: OPEN (found 2026-11-26, S363; review finding S9)
+- **Status**: CLOSED (2026-11-26, S370; commit `c28cb9b`) — restriction documented, placeholder
+  refused by both backends. Evidence: `docs/artifacts/s370-d230-geolocation-key.txt`
 - **Category**: SECURITY
 - **What the code does**: `worker.ts:503, 538, 687, 722` spread `google_api_key` into the enrolment
   and registry responses whenever `env.GOOGLE_API_KEY` is set.
@@ -2666,3 +2667,14 @@ number is derived from the other; each is counted where it lives.
   quota, documented as a deployment step; or (b) the lookup moves server-side and devices receive
   no key; (c) a test that the response omits the key when the server-side lookup is enabled.
 - **Estimated effort**: half a day for (a), 2–3 days for (b).
+- **Progress (S370)**: the owner chose restriction over server-side lookup. One rule per deployable —
+  `servedGeolocationKey`/`geolocationKeyField` in `serverless/kv-store.ts` and the same pair in
+  `server/src/lib/geolocationKey.js` — so a placeholder (`ROT-TEST-…`, `changeme`, `placeholder`,
+  `your-key`, `example…`, `xxx…`) is served as *no key*: the field is omitted and the agent's runtime
+  settings report `null`, which makes the city-level fallback honest instead of a silent failure with a
+  key that cannot work. The pattern deliberately does not match "test" anywhere, because 22 fixtures use
+  `test-google-key` and the rule is about a *deployed* placeholder. The deployment step (restrict to the
+  Geolocation API with a daily quota) is in `docs/SERVERLESS-DEPLOY.md`. 5 tests across the two backends;
+  the pre-existing ruling-C tests still pass unchanged, which is the check that the rule did not
+  overreach. Commit `c28cb9b`; evidence `docs/artifacts/s370-d230-geolocation-key.txt`. Residual: a real key is still extractable from a device
+  by design — restriction bounds the damage; the server-side lookup is deferred, not dismissed.

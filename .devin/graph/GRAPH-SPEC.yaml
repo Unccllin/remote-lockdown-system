@@ -1640,9 +1640,10 @@ debt_items:
     close_criteria: >-
       Key restricted to the Geolocation API with a daily quota and documented as a deployment step,
       or the lookup moved server-side with a test that devices receive no key
-    status: OPEN
+    status: CLOSED
     category: SECURITY
-    artifact_ref: "docs/artifacts/s363-review-verification.txt"
+    commit_ref: "c28cb9b — placeholder geolocation key refused, both backends"
+    artifact_ref: "docs/artifacts/s370-d230-geolocation-key.txt"
     risk_notes: >-
       worker.ts:503, 538, 687, 722 spread google_api_key into responses. Review S9: anyone holding a
       device, or the response body in a log, extracts a key billed to the client.

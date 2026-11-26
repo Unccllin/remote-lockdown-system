@@ -4535,3 +4535,23 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-209
+  statement: 'D-230 is closed: neither backend serves a placeholder geolocation key. servedGeolocationKey
+    treats ROT-TEST, changeme, placeholder, your-key, example and xxx shapes as no key, so enrolment responses
+    omit google_api_key and the agent runtime settings report null, making the city-level IP fallback
+    an explicit state rather than a silent failure of a key that cannot work. The rule deliberately does
+    not match the word test, because 22 fixtures use test-google-key. Restricting a real key in Google
+    Cloud to the Geolocation API with a daily quota is documented as a deployment step. Commit c28cb9b;
+    worker 585 tests, server 918 in 57 suites.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: worker 585 + server 918 green; ruling-C tests unchanged; commit c28cb9b
+  source: S370
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

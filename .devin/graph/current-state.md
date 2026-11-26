@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 64 | 70 | ✗ |
+| Debt items | 65 | 70 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 64 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 65 of 70 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,28 +53,29 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 369 — 2026-11-26
+## Latest session: 370 — 2026-11-26
 
 ### Fog cleared
-- **A single-use enrolment token is now single-use on the deployed Worker.** The claim is an INSERT whose
-  primary key refuses the second writer; the loser gets 401. Verified against the live D1 (table present)
-  and by tests that run two claims concurrently.
-- **The KV fallback is documented and pinned** rather than waiting to be rediscovered: a test asserts both
-  claims win without a binding, so the difference between the paths is visible in the suite.
-- **Claim rows are purged and audited** by the cron, so the table cannot grow for ever.
+- **A placeholder key is never served by either backend.** `ROT-TEST-…` (the value actually deployed),
+  `changeme`, `placeholder`, `your-key`, `example…`, `xxx…` are "no key": the field is omitted and the
+  runtime settings report `null`, so the agent's city-level fallback is a known state rather than a silent
+  failure.
+- **All five 26 November review findings are closed** — D-226, D-227, D-228, D-229, D-230.
+- The deployment requirement is written where an operator will find it, not only in the ledger.
 
 ### Fog remaining
-- **D-230 is the last unfixed review finding** (the deployment's Google key is returned to every device in
-  four enrolment responses). Half a day to restrict the key in Google Cloud and document it as a
-  deployment step; 2–3 days to move the lookup server-side. The first option needs an owner action in the
-  Google Cloud console, which is why this session took D-229 instead.
-- **The enrolment token stays a bearer credential** (D-227's residual): single-use now, not attributable.
-- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; `GOOGLE_API_KEY`
-  placeholder; FRANKENSTEIN still 1.0.0; no dashboard panel for re-arm approvals.
+- **A real key is still extractable by any device** — inherent to the chosen design. Restriction and quota
+  bound the damage; the server-side-lookup alternative (the review's preferred end state) reworks the
+  agent's offline resolve path and is deferred, not dismissed.
+- **Nothing verifies a key's scope** — the Worker cannot ask Google whether a key is restricted.
+- **`GOOGLE_API_KEY` is still the placeholder in production**, so devices get honest IP-level location
+  until an owner sets a real, restricted key. That is now an owner action with a documented step.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; FRANKENSTEIN still
+  1.0.0; no dashboard panel for re-arm approvals.
 
 ### Debt items closed
-- **D-229 — CLOSED** (atomic enrolment-token claim): commit `a39cc61`, artifact
-  `docs/artifacts/s369-d229-enrol-claim.txt`.
+- **D-230 — CLOSED** (placeholder geolocation key refused, restriction documented): commit `c28cb9b`,
+  artifact `docs/artifacts/s370-d230-geolocation-key.txt`.
 
 ### Debt items still open
 - D-120
@@ -82,35 +83,37 @@
 - D-130
 - D-134
 - D-225
-- D-230
 
 ### Blockers
-- None for this item. D-230's preferred fix needs an owner action in Google Cloud.
+- None. The remaining five need hardware, owner credentials, or an occurrence.
 
 ### Session artifacts
-- docs/artifacts/s369-d229-enrol-claim.txt
+- docs/artifacts/s370-d230-geolocation-key.txt
 
 ### Failure attribution
-- **Layer 4 (verification feedback), mine**: I added the cron purge and left its result unused, so `tsc`
-  and the unused-variable rule both flagged a variable nothing read — the purge ran but nothing said so.
-  Fixed by auditing the count the way `nonce_purge` already does. **Harness change**: when adding a purge
-  beside an existing one, copy the whole block including its reporting, not just the call.
-- **Layer 2 (context provision), the good kind again**: the parity check answered the opposite way from
-  the previous two sessions, which is exactly why it is now a step rather than a guess.
+- **Layer 4 (verification feedback), mine, caught by the existing suite**: my first placeholder pattern
+  matched `/test/`, so 22 legitimate fixtures using `test-google-key` were classified as placeholders and
+  two ruling-C tests failed. **Harness change**: when introducing a rule that classifies existing data,
+  grep the suites for that data *first* — the fixtures are the specification of what "placeholder" should
+  and should not mean.
+- **Layer 1 (task specification)**: "restrict the key" cannot be verified from here (it is a Google Cloud
+  console action), so the code half and the documentation half are deliberately separated in the artifact
+  rather than implying the restriction was applied.
 
 ### VERIFY
-- `wrangler d1 execute lockdown --file=d1/schema.sql --remote` -> applied; `sqlite_master` lists
-  `enrollment_claims`
 - `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, **582 passed** (was 579; +3)
-- teeth: atomic path forced off (`if (false && env.DB)`) -> 2 of 3 D-229 cases failed; restored -> 582 pass
-- `make graph-check` -> all invariants pass (70 items, 64 CLOSED, 6 OPEN)
+- `cd serverless && npx vitest run` -> 8 files, **585 passed** (was 582; +3)
+- `cd server && npm test` -> 57 suites, **918 passed** (was 916; +2)
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- ruling-C tests (`google_api_key … present when GOOGLE_API_KEY is set`) unchanged and passing
+- `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
 - `python3 scripts/check_debt_ledger.py` -> 0 mismatches
 
 ### Next session opening
-- Take **D-230** — the last unfixed review finding — and start by deciding the shape with the owner:
-  restricting the key in Google Cloud (half a day, needs their console access) versus moving the location
-  lookup server-side (2–3 days, removes the key from the fleet entirely).
+- The five items left need something this machine does not have: D-120/D-129/D-130/D-134 need Windows/HP
+  hardware or the owner's signing certificate, and D-225 needs the KV-stall trigger to recur (its witness
+  is deployed). The one actionable code item is the **dashboard panel for re-arm approvals** — the
+  endpoints are tested and stable, and `curl` is not a client IT workflow.
 
 ---
 
@@ -123,9 +126,8 @@
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
 | D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
-| D-230 | The deployment's Google API key is returned to every device  | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (6 of 70 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 70 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

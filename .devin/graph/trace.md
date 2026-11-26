@@ -9986,3 +9986,89 @@ attempt while `consolidate` holds the lock.
 - Take **D-230** — the last unfixed review finding — and start by deciding the shape with the owner:
   restricting the key in Google Cloud (half a day, needs their console access) versus moving the location
   lookup server-side (2–3 days, removes the key from the fleet entirely).
+
+---
+
+## Session 370 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: the nine `GOOGLE_API_KEY` spread sites (`serverless/worker.ts` ×4,
+  `serverless/agent-routes.ts` runtime settings, `server/src/routes/enroll.js` ×2,
+  `server/src/routes/devices.js` ×1) and `agent/agent.py` (428, 505, 1289 — the agent reads
+  `google_api_key` from config and resolves BSSIDs itself).
+- **Read**: the pre-existing ruling-C tests (`google_api_key on claim responses`, S306) and every fixture
+  that sets a synthetic key, before choosing the placeholder rule.
+- **Finding**: the review's "restrict the key" and "make the Worker do the lookup" are a cost decision,
+  not a code decision, so it went to the owner; the chosen half still has a code half worth doing —
+  a placeholder that cannot work must not be served at all, because handing it out turns a fallback into
+  a silent failure. And the boundary of "placeholder" matters: matching /test/ would have classified 22
+  legitimate test fixtures as placeholders, which is why the rule names the shapes that actually ship.
+
+### IMPLEMENT
+- `serverless/kv-store.ts`: `servedGeolocationKey()` + `geolocationKeyField()`; the four Worker spreads and
+  the runtime-settings path use them.
+- `server/src/lib/geolocationKey.js` (new) + `enroll.js`/`devices.js`: the same rule on the Express side.
+- `docs/SERVERLESS-DEPLOY.md`: the deployment step — restrict the key to the Geolocation API with a daily
+  quota — plus what a placeholder now does.
+- Tests: 3 Worker cases and 2 Express cases; the pre-existing ruling-C tests unchanged and passing.
+- `docs/artifacts/s370-d230-geolocation-key.txt`: the decision, the rule's boundary, the residuals.
+
+### Fog cleared
+- **A placeholder key is never served by either backend.** `ROT-TEST-…` (the value actually deployed),
+  `changeme`, `placeholder`, `your-key`, `example…`, `xxx…` are "no key": the field is omitted and the
+  runtime settings report `null`, so the agent's city-level fallback is a known state rather than a silent
+  failure.
+- **All five 26 November review findings are closed** — D-226, D-227, D-228, D-229, D-230.
+- The deployment requirement is written where an operator will find it, not only in the ledger.
+
+### Fog remaining
+- **A real key is still extractable by any device** — inherent to the chosen design. Restriction and quota
+  bound the damage; the server-side-lookup alternative (the review's preferred end state) reworks the
+  agent's offline resolve path and is deferred, not dismissed.
+- **Nothing verifies a key's scope** — the Worker cannot ask Google whether a key is restricted.
+- **`GOOGLE_API_KEY` is still the placeholder in production**, so devices get honest IP-level location
+  until an owner sets a real, restricted key. That is now an owner action with a documented step.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured; FRANKENSTEIN still
+  1.0.0; no dashboard panel for re-arm approvals.
+
+### Debt items closed
+- **D-230 — CLOSED** (placeholder geolocation key refused, restriction documented): commit `c28cb9b`,
+  artifact `docs/artifacts/s370-d230-geolocation-key.txt`.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None. The remaining five need hardware, owner credentials, or an occurrence.
+
+### Session artifacts
+- docs/artifacts/s370-d230-geolocation-key.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback), mine, caught by the existing suite**: my first placeholder pattern
+  matched `/test/`, so 22 legitimate fixtures using `test-google-key` were classified as placeholders and
+  two ruling-C tests failed. **Harness change**: when introducing a rule that classifies existing data,
+  grep the suites for that data *first* — the fixtures are the specification of what "placeholder" should
+  and should not mean.
+- **Layer 1 (task specification)**: "restrict the key" cannot be verified from here (it is a Google Cloud
+  console action), so the code half and the documentation half are deliberately separated in the artifact
+  rather than implying the restriction was applied.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, **585 passed** (was 582; +3)
+- `cd server && npm test` -> 57 suites, **918 passed** (was 916; +2)
+- `cd server && npx eslint src/ tests/ --max-warnings=0` -> exit 0
+- ruling-C tests (`google_api_key … present when GOOGLE_API_KEY is set`) unchanged and passing
+- `make graph-check` -> all invariants pass (70 items, 65 CLOSED, 5 OPEN)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+
+### Next session opening
+- The five items left need something this machine does not have: D-120/D-129/D-130/D-134 need Windows/HP
+  hardware or the owner's signing certificate, and D-225 needs the KV-stall trigger to recur (its witness
+  is deployed). The one actionable code item is the **dashboard panel for re-arm approvals** — the
+  endpoints are tested and stable, and `curl` is not a client IT workflow.
