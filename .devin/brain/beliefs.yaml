@@ -4331,3 +4331,42 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-199
+  statement: 'The first GitHub release of this repository exists: v1.0.5, published (not draft), marked
+    Latest, 26 assets - remote-lockdown-admin-1.0.5.exe/.msi/.AppImage/.dmg plus latest.yml, latest-linux.yml
+    and latest-mac.yml, agent/recovery/watchdog binaries for linux-x64, darwin-x64, darwin-arm64 and windows-x64,
+    SHA256SUMS per platform and agent-release.json. All 12 release.yml jobs are green. The published lockdown-agent-linux-x64
+    runs and reports build=20261126.69a3e4156d16, and its sha256 matches SHA256SUMS-linux-x64.'
+  domain: release
+  status: confirmed
+  evidence_level: real-media
+  provenance: gh release view v1.0.5 (26 assets, draft=false, Latest); downloaded lockdown-agent-linux-x64
+    executed -> build=20261126.69a3e4156d16; sha256 matches SHA256SUMS-linux-x64
+  source: S361
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-200
+  statement: 'electron-builder''s GitHub publisher creates a DRAFT release by default; when a published
+    release already exists for the tag it logs ''skipped publishing ... existing type not compatible with
+    publishing type'' and exits 0, so the CI job is green and the artifacts are silently absent. The fix
+    is publish.releaseType: ''release'' in electron/package.json. Consequence for any publish pipeline:
+    a publish job must assert its own artifacts exist on the release, because job success is not evidence
+    that the artifact landed.'
+  domain: ci-build
+  status: confirmed
+  evidence_level: real-media
+  provenance: 'run 6: 20 assets with the skip message; run 7 after releaseType=release: 26 assets including
+    .exe/.msi/.AppImage'
+  source: S361 release runs
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

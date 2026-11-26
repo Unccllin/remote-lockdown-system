@@ -9080,3 +9080,117 @@ attempt while `consolidate` holds the lock.
   first edit, but I5 wants the entry logged before the code, and it was not -- recorded rather
   than back-dated, and the first release run then failed on this same invariant because the entry
   was one paragraph instead of path-carrying bullets.
+
+### IMPLEMENT
+- `scripts/stamp_buildinfo.py` (new): the single build-identity implementation. `agent/build.sh`
+  calls it before PyInstaller, `scripts/stamp-buildinfo.ps1` is now a thin wrapper for the two
+  `.ps1` callers, and `publish-agent-binaries` — which had never used `build.sh` at all — stamps
+  explicitly. Equivalence measured: the PowerShell implementation's `20261126.69a3e4156d16` for the
+  MOLE tree is reproduced by the Python one, and a Linux `./build.sh --agent-only` then reported
+  `build=20261126.69a3e4156d16`; the published `lockdown-agent-linux-x64` reports the same id and
+  matches its `SHA256SUMS-linux-x64` entry.
+- `agent/build.sh`: interpreter falls back to `python` when `python3` is absent (the Windows leg
+  runs it under Git Bash).
+- `electron/package.json`: 1.0.0 → 1.0.5 (`npm version`), `artifactName` = `${name}-${version}.${ext}`
+  (the first AppImage had spaces while its manifest did not), `publish.releaseType: "release"`.
+- `electron/main.js` + `preload.js`: the UI's version now comes from `app.getVersion()` over the
+  `ELECTRON_API_BASE_URL` env channel instead of `npm_package_version || '1.0.0'`, which in a
+  packaged app always said 1.0.0. `tests/electron-stub.js` gained `contextBridge` so
+  `tests/preload.test.js` exercises the real bridge; Electron suite 30 → 35.
+- `.github/workflows/release.yml`: PyYAML for the graph gate; `fetch-depth: 0` for I2; agent dev
+  requirements for `--timeout=30`; the three Electron jobs no longer `npm ci`/`electron-rebuild` a
+  `server/` tree the app never packages, and pass `./build.sh --no-venv`.
+- `scripts/test_cross_surface_contract.py`: three Worker-only backup routes classified in
+  `KNOWN_GAPS` (unclassified since S350 — the suite had been red).
+- `docs/artifacts/s361-electron-release.txt`: the whole run, including the seven defects.
+
+### Fog cleared
+- **The Electron app is published: `v1.0.5`, 26 assets, marked Latest.** `remote-lockdown-admin-1.0.5`
+  `.exe` (NSIS, 112 MB), `.msi`, `.AppImage`, `.dmg`, plus `latest.yml` / `latest-linux.yml` /
+  `latest-mac.yml` and the agent binaries for four platforms with checksums. All 12 jobs green.
+- **The pipeline runs, and its first real execution found seven defects** — none visible by reading
+  it: missing PyYAML, shallow checkout vs I2, `--timeout=30` without pytest-timeout,
+  `electron-rebuild` on a tree that is not packaged, `build.sh`'s venv fighting the CI interpreter,
+  and `electron-builder` publishing to a *draft* while a published release already existed — that
+  last one green, silent, and missing two thirds of the artifacts.
+- **The published binaries carry real identities**, verified by downloading and running one, and
+  the checksum file matches the bytes.
+
+### Fog remaining
+- **The build id is checkout-dependent**: the hash is over checked-out bytes, so GitHub's CRLF
+  Windows checkout yields `20261126.49329a5f3529` where a Linux checkout of the same commit yields
+  `20261126.69a3e4156d16`. Defensible (different platform builds are different artifacts) but it
+  contradicts the "same id on either path" comment; the fix is to normalise newlines before hashing,
+  which renames every existing id and should not be done during a release.
+- **Nothing in the pipeline is signed.** Windows is unsigned (Azure Trusted Signing commented out),
+  macOS is unsigned and unnotarised (electron-builder skips notarisation with a warning when no
+  `APPLE_*` credentials exist — verified by reading `MacTargetHelper.notarizeIfProvided`), and the
+  Linux AppImage is unsigned. Gatekeeper/SmartScreen will warn.
+- **No publish job verifies that its own artifacts landed.** The draft/release mismatch produced a
+  green run with missing assets; only a human diffing the asset list caught it.
+- **`desktopName` is unset** (electron-builder warns), so desktop environments may not link the
+  running window to its `.desktop` entry.
+- **zizmor advisories** (`cache-poisoning`, `superfluous-actions`) on pre-existing workflow steps;
+  not repo gates.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; D-225's trigger is still
+  unmeasured (its witness is deployed); `GOOGLE_API_KEY` placeholder; D1 cutover not started;
+  FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None. The next steps need hardware (FRANKENSTEIN), owner credentials (Apple/Azure signing,
+  `GOOGLE_API_KEY`), or a decision (normalising build ids).
+
+### Session artifacts
+- docs/artifacts/s361-electron-release.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback) — seven pipeline defects, and the shape is the lesson.** Every
+  one was invisible to reading the workflow and obvious to running it; three of them (PyYAML,
+  `fetch-depth`, dev requirements) exist because `release.yml` copied `ci.yml`'s steps without their
+  prerequisites. **Harness change**: a workflow that has never run has not been verified — for a
+  first release, run it and read the artifact list, not the job conclusion.
+- **Layer 4 again, and this is the one to remember: a green job that published nothing.** The
+  draft/release mismatch made electron-builder skip every upload with a warning and exit 0. The
+  release looked populated (macOS DMG and agent binaries were there). **Harness change**: a publish
+  job should assert its own artifacts exist on the release — "the job succeeded" is not evidence
+  that the artifact did.
+- **Layer 4, my own measurement mistakes, four of them, all the same family as earlier sessions**:
+  piping a build through `Select-String` (no-match exit code became the task's), `%ERRORLEVEL%` in a
+  single `cmd` line (expands at parse time), a `sed` with `||` in the pattern (ran against an
+  unchanged file, so the teeth check was vacuous), and a YAML edit that put a comment on a `run:`
+  key (caught by actionlint within seconds). **Harness change**: capture exit status separately
+  from any filter; prefer writing a file over a clever one-liner; and assert that the thing you
+  changed actually changed before trusting the check.
+- **Layer 2 (context provision)**: I wrote in the artifact that `agent/build.sh` builds the
+  release's agent binaries. It does not — `publish-agent-binaries` calls PyInstaller directly. The
+  workflow was the evidence and I had read it; the claim came from a comment, not from the step.
+
+### VERIFY
+- `agent/.venv/bin/python scripts/test_stamp_buildinfo.py` -> 10 passed (teeth: moving the stamp
+  after the build fails the ordering assertion)
+- `agent/.venv/bin/python scripts/test_build_windows_artifacts.py` -> 11 passed
+- `scripts/run-agent-tests.sh` -> 1005 passed; `cd electron && npm test` -> 35 passed (was 30)
+- `make test-scripts` -> exit 0 (was 1 file failing before the KNOWN_GAPS entries)
+- `make graph-check` -> all invariants pass; `make lint-workflows` -> exit 0
+- MOLE: `agent/build.ps1 -AgentOnly` -> `build=20261126.69a3e4156d16`; stamp identity teeth ->
+  unstamped build fails at the identity check, exit 1
+- `npx electron-builder --linux --publish never` -> `remote-lockdown-admin-1.0.5.AppImage` 123 MB,
+  manifest agrees on the name
+- Release run `45802773363` -> 12/12 jobs green, `v1.0.5` marked Latest, **26 assets** including
+  `.exe`, `.msi`, `.AppImage`, `.dmg`, three update manifests, agent binaries for 4 platforms
+- `gh release download v1.0.5 --pattern lockdown-agent-linux-x64` -> runs, reports
+  `build=20261126.69a3e4156d16`; its sha256 matches the published `SHA256SUMS-linux-x64`
+
+### Next session opening
+- Bring FRANKENSTEIN to 1.0.5 when it is next powered on, and decide whether to normalise line
+  endings in `scripts/stamp_buildinfo.py` so one commit reports one build id on every platform.

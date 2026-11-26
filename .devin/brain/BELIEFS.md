@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 12:44:08 — 198 beliefs
+Generated: 2026-11-26 13:48:17 — 200 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -139,6 +139,7 @@ Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < ha
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-197 | confirmed | hardware | The Windows build identity is stamped by scripts/stamp-buildinfo.ps1, called by BOTH entry points (agent/build.ps1 and scripts/build-windows-artifacts.ps1, the latter being what CI runs on a v* tag), and build-windows-artifacts.ps1 fails the build when dist/lockdown-agent.exe --version does not report build=YYYYMMDD.12hex. Verified on MOLE by real builds both ways: stamped build exits 0 with build=20261126.69a3e4156d16, and with the stamp stripped the build fails with 'the agent binary carries no stamped build id' (exit 1). |
+| B-200 | confirmed | real-media | electron-builder's GitHub publisher creates a DRAFT release by default; when a published release already exists for the tag it logs 'skipped publishing ... existing type not compatible with publishing type' and exits 0, so the CI job is green and the artifacts are silently absent. The fix is publish.releaseType: 'release' in electron/package.json. Consequence for any publish pipeline: a publish job must assert its own artifacts exist on the release, because job success is not evidence that the artifact landed. |
 
 ## ci/dependabot
 
@@ -460,6 +461,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-018 | confirmed | code-read | Harnesses that check log output rather than security outcomes pass vulnerable code — the D-220 bypass and the MOR no-op both survived green harnesses. |
+
+## release
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-199 | confirmed | real-media | The first GitHub release of this repository exists: v1.0.5, published (not draft), marked Latest, 26 assets - remote-lockdown-admin-1.0.5.exe/.msi/.AppImage/.dmg plus latest.yml, latest-linux.yml and latest-mac.yml, agent/recovery/watchdog binaries for linux-x64, darwin-x64, darwin-arm64 and windows-x64, SHA256SUMS per platform and agent-release.json. All 12 release.yml jobs are green. The published lockdown-agent-linux-x64 runs and reports build=20261126.69a3e4156d16, and its sha256 matches SHA256SUMS-linux-x64. |
 
 ## serverless
 

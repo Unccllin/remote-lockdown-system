@@ -1,7 +1,7 @@
 # Memory Index
 
-Last rebuilt: 2026-11-26 12:44:08
-Active memories: 1526 | Superseded: 0 | Decayed: 20
+Last rebuilt: 2026-11-26 13:48:18
+Active memories: 1566 | Superseded: 0 | Decayed: 20
 
 ## Active Memories (sorted by effective_score)
 
@@ -9,6 +9,46 @@ Active memories: 1526 | Superseded: 0 | Decayed: 20
 |----|-------|------|------|-----------|-------|-----|--------|
 | m-1357 | MISTAKE: mistake: first assumed the deployed agent |  | 0.55 | 2026-11-19 | 0.254 | 0 |  |
 | m-1162 | MISTAKE: mistake: my first attempt to append the D |  | 0.55 | 2026-11-18 | 0.252 | 0 |  |
+| m-1547 | TPM sealing works when the key is addressed by a c | 1 | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1548 | Deleting the certificate does NOT delete the persi |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1549 | MOLE has Python 3.14.8 at C:\Python314\python.exe  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1550 | agent/build.ps1 stamps _buildinfo.py (build=202611 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1551 | MOLE runs lockdown-service.exe --service (the supe |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1552 | The Worker's module-level mutationChain (worker.ts |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1553 | MISTAKE: mistake: appended the D-225 entry to the  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1554 | MISTAKE: mistake: 'probed' the embedded version by |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1555 | MISTAKE: mistake: reported the first build as done |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1556 | The mutation chain must bound the WAIT on the prev |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1557 | Rebuilding the chain from the new entry means an a |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1558 | A wedged queue is invisible in normal telemetry: a |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1559 | The serverless test suite's `worker` handle is `mo |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1560 | Teeth for a liveness fix needs a test that would H |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1561 | MISTAKE: mistake: five new tests failed with 'work |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1562 | Two build entry points existed and only agent/buil |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1563 | A called PowerShell script must throw, not exit 1: |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1564 | $? is the success signal for a script invoked with |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1565 | agent/build.ps1 uses relative paths and must run w |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1566 | Set-Content -Encoding utf8 writes a BOM under Powe |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1567 | MISTAKE: mistake: ran the build through a grep pip |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1568 | MISTAKE: mistake: checked $LASTEXITCODE after & sc |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1569 | A promise that never settles cannot be timed on co |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1570 | Two views answer different questions: kv_inflight  |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1571 | Put the instrument in kv-store.ts: it is the KV la |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1572 | Threshold 2 s is chosen against the agent's own 15 |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1573 | A rejection is not a stall - it answered. Recordin |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1574 | kv-store.ts importers (agent-routes, alerts, backu |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1575 | MISTAKE: mistake: added watchKv to worker.ts's imp |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1576 | A GitHub release pipeline that has never run is un |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1577 | electron-builder's GitHub publisher defaults to cr |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1578 | agent/build.sh creates a .venv and switches PYTHON |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1579 | publish-agent-binaries does not use build.sh at al |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1580 | electron-builder skips macOS notarisation with a w |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1581 | The build id is computed over checked-out bytes, s |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1582 | artifactName should be explicit: the first AppImag |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1583 | MISTAKE: mistake: piped a remote build through Sel |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1584 | MISTAKE: mistake: used %ERRORLEVEL% in a single cm |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1585 | MISTAKE: mistake: ran a sed whose pattern containe |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
+| m-1586 | MISTAKE: mistake: claimed in an artifact that agen |  | 0.50 | 2026-11-26 | 0.250 | 0 |  |
 | m-1142 | MISTAKE: mistake: first version of the ruling used |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1281 | Converting list-based storage to per-entity turns  |  | 0.55 | 2026-11-17 | 0.249 | 0 |  |
 | m-1520 | make verify-worker answers 'does the bundle build  |  | 0.50 | 2026-11-25 | 0.247 | 0 |  |

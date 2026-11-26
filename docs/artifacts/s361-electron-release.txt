@@ -161,3 +161,70 @@ Five separate defects, each one only visible by executing the pipeline:
 Failures 1, 2 and 3 are the same shape: **`release.yml` was written by copying `ci.yml`'s steps but
 not their prerequisites.** The workflow lints clean and reads correctly; only running it shows the
 difference.
+
+## Checked instead of pre-empted: macOS notarisation will skip, not fail
+
+I expected `mac.notarize: true` with no Apple credentials to be the next blocker. Reading the
+installed electron-builder settles it (`app-builder-lib/out/mac/MacTargetHelper.js:256`):
+
+```js
+async notarizeIfProvided(appPath) {
+  const notarizeOptions = this.packager.platformSpecificBuildOptions.notarize;
+  if (notarizeOptions === false) { log.info(... "skipped macOS notarization"); return; }
+  const options = MacTargetHelper.getNotarizeOptions(appPath);
+  if (!options) { log.warn({ reason: "notarize options were unable to be generated" }, "skipped macOS notarization"); return; }
+  ...await notarize(options); log.info(null, "notarization successful");
+}
+```
+
+`getNotarizeOptions` derives from `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`
+(or an API key), all of which the workflow leaves commented out — so it returns null and the build
+**warns and continues**. The macOS DMGs this release publishes will be unnotarised and unsigned;
+Gatekeeper will warn the first time one is opened. That is the honest outcome of no credentials,
+and it did not need a code change to be safe.
+
+## Known, not fixed
+
+- **zizmor advisories on the workflow** (`cache-poisoning` on the setup-node/setup-python caches,
+  `superfluous-actions` on the artifact actions). Pre-existing, on lines this session did not
+  touch, and not repo gates (`actionlint` + `shellcheck` is the gate and it passes). Changing the
+  cache behaviour of a release workflow mid-release is a decision, not a fix.
+- **The build id is checkout-dependent** (CRLF vs LF), as measured above.
+
+## The release that "succeeded" while publishing two thirds of itself
+
+Run 6 was green end to end and produced a release with 20 assets — agent binaries for four
+platforms, checksums, the macOS DMG, `latest-mac.yml`, `agent-release.json` — and **no Windows
+installer and no Linux AppImage**. electron-builder explains it in one line each:
+
+```
+• GitHub release not created  reason=existing type not compatible with publishing type
+  tag=v1.0.5 version=1.0.5 existingType=release publishingType=draft
+• skipped publishing  file=remote-lockdown-admin-1.0.5.AppImage
+• skipped publishing  file=remote-lockdown-admin-1.0.5.msi
+```
+
+Its GitHub publisher defaults to creating a **draft**; `publish-agent-binaries` creates the release
+first as a published one, so every Electron upload was skipped — with a warning, and **exit code
+0**. This is the most dangerous shape of failure in the whole pipeline: the job is green, the
+release exists, the log says "uploading", and the artifacts are simply absent. `releaseType:
+"release"` is now explicit in `electron/package.json`.
+
+That the macOS DMG WAS present is explained by `publish-macos`, which uploads with its own tooling
+rather than electron-builder's — so one platform's assets arrived while the other two silently did
+not, which is exactly why "the release looks populated" was not evidence.
+
+Verified on the released assets (run 6's):
+
+```
+$ gh release download v1.0.5 --pattern lockdown-agent-linux-x64
+$ ./lockdown-agent-linux-x64 --version
+lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)
+
+sha256sum lockdown-agent-linux-x64
+81b2d72b6d2aee854412721d6c94e663573c0637cde7082f8ffded14e88672d4
+SHA256SUMS-linux-x64
+81b2d72b6d2aee854412721d6c94e663573c0637cde7082f8ffded14e88672d4  lockdown-agent-linux-x64
+```
+
+So the stamping does reach the GitHub release, and the published checksum file matches the bytes.
