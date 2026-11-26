@@ -44,10 +44,14 @@ crons = ["0 * * * *"]
 # With this binding, replay protection uses a UNIQUE constraint (authoritative) instead of a
 # key-value marker (eventually consistent). Nothing else reads these tables yet — the staged
 # plan, what each stage proves, and the rollback: docs/SERVERLESS-D1-CUTOVER.md.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "lockdown"
-# database_id = "<paste from npx wrangler d1 create lockdown>"
+# Applied 2026-11-26 (S361, stage 0 of docs/SERVERLESS-D1-CUTOVER.md): database created in WEUR
+# and d1/schema.sql applied; the exit condition was checked by listing sqlite_master, which shows
+# commands_device_status, devices_api_key_hash and nonces_expires. Nothing but replay protection
+# and the nonce purge reads these tables yet -- the read/write cutover is stage 1 onwards.
+[[d1_databases]]
+binding = "DB"
+database_name = "lockdown"
+database_id = "979c503f-4f95-464e-845f-dae56ba0520b"
 
 # Encrypted backup bucket (optional). Create with:
 #   npx wrangler r2 bucket create lockdown-backups

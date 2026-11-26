@@ -1,6 +1,7 @@
 # D1 cutover — the relational store, in stages
 
-**Status**: schema written, replay path live, read/write migration **not started**
+**Status**: **stage 0 complete** (2026-11-26, S361) — database created in WEUR, schema applied,
+binding live, replay protection writing to it. Read/write migration **not started** (stage 1+).
 **Schema**: [`serverless/d1/schema.sql`](../serverless/d1/schema.sql)
 **Cost context**: [`docs/SERVERLESS-COST.md`](SERVERLESS-COST.md)
 
@@ -25,7 +26,7 @@ immediately (it is a correctness gap), **cost** binds only above a few hundred d
 
 | Element | State |
 |---|---|
-| Schema for devices, commands, locations, audit, admins, nonces | Written; not applied anywhere |
+| Schema for devices, commands, locations, audit, admins, nonces | **Applied** 2026-11-26 to `lockdown` (WEUR, `979c503f-4f95-464e-845f-dae56ba0520b`); 6 tables, 9 named indexes |
 | Replay protection preferring D1 when bound | **Live and tested** — falls back to the key-value marker when unbound |
 | Expired-nonce purge in the cron tick | **Live and tested** (no-op without a binding) |
 | Reading and writing devices/commands/locations from D1 | Not started |
@@ -54,6 +55,33 @@ npx wrangler d1 execute lockdown --command "SELECT name FROM sqlite_master WHERE
 `nonces_expires`. If it does not, the schema silently half-applied — check before going further.
 
 **What this proves**: the schema is valid SQL for D1's SQLite build. Nothing else.
+
+### Stage 0 result — done 2026-11-26
+
+```
+npx wrangler d1 create lockdown      -> created in WEUR, database_id 979c503f-4f95-464e-845f-dae56ba0520b
+npx wrangler d1 execute lockdown --file=d1/schema.sql --remote
+                                     -> success, 6 tables, 29 rows written (DDL), size 114,688 bytes
+SELECT name,type FROM sqlite_master  -> exit condition MET
+   commands_device_status, devices_api_key_hash, nonces_expires all present
+   (+ audit_action, audit_created, audit_device_created, commands_pending, devices_status,
+      locations_created, locations_device_created)
+npx wrangler deploy                  -> env.DB (lockdown) D1 Database bound, version b0bdc068
+```
+
+**And the binding is actually used, not merely attached.** Replay protection writes a nonce row per
+signed agent request; across two real MOLE check-ins:
+
+```
+SELECT COUNT(*), MAX(expires_at) FROM nonces   ->  2 rows, newest 2026-11-26T11:07:11.436Z
+100 s later                                    ->  3 rows, newest 2026-11-26T11:08:25.069Z
+SELECT COUNT(*) FROM devices                   ->  0   (expected: KV is still the read source)
+```
+
+That last line is the point of the staging: replay rejection is now authoritative (the UNIQUE
+constraint on `(device_id, nonce)` cannot be raced from two locations), while every read still comes
+from KV, so **stage 0 is a strict improvement with no read-path risk**. `devices` staying at 0 rows is
+the proof the cutover has not leaked into reads.
 
 ---
 

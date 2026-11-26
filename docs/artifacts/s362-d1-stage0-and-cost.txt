@@ -1,0 +1,97 @@
+# S362 — D1 stage 0 live, and the company-side cost model
+
+2026-11-26 · `serverless/wrangler.toml`, `docs/SERVERLESS-D1-CUTOVER.md`,
+`docs/COMPANY-SETUP-COST.md` (new), `docs/SERVERLESS-COST.md` (corrected)
+
+## 1. D1 stage 0 — created, applied, bound, and *used*
+
+Stage 0 of `docs/SERVERLESS-D1-CUTOVER.md`, run against the real account, with the document's own
+exit condition checked rather than assumed:
+
+```
+npx wrangler d1 create lockdown
+  -> Successfully created DB 'lockdown' in region WEUR
+     database_id 979c503f-4f95-464e-845f-dae56ba0520b
+
+npx wrangler d1 execute lockdown --file=d1/schema.sql --remote
+  -> success; num_tables 6, rows_written 29 (DDL), size_after 114,688 bytes
+
+SELECT name, type FROM sqlite_master ...        (exit condition)
+  -> 24 objects; commands_device_status, devices_api_key_hash, nonces_expires ALL PRESENT
+     plus audit_action, audit_created, audit_device_created, commands_pending, devices_status,
+     locations_created, locations_device_created and the six sqlite_autoindex_* entries
+
+npx wrangler deploy
+  -> env.DB (lockdown) D1 Database   version b0bdc068-b99c-41ce-8da2-551feb81baba
+```
+
+**The binding is used, not merely attached.** Replay protection writes one nonce row per signed
+agent request; sampled across two real MOLE check-ins:
+
+```
+SELECT COUNT(*), MAX(expires_at) FROM nonces   ->  2 rows, newest 2026-11-26T11:07:11.436Z
+   ...100 s later...                              ->  3 rows, newest 2026-11-26T11:08:25.069Z
+SELECT COUNT(*) FROM devices                   ->  0
+```
+
+`devices` staying at zero is the point of the staging: replay rejection is now authoritative (a
+UNIQUE constraint on `(device_id, nonce)` that two locations cannot both pass), while every read
+still comes from KV. Stage 0 is a strict improvement with no read-path risk, and the zero proves
+the cutover has not leaked into reads.
+
+The wrangler hint prints `binding = "lockdown"` — **not used**: the code reads `env.DB`, so the
+binding is `DB`. Following the hint would have produced a Worker whose replay path silently stayed
+on the KV fallback.
+
+## 2. The company-facing cost model, and why it contradicts the older doc
+
+Measured footprint used by the model: 165 KV keys, 51.3 MB of binaries in KV (agent 16,856,661 +
+installer 15,792,127 + service 9,494,908 + lockscreen 9,146,230) against a 1 GB allowance, D1 at
+112 KB / 3 rows, two R2 backups of ~41 KB each.
+
+Assumptions come from the code, not from a guess: 60 s poll = 43,200 check-ins/device/month, and
+one check-in = 1 request + 3 KV reads + 1 write + 1 list (`handleAgentCheckin`: device lookup,
+check-in metadata read, metadata write, per-device command index).
+
+| devices | $/mo | KES/mo | $/device |
+|---|---|---|---|
+| 2 (today) | 5.00 | 650 | 2.50 |
+| 10 | 5.00 | 650 | 0.50 |
+| 25 | 5.80 | 754 | 0.23 |
+| 50 | 16.60 | 2,159 | 0.33 |
+| 100 | 39.68 | 5,161 | 0.40 |
+| 325 | 152.67 | 19,857 | 0.47 |
+| 1000 | 496.76 | 64,609 | 0.50 |
+
+After the D1 read/write cutover (KV writes/lists replaced by rows against D1's 50M-rows-written
+allowance): 100 devices KES 843, 325 KES 2,897, 1000 KES 9,723.
+
+`docs/SERVERLESS-COST.md` claims the crossover against a KES 2,000–2,500 local VM is ~325 devices.
+On the workload the code actually performs it is ~45–55, and at 100 devices the serverless stack
+costs KES 5,161 — twice the VM it replaces. The older figure is not an arithmetic slip; it
+predates S348's per-device command index and it counts a single read per poll where the current
+code performs a write and a list per poll, which are the meters priced at $5/million.
+
+Both documents now agree, because the older one carries a correction banner pointing at
+`docs/COMPANY-SETUP-COST.md` and its stale "Not yet" column was rewritten: alerts, encrypted
+backups, the nonce purge and the shared replay store all exist (S348–S361), proven by
+`backup_written` audit entries on 25 and 26 November and by the `nonces` rows above.
+
+## 3. Prices, and what is unchecked
+
+Read from Cloudflare's rate card on 2026-11-26: Workers Paid $5/month minimum with 10M requests and
+30M CPU-ms, then $0.30/M requests; KV reads 10M included then $0.50/M, writes/lists 1M then
+$5.00/M, storage 1 GB then $0.50/GB-month; R2 10 GB and all egress free, $0.015/GB-month after;
+D1 25B rows read and 50M rows written and 5 GB included. FX 1 USD = KES 130.06 (CBK, 2026-11-26).
+
+Marked **check** in the document because they were not verified today: domain registration, Azure
+Trusted Signing, and the Google Maps platform rates. Apple's $99/year developer programme is
+long-standing and not marked.
+
+## 4. What this does not prove
+
+- Stage 0 proves the schema is valid for D1 and that the replay path writes to it. It proves
+  nothing about `devices`/`commands` reads, which are still KV.
+- The cost model is arithmetic over an assumed workload. No month of real Cloudflare analytics has
+  been read; the first post-rollout task is to replace the assumption with the dashboard's KV
+  counters.
