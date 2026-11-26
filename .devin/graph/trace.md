@@ -9194,3 +9194,123 @@ attempt while `consolidate` holds the lock.
 ### Next session opening
 - Bring FRANKENSTEIN to 1.0.5 when it is next powered on, and decide whether to normalise line
   endings in `scripts/stamp_buildinfo.py` so one commit reports one build id on every platform.
+
+---
+
+## Session 362 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `docs/SERVERLESS-D1-CUTOVER.md` (all stages: the stage-0 command list, its stated exit
+  condition, and the reason the read/write cutover is deliberately not in it); `serverless/d1/schema.sql`
+  (the `nonces` table's real columns — `expires_at`, not `expires`, which my first query got wrong);
+  `serverless/wrangler.toml` (the commented `[[d1_databases]]` block and the code's `env.DB` binding
+  name, which differs from the `binding = "lockdown"` wrangler suggests).
+- **Read**: `serverless/backup.ts` (`backupObjectKey`, `BACKUP_PREFIX`, `writeBackup`), `serverless/worker.ts`
+  cron passes (~1785-1890, where `backup_written` / `backup_skipped` are audited), `serverless/kv-store.ts`
+  (`AUDIT_INDEX_KEY`), and the live `audit_index` to confirm the backup job has actually run.
+- **Read**: `docs/SERVERLESS-COST.md` in full (verdict, the "already serverless / not yet" column and
+  its arithmetic), plus Cloudflare's published rate card for Workers, KV, R2 and D1, and the CBK
+  USD/KES rate.
+- **Finding**: two of the three items left open on Cloudflare were mine to finish. D1 stage 0 is
+  documented with an exit condition that can actually fail, so it was run rather than described — and
+  the result shows the binding is *used* (nonce rows grow per check-in) while `devices` stays at zero,
+  which is precisely the property the staging exists to hold. The third item, `GOOGLE_API_KEY`, needs
+  the owner's key and cannot be finished here.
+- **Finding, and the one worth the session**: the repository's own cost document tells a company that
+  serverless stays cheaper than a local VM to ~325 devices. Recomputing from the code's per-check-in
+  operations (1 request + 3 reads + 1 write + 1 list, with KV writes and lists at $5/million) puts
+  that crossover at ~45-55 devices and makes 100 devices cost twice the VM it replaces. Two documents
+  in one repository giving different answers to a customer-facing question is worse than one wrong
+  one, so the old document now carries a correction banner and a rebuilt table.
+
+### IMPLEMENT
+- `serverless/wrangler.toml`: the `[[d1_databases]]` block is now live — `binding = "DB"`,
+  `database_name = "lockdown"`, `database_id = 979c503f-4f95-464e-845f-dae56ba0520b` (WEUR), with a
+  comment recording what stage 0 applied and that nothing but replay protection reads the tables yet.
+- `serverless/d1/schema.sql`: applied to the real database (6 tables, 24 objects including
+  `commands_device_status`, `devices_api_key_hash`, `nonces_expires`).
+- `docs/SERVERLESS-D1-CUTOVER.md`: status moved to "stage 0 complete", the element table corrected,
+  and the run recorded under the stage's exit condition with the nonce-growth evidence and the
+  `devices = 0` line that proves reads are untouched.
+- `docs/COMPANY-SETUP-COST.md` (new): the company-facing model — one-off setup, recurring cost for
+  2/10/25/50/100/325/1000 devices in USD and KES, marginal cost per device, the D1 cutover's effect
+  on the bill, optional signing costs, and a pre-signature checklist naming which figures are
+  unchecked.
+- `docs/SERVERLESS-COST.md`: correction banner (crossover ~45-55 devices, not ~325; 1,000 devices
+  ~KES 64,600 until the cutover) and a rebuilt "already serverless / not yet" column, because
+  alerts, encrypted backups, the nonce purge and the shared replay store all shipped since it was
+  written.
+- `docs/artifacts/s362-d1-stage0-and-cost.txt`: the measured commands and outputs.
+
+### Fog cleared
+- **D1 stage 0 is live and verified**: `env.DB (lockdown) D1 Database` bound in version `b0bdc068`;
+  `nonces` grew 2 → 3 rows across two MOLE check-ins with the newest expiry advancing, and `devices`
+  stayed at 0 rows, so replay rejection is authoritative while every read still comes from KV.
+- **The backup job is not just configured, it is working**, proven from the audit log the cron writes
+  itself: `backup_written backups/2026-11-25T03-00-29-491Z.rmlb (40916 bytes, 2 devices, 8 commands…)`
+  and the same for 2026-11-26 (41186 bytes), after a `backup_restored` drill on 2026-11-24.
+- **The company now has a cost model it can budget against**, with every assumption traced to code
+  (poll interval, per-check-in operations) and every price to Cloudflare's rate card read today, in
+  KES at the CBK rate with the FX exposure stated.
+- **The contradictory crossover figure is gone** rather than left standing next to the new one.
+
+### Fog remaining
+- **`GOOGLE_API_KEY` is still the `ROT-TEST` placeholder** — owner action, `wrangler secret put`.
+- **The cost model is arithmetic, not measurement.** No month of Cloudflare analytics has been read;
+  the first post-rollout task is to replace the assumed per-check-in workload with the dashboard's
+  KV counters. If the real figure is worse, the crossover moves further down.
+- **D1 stages 1+ are not started** (shadow write, then reads). The ceiling they remove binds above
+  ~1,100 devices.
+- **D1 now costs nothing but will become the write meter** once cutover happens; at 2,000 devices the
+  nonce inserts alone exceed the 50M included rows.
+- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; D-225's trigger is still
+  unmeasured; FRANKENSTEIN still 1.0.0; build ids remain checkout-dependent.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None for the work done. `GOOGLE_API_KEY` and hardware remain owner-side.
+
+### Session artifacts
+- docs/artifacts/s362-d1-stage0-and-cost.txt
+- docs/COMPANY-SETUP-COST.md
+
+### Failure attribution
+- **Layer 4 (verification feedback), mine, twice in the first minutes**: I queried `MAX(expires)` on
+  a column that is `expires_at`, and my JSON extractor assumed a top-level `results` key so two
+  queries died with `KeyError` while a third worked. Both were fixed by reading the schema and the
+  actual response shape instead of guessing. **Harness change**: when a query fails on shape, print
+  the raw response before parsing it — a parser that hides the payload turns a wrong column name into
+  a wrong conclusion about the system.
+- **Layer 2 (context provision), and the more expensive one**: `docs/SERVERLESS-COST.md` reads like a
+  finished artefact and carries precise numbers, but its crossover claim predates the per-device
+  command index and counts one read per poll where the code does a write and a list. Nothing marked
+  it as dated, so it would have been quoted to a customer with confidence. **Harness change**: a
+  cost document is a claim about code, so it must name the per-operation workload and the code path
+  it comes from; when that path changes, the number is stale even if the arithmetic is right.
+
+### VERIFY
+- `npx wrangler d1 create lockdown` -> region WEUR, id `979c503f-4f95-464e-845f-dae56ba0520b`
+- `npx wrangler d1 execute lockdown --file=d1/schema.sql --remote` -> success, 6 tables, 114,688 bytes
+- `SELECT name, type FROM sqlite_master` -> 24 objects; exit condition met (`commands_device_status`,
+  `devices_api_key_hash`, `nonces_expires` all present)
+- `npx wrangler deploy` -> `env.DB (lockdown) D1 Database`, version `b0bdc068`
+- `SELECT COUNT(*), MAX(expires_at) FROM nonces` -> 2 rows / 3 rows 100 s apart; `devices` -> 0
+- `audit_index` + audit entries -> `backup_written` on 2026-11-25 and 2026-11-26, `backup_restored` on 2026-11-24
+- `GET /api/health` -> `{status: ok, mutation_queue {stalls: 0}, kv_inflight {}, kv_stalls {}}`
+- measured footprint -> 165 KV keys, 51.3 MB binaries, D1 112 KB, 2 R2 backups ~41 KB
+- cost model computed from the code's 1 request + 3 reads + 1 write + 1 list per check-in at 60 s
+
+### Next session opening
+- Decide whether to run D1 stage 1 (shadow write, one week, no reads) — it is the only remaining step
+  that moves the bill, and it needs a week of observation rather than a code change — and replace
+  part B of `docs/COMPANY-SETUP-COST.md` with Cloudflare's measured KV counters once a month of real
+  data exists.

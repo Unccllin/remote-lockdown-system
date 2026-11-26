@@ -4370,3 +4370,41 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-201
+  statement: 'D1 stage 0 is live on the deployed Worker: database lockdown (979c503f-4f95-464e-845f-dae56ba0520b,
+    WEUR) with d1/schema.sql applied and the env.DB binding deployed as version b0bdc068. Replay protection
+    writes to it (nonces grew 2 -> 3 rows across two MOLE check-ins, newest expiry advancing) while devices
+    stayed at 0 rows, so replay rejection is authoritative and no read path changed. The binding must
+    be named DB: wrangler suggests binding=''lockdown'' but the code reads env.DB.'
+  domain: serverless
+  status: confirmed
+  evidence_level: real-media
+  provenance: deployed Worker b0bdc068 with env.DB; SELECT on nonces over two live check-ins; sqlite_master
+    exit-condition check
+  source: S362 live run
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-202
+  statement: 'The cost crossover for this serverless design against a KES 2,000-2,500 local VM is ~45-55
+    devices, not the ~325 stated in docs/SERVERLESS-COST.md: at a 60 s poll one check-in is 1 request
+    + 3 KV reads + 1 write + 1 list, and KV writes/lists cost $5 per million, so 50 devices is ~KES 2,159/month
+    and 100 devices ~KES 5,161/month (twice the VM). The older figure predates S348''s per-device command
+    index and counts one read per poll instead of a write and a list. After the D1 read/write cutover,
+    100/325/1000 devices cost ~KES 843/2,897/9,723 per month.'
+  domain: cost
+  status: proposed
+  evidence_level: assumed
+  provenance: docs/COMPANY-SETUP-COST.md; Cloudflare rate card 2026-11-26; FX 130.06 CBK
+  source: S362 cost model
+  asserted: '2026-11-26'
+  last_verified: null
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
