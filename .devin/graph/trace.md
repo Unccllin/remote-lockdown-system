@@ -8636,3 +8636,146 @@ attempt while `consolidate` holds the lock.
 
 ### Next session opening
 - From the lab LAN (or with MOLE reachable), implement the certificate-addressed TPM seal key and prove it with a seal/unseal round trip on MOLE before calling it working; then build and publish 1.0.4.
+
+---
+
+## Session 357 — 2026-11-26
+
+### RULE-ZERO
+**Read**: `.devin/graph/current-state.md`; the S355 and S356 blocks in `trace.md`; `AGENTS.md` (§ Hardware testing status, Dependabot/electron notes irrelevant here); `agent/tpm_seal.py` (all 469 lines); `agent/tests/test_tpm_seal.py`; `agent/agent.py` at `_read_deadman_state`/`update_deadman_timer` (lines 3790-3920); `agent/hw_test_harness.py` at the E-TPM test (line 1366); `docs/artifacts/s355-update-key-and-tpm.txt`; `docs/artifacts/s353-mole-check.txt`; `.devin/memory/raw/sess-330.md` and `sess-331.md`; `docs/adr/PBL-DEBT-LEDGER.md` D-120/129/130/134.
+**Finding**: the module's whole key path is one unchecked assumption — that `CngKey.Create` against `Microsoft Platform Crypto Provider` gives a TPM key. S355 measured that it does not ("The requested operation is not supported") while `New-SelfSignedCertificate -Provider` does. So the fix is not a bug fix inside the existing design; it is replacing the *addressing scheme*: a cert in `LocalMachine\My` whose key is `te-<guid>` under the PCP provider, reached by thumbprint. Three consequences the tests did not cover and the code got wrong: (a) deleting a certificate does not delete a persisted CNG key, so uninstall would leak the TPM key; (b) the old `[CngKey]::Delete('name')` static overload does not exist on .NET Framework, so `delete_tpm_key()` was dead code that always returned False; (c) the caller is fail-secure on unseal failure (`{"status": "stolen"}`), so a cert that disappears must not be silently confused with tampering — it is logged as an error and the state is treated as tampered, which is existing behaviour and stays.
+
+**Measured on MOLE before writing any code** (TpmReady True, Windows PowerShell 5.1.26100, Python 3.14.8 + cryptography 50.0.0 present):
+- `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyUsage KeyEncipherment, DataEncipherment -CertStoreLocation Cert:\LocalMachine\My` → CREATED, `HasPrivateKey True`.
+- the cert's private key is `System.Security.Cryptography.RSACng`; its CNG key is `te-ddcc9930-…` with provider `Microsoft Platform Crypto Provider`; `Export(OpaqueTransportBlob)` is **refused** ("The requested operation is not supported") — the key is genuinely non-exportable and TPM-resident, which is the proof the old path could never offer.
+- encrypt/decrypt round-trips through a freshly thumbprint-addressed cert handle (`True`), so a new process can unseal what an old one sealed.
+- padding: `Pkcs1`, `OaepSHA1` and `OaepSHA256` all round-trip (256 B ciphertext), so the rewrite uses **OAEP-SHA256** rather than the weaker PKCS#1 v1.5 the old code chose.
+- `$rsa.Key.Delete()` succeeds while the cert remains, and encryption afterwards is refused — so the TPM key and the cert die separately and uninstall must do both.
+- `Remove-Item Cert:\LocalMachine\My\<thumb>` then re-create leaves exactly **1** cert matching the subject (no accumulation).
+
+### IMPLEMENT
+- `agent/tpm_seal.py`: the seal key is addressed by **certificate** instead of a CNG key name.
+  `_seal_cert_thumbprint(create=...)` resolves `CN=LockdownStateSealKey` in
+  `Cert:\LocalMachine\My`, creating it with `New-SelfSignedCertificate -Provider 'Microsoft
+  Platform Crypto Provider' -KeyUsage KeyEncipherment, DataEncipherment` and caching the
+  thumbprint per process; the read path passes `create=False` so unsealing can never mint a key.
+  `_tpm_seal_key`/`_tpm_unseal_key` wrap the AES data key with RSA-2048 **OAEP-SHA256** (PKCS#1
+  v1.5 replaced; both round-trip on the provider, so the stronger one is used) and check the
+  190-byte ceiling before spawning PowerShell. One `_run_powershell` entry point adds
+  `-NonInteractive` (a prompt in session 0 would hang a check-in) and one failure formatter logs
+  stdout first, then stderr, then `no output`, plus the exit code.
+- `delete_tpm_key()` removes **both** halves — `$rsa.Key.Delete()` then `Remove-Item` — because
+  they die independently. The previous implementation called `[CngKey]::Delete('name')`, a static
+  overload .NET Framework does not have, so it threw and deleted nothing.
+- `agent/tests/test_tpm_seal.py`: 21 → 34 tests pinning certificate addressing, the absent
+  `CngKey.Create`, `-NonInteractive`, OAEP-SHA256, thumbprint validation, multi-cert handling,
+  read-never-creates, delete-both-halves, and the stdout/rc logging contract.
+- `agent/agent.py`: `AGENT_VERSION` 1.0.4 → **1.0.5** with the reason recorded beside it — 1.0.4
+  was built locally on MOLE and was never published, so publishing "1.0.4" would leave that
+  machine reporting itself current with code it does not have.
+- Release: built on MOLE through `agent/build.ps1` (stamped `build=20261126.69a3e4156d16`) plus
+  `build-windows-artifacts.ps1 -Only service`; signed with `scripts/sign-release-metadata.py`;
+  published to KV (`binary:agent`, `binary:agent-installer`, `binary:service`, `agent_release`).
+- `docs/adr/PBL-DEBT-LEDGER.md` + `.devin/graph/GRAPH-SPEC.yaml`: filed **D-225** (the Worker's
+  unbounded mutation chain) after it wedged check-in for ~25 minutes and blocked the release
+  from reaching the device. Table, totals and the graph item updated together.
+- `.gitignore`: `agent/staging/` — staging holds 41 MB of built binaries; the signed record lives
+  in KV and the published hashes are in the artifact.
+
+### Fog cleared
+- **TPM sealing works on real hardware, for the first time.** On MOLE (TPM 2.0 Infineon): the
+  key is `te-c40a7660-…` under the Platform Crypto Provider, export is **refused**, a 369-byte
+  `TPM1` blob sealed and unsealed across a reboot with the same thumbprint and key name, both
+  tamper cases returned `None` (the TPM itself answered `Value is out of range or is not correct
+  for the context`), and after `delete_tpm_key` the unseal failed closed while minting nothing.
+  Artifact: `docs/artifacts/s357-tpm-cert-seal.txt`.
+- **The release reached a device by itself.** MOLE's supervisor verified the ed25519 signature,
+  swapped the binary and restarted (`pending update: applied`), and the new build logged
+  `TPM seal certificate … (CREATED)` then `(EXISTS)`. `.deadman` is now 373 bytes with magic
+  `TPM1`; `device_checkin` reports `agent_version 1.0.5`, `update_verification signature`.
+- **The old binary's failure is now recorded from production, not just from a probe**: its last
+  two lines before updating were `TPM key creation failed: ` (empty) and `falling back to
+  DPAPI/plaintext` — exactly the S355 defect, in the field.
+- **A live production defect was found and named.** `/api/agent/checkin` and
+  `/api/agent/command-ack` — the only two routes on the module-level `mutationChain` — hung for
+  >25 minutes while every unserialised route answered in ~0.6 s; a redeploy cleared it. Filed as
+  D-225 with the probe table and the close criteria.
+- **MOLE is a build host, not just a test host**: Python 3.14.8 at `C:\Python314\python.exe`
+  with tkinter and pip, so PyInstaller runs there. The older "MOLE has no Python" memory is stale.
+
+### Fog remaining
+- **D-225's first stalled handler is not identified.** The check-in path awaits KV get/get/put/list
+  and no `fetch` subrequest, so an unsettled KV operation is the leading hypothesis — untested.
+  The queue also has no operator-visible signal, so a wedged fleet looks exactly like a quiet one.
+- **`build=unknown.unknown` is what the CI script produces.** `scripts/build-windows-artifacts.ps1`
+  does not stamp `_buildinfo.py`, so a release built that way loses the identity S286 requires.
+  Not fixed here; the release was built through `agent/build.ps1` instead.
+- **The plaintext fallback in `_read_deadman_state` is still the weak link** (pre-existing): the
+  state file can be downgraded to plaintext JSON rather than defeated cryptographically. A design
+  decision, not a bug in `tpm_seal`.
+- **A TPM clear now costs the state file.** With sealing working, a cleared TPM makes an existing
+  `TPM1` blob unseal to `None`, which the caller treats as tampering (`status: stolen`). Intended
+  fail-secure direction, but a new operational consequence that did not exist while sealing was
+  broken.
+- **FRANKENSTEIN is still on 1.0.0** (powered off), so the fleet is split 1.0.5 / 1.0.0.
+- **`GOOGLE_API_KEY` is still the `ROT-TEST` placeholder**; D1 cutover not started.
+
+### Debt items closed
+- None this session.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+
+### Blockers
+- None for the work done. D-225 can recur at any time and would silently take devices offline
+  again until a redeploy, which is why it is filed rather than noted.
+
+### Session artifacts
+- docs/artifacts/s357-tpm-cert-seal.txt
+- docs/artifacts/s357-release-1.0.5.txt
+
+### Failure attribution
+- **Layer 4 (verification feedback) — this session's own misses were both text-shaped checks that
+  proved nothing.** (a) "Verify the build embeds 1.0.5" was implemented by byte-scanning the exe;
+  PyInstaller compresses the payload, so the probe reported 0 occurrences of *both* 1.0.4 and
+  1.0.5 and could never have failed. (b) "Verify the graph counts" was implemented by counting
+  `- id: D-` strings, which read 65 while the YAML actually held 64, because the entry landed
+  after `invariants:` and parsed as an invariant. **Harness change**: a check must assert the
+  property through the same semantics the consumer uses — run the binary (`--version`), parse the
+  YAML (`yaml.safe_load` and count `debt_items`) — because a check that cannot fail is a log line,
+  not a check.
+- **Layer 1 (task specification) — "publish 1.0.4" was under-specified by the prior session.** The
+  instruction named a version without noting that MOLE already ran a 1.0.4 build, which would have
+  made the release a no-op for the only machine that needed it. **Harness change**: a release
+  instruction must name what the fleet currently reports, not only the version to publish.
+
+### VERIFY
+- `agent/.venv/bin/python -m pytest agent/tests/test_tpm_seal.py` -> 34 passed
+- `scripts/run-agent-tests.sh` -> 1005 passed
+- `scripts/lint-agent.sh` -> ruff check + format clean
+- MOLE `mole_tpm_verify.py` steps: delete -> `True`/`remaining=0`; facts -> cert created, key
+  `te-c40a7660-…`, `export=REFUSED`; seal -> 256-byte sealed key, 369-byte blob; unseal -> exact
+  bytes; tamper (key byte, state byte) -> `None`; after reboot -> same thumbprint, unseal exact;
+  delete -> `True`; post-delete -> `None` with `remaining=0`
+- MOLE `Get-Tpm` -> TpmReady True, SpecVersion 2.0/1.38; BitLocker Off before the reboot
+- `powershell -File agent/build.ps1` -> `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`
+- `scripts/sign-release-metadata.py` -> `agent-release.json` (win, 16856661 bytes)
+- `openssl pkeyutl -verify -rawin -pubin` over `v1:1.0.5:09a2d3e6…` -> **Signature Verified Successfully**
+- KV read-back (`wrangler kv key get … --remote`) -> three binaries hash-identical, `agent_release`
+  byte-identical
+- MOLE `agent.log` -> `Update signature verified (ed25519, pinned key)`, `SHA-256 OK`,
+  `pending update: applied`, `build=20261126.69a3e4156d16`, `TPM seal certificate … (CREATED)`
+- KV `device_checkin` -> `agent_version 1.0.5`, `update_verification signature`
+- MOLE `.deadman` -> 373 bytes, magic `TPM1`
+- `make graph-check` -> all invariants pass (65 debt items, 5 OPEN, 7 invariants)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+- `npx wrangler deploy` -> version `bf0b81f7` (unchanged code; clears the wedged chain)
+
+### Next session opening
+- Fix D-225 in code (bound each `serializeMutation` entry and reset the chain on timeout, with a
+  test that injects a never-settling handler), then confirm FRANKENSTEIN converges to 1.0.5 when
+  it is next powered on.

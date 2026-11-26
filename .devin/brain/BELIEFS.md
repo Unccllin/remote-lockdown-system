@@ -1,8 +1,14 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-25 08:08:02 — 194 beliefs
+Generated: 2026-11-26 12:11:56 — 196 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
+
+## agent
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-195 | confirmed | hardware | TPM state sealing now works on real hardware: agent/tpm_seal.py addresses the seal key by certificate (CN=LockdownStateSealKey in Cert:\LocalMachine\My, key 'te-<guid>' under Microsoft Platform Crypto Provider, export refused), seals with RSA-2048 OAEP-SHA256, and on MOLE (TPM 2.0 Infineon) sealed/unsealed a 369-byte TPM1 blob before and after a reboot, failed closed on two tampered blobs, and failed closed without minting a key after delete_tpm_key removed both the CNG key and the certificate. The frozen 1.0.5 binary sealed production state on MOLE: .deadman is 373 bytes with magic TPM1, where every previous build fell back to DPAPI. |
 
 ## agent/bcd
 
@@ -448,6 +454,12 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-018 | confirmed | code-read | Harnesses that check log output rather than security outcomes pass vulnerable code — the D-220 bypass and the MOR no-op both survived green harnesses. |
+
+## serverless
+
+| ID | Status | Evidence | Statement |
+|---|--------|----------|-----------|
+| B-196 | confirmed | real-media | The Worker's module-level mutationChain (serverless/worker.ts:365) has no timeout, so one stalled handler wedges /api/agent/checkin and /api/agent/command-ack for the whole isolate: measured live, serialised routes produced no response in 25-40 s while every unserialised route answered in ~0.6 s, wrangler tail showed 'Canceled', the wedge did not clear in ~25 minutes, and only a redeploy (recreating isolates) restored check-ins. Filed as D-225. |
 
 ## testing/contract
 

@@ -24,10 +24,10 @@
 | Dimension | Done | Total | Converged? |
 |-----------|------|-------|------------|
 | Phases (P0–P16) | 17 | 17 | ✓ |
-| Debt items | 60 | 64 | ✗ |
+| Debt items | 60 | 65 | ✗ |
 | Enforcement paths (on hardware) | 11 | 13 | ✗ |
 
-**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 64 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
+**The project is NOT converged, and the remaining gap is a decision, not pending work.** All phases are complete and 60 of 65 debt items are closed; **11 of 13 enforcement paths are `verified-on-hardware`**, and the other 2 are documented as **not hardware-verifiable** without a sacrificial machine (see the ceilings below). That is the honest ceiling under the current hardware policy — not a queue.
 
 **The 2 paths with a documented verification ceiling (a failed run damages state the test cannot undo):**
 
@@ -53,17 +53,45 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 356 — 2026-11-25
+## Latest session: 357 — 2026-11-26
 
 ### Fog cleared
-- **S347-S355 are published.** `git push` moved `4663f39..c748e72` (13 commits: the nine S346 commits that had never left the machine plus these four), and the tree is clean.
-- **The gate that blocked the push was right about the shape and wrong about the value.** An `assigned-secret` match in a smoke script was a literal `token: '...'` used to assert 401. Rewriting it as a placeholder is the honest fix; an exception would have taught the scanner to ignore the next one.
+- **TPM sealing works on real hardware, for the first time.** On MOLE (TPM 2.0 Infineon): the
+  key is `te-c40a7660-…` under the Platform Crypto Provider, export is **refused**, a 369-byte
+  `TPM1` blob sealed and unsealed across a reboot with the same thumbprint and key name, both
+  tamper cases returned `None` (the TPM itself answered `Value is out of range or is not correct
+  for the context`), and after `delete_tpm_key` the unseal failed closed while minting nothing.
+  Artifact: `docs/artifacts/s357-tpm-cert-seal.txt`.
+- **The release reached a device by itself.** MOLE's supervisor verified the ed25519 signature,
+  swapped the binary and restarted (`pending update: applied`), and the new build logged
+  `TPM seal certificate … (CREATED)` then `(EXISTS)`. `.deadman` is now 373 bytes with magic
+  `TPM1`; `device_checkin` reports `agent_version 1.0.5`, `update_verification signature`.
+- **The old binary's failure is now recorded from production, not just from a probe**: its last
+  two lines before updating were `TPM key creation failed: ` (empty) and `falling back to
+  DPAPI/plaintext` — exactly the S355 defect, in the field.
+- **A live production defect was found and named.** `/api/agent/checkin` and
+  `/api/agent/command-ack` — the only two routes on the module-level `mutationChain` — hung for
+  >25 minutes while every unserialised route answered in ~0.6 s; a redeploy cleared it. Filed as
+  D-225 with the probe table and the close criteria.
+- **MOLE is a build host, not just a test host**: Python 3.14.8 at `C:\Python314\python.exe`
+  with tkinter and pip, so PyInstaller runs there. The older "MOLE has no Python" memory is stale.
 
 ### Fog remaining
-- **The TPM sealing rewrite is still not written**, and it is still the right call: MOLE is unreachable from this network, so a cert-addressed PCP key would ship unverified. The probe is in the artifact (`ssh` timed out; local address `10.131.72.111/24`; no VPN).
-- **Release 1.0.4 is still unbuilt** — `agent/dist` holds only Linux binaries from 2026-11-20 and no `.exe`. Wrangler is authenticated, so only the Windows build is missing.
-- **`GOOGLE_API_KEY` is still `ROT-TEST-1795082341`.**
-- **D1 cutover not started** (documented as optional below ~325 devices).
+- **D-225's first stalled handler is not identified.** The check-in path awaits KV get/get/put/list
+  and no `fetch` subrequest, so an unsettled KV operation is the leading hypothesis — untested.
+  The queue also has no operator-visible signal, so a wedged fleet looks exactly like a quiet one.
+- **`build=unknown.unknown` is what the CI script produces.** `scripts/build-windows-artifacts.ps1`
+  does not stamp `_buildinfo.py`, so a release built that way loses the identity S286 requires.
+  Not fixed here; the release was built through `agent/build.ps1` instead.
+- **The plaintext fallback in `_read_deadman_state` is still the weak link** (pre-existing): the
+  state file can be downgraded to plaintext JSON rather than defeated cryptographically. A design
+  decision, not a bug in `tpm_seal`.
+- **A TPM clear now costs the state file.** With sealing working, a cleared TPM makes an existing
+  `TPM1` blob unseal to `None`, which the caller treats as tampering (`status: stolen`). Intended
+  fail-secure direction, but a new operational consequence that did not exist while sealing was
+  broken.
+- **FRANKENSTEIN is still on 1.0.0** (powered off), so the fleet is split 1.0.5 / 1.0.0.
+- **`GOOGLE_API_KEY` is still the `ROT-TEST` placeholder**; D1 cutover not started.
 
 ### Debt items closed
 - None this session.
@@ -73,28 +101,57 @@
 - D-129
 - D-130
 - D-134
+- D-225
 
 ### Blockers
-- **MOLE / the lab LAN is unreachable** (host on `192.168.1.0/24`, laptop on `10.131.72.0/24`, no VPN interface). It blocks both remaining engineering items: the sealing rewrite needs a Windows run to be called working, and 1.0.4 needs a Windows build.
+- None for the work done. D-225 can recur at any time and would silently take devices offline
+  again until a redeploy, which is why it is filed rather than noted.
 
 ### Session artifacts
-- docs/artifacts/s356-git-push.txt
+- docs/artifacts/s357-tpm-cert-seal.txt
+- docs/artifacts/s357-release-1.0.5.txt
 
 ### Failure attribution
-- **Layer 3 (execution environment)**: the project's only Windows capability is a machine on a LAN the laptop is not currently on, and `current-state.md` did not record that dependency — so "continue" was planned as if MOLE were reachable. **Harness change**: name the network dependency in the next-session opening whenever the work needs Windows, and probe reachability before promising it.
+- **Layer 4 (verification feedback) — this session's own misses were both text-shaped checks that
+  proved nothing.** (a) "Verify the build embeds 1.0.5" was implemented by byte-scanning the exe;
+  PyInstaller compresses the payload, so the probe reported 0 occurrences of *both* 1.0.4 and
+  1.0.5 and could never have failed. (b) "Verify the graph counts" was implemented by counting
+  `- id: D-` strings, which read 65 while the YAML actually held 64, because the entry landed
+  after `invariants:` and parsed as an invariant. **Harness change**: a check must assert the
+  property through the same semantics the consumer uses — run the binary (`--version`), parse the
+  YAML (`yaml.safe_load` and count `debt_items`) — because a check that cannot fail is a log line,
+  not a check.
+- **Layer 1 (task specification) — "publish 1.0.4" was under-specified by the prior session.** The
+  instruction named a version without noting that MOLE already ran a 1.0.4 build, which would have
+  made the release a no-op for the only machine that needed it. **Harness change**: a release
+  instruction must name what the fleet currently reports, not only the version to publish.
 
 ### VERIFY
-- `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 7 files, 537 tests passed
-- `pytest agent/tests/test_tpm_seal.py` -> 21 passed
+- `agent/.venv/bin/python -m pytest agent/tests/test_tpm_seal.py` -> 34 passed
+- `scripts/run-agent-tests.sh` -> 1005 passed
 - `scripts/lint-agent.sh` -> ruff check + format clean
-- `make handover-check` -> OK, self-test "all checks have teeth"
-- `python3 scripts/prepush_secrets.py --base origin/master --head HEAD` -> exit 0
-- `git push origin master` -> 4663f39..c748e72
-- `ssh labadmin@192.168.1.249` -> connect timed out; `ip -4 addr` -> 10.131.72.111/24
+- MOLE `mole_tpm_verify.py` steps: delete -> `True`/`remaining=0`; facts -> cert created, key
+  `te-c40a7660-…`, `export=REFUSED`; seal -> 256-byte sealed key, 369-byte blob; unseal -> exact
+  bytes; tamper (key byte, state byte) -> `None`; after reboot -> same thumbprint, unseal exact;
+  delete -> `True`; post-delete -> `None` with `remaining=0`
+- MOLE `Get-Tpm` -> TpmReady True, SpecVersion 2.0/1.38; BitLocker Off before the reboot
+- `powershell -File agent/build.ps1` -> `lockdown-agent 1.0.5 (frozen=True, build=20261126.69a3e4156d16)`
+- `scripts/sign-release-metadata.py` -> `agent-release.json` (win, 16856661 bytes)
+- `openssl pkeyutl -verify -rawin -pubin` over `v1:1.0.5:09a2d3e6…` -> **Signature Verified Successfully**
+- KV read-back (`wrangler kv key get … --remote`) -> three binaries hash-identical, `agent_release`
+  byte-identical
+- MOLE `agent.log` -> `Update signature verified (ed25519, pinned key)`, `SHA-256 OK`,
+  `pending update: applied`, `build=20261126.69a3e4156d16`, `TPM seal certificate … (CREATED)`
+- KV `device_checkin` -> `agent_version 1.0.5`, `update_verification signature`
+- MOLE `.deadman` -> 373 bytes, magic `TPM1`
+- `make graph-check` -> all invariants pass (65 debt items, 5 OPEN, 7 invariants)
+- `python3 scripts/check_debt_ledger.py` -> 0 mismatches
+- `npx wrangler deploy` -> version `bf0b81f7` (unchanged code; clears the wedged chain)
 
 ### Next session opening
-- From the lab LAN (or with MOLE reachable), implement the certificate-addressed TPM seal key and prove it with a seal/unseal round trip on MOLE before calling it working; then build and publish 1.0.4.
+- Fix D-225 in code (bound each `serializeMutation` entry and reset the chain on timeout, with a
+  test that injects a never-settling handler), then confirm FRANKENSTEIN converges to 1.0.5 when
+  it is next powered on.
 
 ---
 
@@ -106,8 +163,9 @@
 | D-129 | No real hardware validation for PBL | OPEN | — |
 | D-130 | Code signing not configured for PblApp.efi | OPEN | — |
 | D-134 | PBL's TPM NV indices were created under the platform hierarc | OPEN | — |
+| D-225 | The Worker's serialized mutation chain has no timeout, so on | OPEN | — |
 
-See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (4 of 64 graph-tracked items are OPEN).
+See `docs/adr/DEBT-LEDGER.md` and `docs/adr/PBL-DEBT-LEDGER.md` for close criteria (5 of 65 graph-tracked items are OPEN).
 
 ---
 ## Quick reference

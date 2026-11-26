@@ -4251,3 +4251,43 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-195
+  statement: 'TPM state sealing now works on real hardware: agent/tpm_seal.py addresses the seal key by
+    certificate (CN=LockdownStateSealKey in Cert:\LocalMachine\My, key ''te-<guid>'' under Microsoft Platform
+    Crypto Provider, export refused), seals with RSA-2048 OAEP-SHA256, and on MOLE (TPM 2.0 Infineon)
+    sealed/unsealed a 369-byte TPM1 blob before and after a reboot, failed closed on two tampered blobs,
+    and failed closed without minting a key after delete_tpm_key removed both the CNG key and the certificate.
+    The frozen 1.0.5 binary sealed production state on MOLE: .deadman is 373 bytes with magic TPM1, where
+    every previous build fell back to DPAPI.'
+  domain: agent
+  status: confirmed
+  evidence_level: hardware
+  provenance: MOLE seal/unseal/tamper/reboot/delete runs + frozen 1.0.5 sealing .deadman as TPM1 (docs/artifacts/s357-tpm-cert-seal.txt,
+    s357-release-1.0.5.txt)
+  source: S357 hardware run on MOLE
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
+- id: B-196
+  statement: 'The Worker''s module-level mutationChain (serverless/worker.ts:365) has no timeout, so one
+    stalled handler wedges /api/agent/checkin and /api/agent/command-ack for the whole isolate: measured
+    live, serialised routes produced no response in 25-40 s while every unserialised route answered in
+    ~0.6 s, wrangler tail showed ''Canceled'', the wedge did not clear in ~25 minutes, and only a redeploy
+    (recreating isolates) restored check-ins. Filed as D-225.'
+  domain: serverless
+  status: confirmed
+  evidence_level: real-media
+  provenance: live probes against the deployed Worker + wrangler tail + redeploy recovery (docs/artifacts/s357-release-1.0.5.txt
+    section 6)
+  source: S357 live probes against lockdown-serverless
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''
