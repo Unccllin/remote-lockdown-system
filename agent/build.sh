@@ -58,6 +58,14 @@ done
 PIP="pip3"
 PYTHON="python3"
 
+# Windows runners (release.yml builds the Windows agent binaries under Git Bash) provide `python`
+# but not always `python3`, so pick whichever exists instead of failing at the first call. This is
+# the same interpreter the rest of the script uses, so the stamp and PyInstaller cannot disagree.
+if ! command -v python3 >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+    PYTHON="python"
+    PIP="pip"
+fi
+
 if [ "$USE_VENV" = true ]; then
     VENV_DIR="$SCRIPT_DIR/.venv"
     if [ ! -d "$VENV_DIR" ]; then
@@ -92,6 +100,19 @@ fi
 # Install agent dependencies
 echo -e "${YELLOW}Installing agent dependencies...${NC}"
 $PIP install -r requirements.txt --quiet
+echo ""
+
+# Stamp the build identity before PyInstaller runs.
+#
+# This path builds the Linux and macOS agent binaries that release.yml bundles into the Electron
+# release, and it used to build them without stamping -- so those binaries reported
+# `build=unknown.unknown` while the Windows ones carried an identity (S286/S359/S361). The
+# computation lives in scripts/stamp_buildinfo.py so all three build entry points share one
+# implementation rather than one of them owning a copy.
+if ! "$PYTHON" "$SCRIPT_DIR/../scripts/stamp_buildinfo.py" --agent-dir "$SCRIPT_DIR"; then
+    echo -e "${RED}FAIL${NC} could not stamp the build identity"
+    exit 1
+fi
 echo ""
 
 # Clean build directories if requested

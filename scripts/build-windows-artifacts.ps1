@@ -91,7 +91,7 @@ try {
     # script invoked with `&`. The stamp script throws instead, and $ErrorActionPreference = 'Stop'
     # turns that into a failed build with its message (measured on MOLE: checking LASTEXITCODE here
     # failed a build whose stamp had succeeded).
-    & (Join-Path $PSScriptRoot 'stamp-buildinfo.ps1') -AgentDir $agentDir
+    & (Join-Path $PSScriptRoot 'stamp-buildinfo.ps1') -AgentDir $agentDir -Python $Python
 
     foreach ($name in $selected) {
         if (-not $targets.Contains($name)) { continue }
