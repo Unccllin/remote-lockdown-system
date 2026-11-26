@@ -41,9 +41,20 @@ This document covers the signing process for both platforms.
 
 ## Windows: Azure Trusted Signing (~$10/month)
 
-Azure Trusted Signing (formerly Azure Code Signing) is the most cost-effective
-option for Windows code signing. It provides an EV certificate equivalent
-without the USB token requirement.
+Azure Artifact Signing (formerly Trusted Signing, formerly Azure Code Signing) is
+the cheapest managed route: a Microsoft-issued certificate with no USB token to
+carry. Two corrections to what this section used to claim:
+
+- It is **not** an "EV equivalent" in the sense people mean. Since **2024** Microsoft
+  removed the EV-specific OIDs from the Trusted Root Program requirements, and
+  **an EV certificate no longer grants instant SmartScreen reputation**. Microsoft's own
+  comparison now says OV and EV "both lead to the same first-download warning", with
+  reputation accruing over time. Artifact Signing is documented the same way: reputation
+  builds over time, initial warnings expected.
+- **Check jurisdiction eligibility before budgeting it.** Microsoft lists Artifact
+  Signing as available to organizations in the USA, Canada, EU and UK (individuals: USA and
+  Canada only). A Kenyan entity may not be eligible, in which case a conventional OV
+  certificate from a public CA is the route.
 
 ### Prerequisites
 1. An Azure subscription
@@ -251,7 +262,11 @@ npm run build:win  # Produces unsigned installer
 ```
 
 **Warnings:**
-- Windows SmartScreen will warn users — they must click "More info" → "Run anyway"
+- Windows SmartScreen will warn users **if the file is downloaded** — the prompt is driven by the
+  Mark of the Web, not by the signature. A managed deployment (Intune, GPO, SCCM, network share)
+  never sets that mark, so the prompt does not appear; that is the supported answer, not
+  "click More info → Run anyway". See `docs/WINDOWS-DEPLOYMENT.md` for the channel routes, the
+  per-machine packaging requirement, and the Smart App Control case where **no bypass exists** at all.
 - macOS Gatekeeper will block the app — users must right-click → "Open" → "Open"
 - Auto-update will NOT work for unsigned Windows builds (electron-updater
   requires signature verification by default; set `verifyUpdateCodeSignature: false`

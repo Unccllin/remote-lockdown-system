@@ -599,13 +599,28 @@ def test_the_geolocation_key_contract_matches_on_both_surfaces():
     # must never mention it (B-070: the served template carries no config/secret).
     devices = (REPO / "server/src/routes/devices.js").read_text(encoding="utf-8")
     enroll = (REPO / "server/src/routes/enroll.js").read_text(encoding="utf-8")
+    express_helper = (REPO / "server/src/lib/geolocationKey.js").read_text(encoding="utf-8")
     worker = (REPO / "serverless/worker.ts").read_text(encoding="utf-8")
+    worker_helper = (REPO / "serverless/kv-store.ts").read_text(encoding="utf-8")
     env = (REPO / "serverless/pbl/env.ts").read_text(encoding="utf-8")
     installer = (REPO / "agent/installer.py").read_text(encoding="utf-8")
     scripts = (REPO / "serverless/installer-scripts.ts").read_text(encoding="utf-8")
-    assert "process.env.GOOGLE_API_KEY" in devices
-    assert "process.env.GOOGLE_API_KEY" in enroll
-    assert "env.GOOGLE_API_KEY" in worker
+
+    # S370 moved the read behind one helper per deployable so a placeholder is never served (D-230). The
+    # contract is unchanged — same env name, field omitted when unset — so it is asserted where it now
+    # lives, plus the placeholder rule itself, because two surfaces refusing placeholders differently is
+    # exactly the drift this suite exists to catch.
+    assert "geolocationKeyField(" in devices
+    assert "geolocationKeyField(" in enroll
+    assert "geolocationKeyField(" in worker
+    # Both helpers read `env.GOOGLE_API_KEY`; on Express `env` defaults to `process.env` (same env name
+    # on both surfaces), on the Worker it is the bound environment.
+    assert "process.env" in express_helper
+    assert "env.GOOGLE_API_KEY" in express_helper
+    assert "env.GOOGLE_API_KEY" in worker_helper
+    assert "PLACEHOLDER_GEOLOCATION_KEY" in express_helper
+    assert "PLACEHOLDER_GEOLOCATION_KEY" in worker_helper
+
     assert "GOOGLE_API_KEY?: string" in env
     assert "google_api_key" in installer
     assert "google_api_key" not in scripts
