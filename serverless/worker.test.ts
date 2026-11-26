@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { COMMAND_INDEX_KEY, commandKey } from './kv-store';
+import { COMMAND_INDEX_KEY, claimEnrollmentToken, commandKey } from './kv-store';
 import { b64urlEncode, matchesAdminToken } from './admin-auth';
 import { hmacSha256 } from './http';
 import crypto from 'crypto';
@@ -6961,6 +6961,81 @@ describe('D-227: re-association preserves the flag', () => {
 
     expect(claim.status).toBeLessThan(300);
     expect(await statusOf(deviceId)).toBe('stolen');
+  });
+});
+
+/**
+ * D-229 (review S8): an enrolment token is single-use, and the claim must be atomic.
+ *
+ * The Worker read the token from KV and deleted it in two steps, so two claims inside the KV
+ * propagation window could both pass — one "single-use" token provisioning two machines. With a D1
+ * binding the claim is an INSERT whose PRIMARY KEY refuses the second writer.
+ */
+describe('D-229: enrolment tokens are claimed atomically', () => {
+  /** A D1 stand-in that enforces the primary key and yields mid-write, so concurrent claims interleave. */
+  class FakeD1 {
+    private claims = new Map<string, string>();
+
+    prepare(sql: string) {
+      return {
+        bind: (...args: unknown[]) => ({
+          run: async () => {
+            if (!/INSERT INTO enrollment_claims/.test(sql)) return { meta: { changes: 0 } };
+            const token = String(args[0]);
+            // The window two colos have in reality: both writers have started before either commits.
+            await new Promise((resolve) => { setTimeout(resolve, 5); });
+            if (this.claims.has(token)) return { meta: { changes: 0 } };
+            this.claims.set(token, String(args[1]));
+            return { meta: { changes: 1 } };
+          },
+        }),
+      };
+    }
+  }
+
+  const futureSeconds = () => Math.floor(Date.now() / 1000) + 600;
+
+  it('exactly one of two concurrent claims wins with a binding', async () => {
+    const env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 's', DB: new FakeD1() };
+
+    const results = await Promise.all([
+      claimEnrollmentToken(env as never, 'tok-race', futureSeconds()),
+      claimEnrollmentToken(env as never, 'tok-race', futureSeconds()),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('both win without a binding — the window the D1 claim closes (teeth)', async () => {
+    // No DB: the fallback reads then deletes, and both reads can happen before either delete.
+    const env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 's' };
+    await env.LOCKDOWN_KV.put('enroll_token:tok-kv', JSON.stringify({ expires_at: futureSeconds() }));
+
+    const results = await Promise.all([
+      claimEnrollmentToken(env as never, 'tok-kv', futureSeconds()),
+      claimEnrollmentToken(env as never, 'tok-kv', futureSeconds()),
+    ]);
+
+    // This is the defect D-229 records: two winners. The test asserts it so the difference between the
+    // two paths is visible, not to bless it — with a binding the case above holds the invariant.
+    expect(results.filter(Boolean)).toHaveLength(2);
+  });
+
+  it('the route lets exactly one of two concurrent claims through', async () => {
+    const env: any = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 's', DB: new FakeD1() };
+    await env.LOCKDOWN_KV.put('enroll_token:tok-route', JSON.stringify({
+      expires_at: futureSeconds(), created_by: 'admin',
+    }));
+
+    const claim = () => worker.fetch(
+      makeRequest('POST', '/api/enroll/claim', {
+        token: 'tok-route', hostname: 'RACE-1', hardware_uuid: 'UUID-RACE-1',
+      }), env);
+
+    const [a, b] = await Promise.all([claim(), claim()]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses.filter((s) => s < 300)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(1);
   });
 });
 

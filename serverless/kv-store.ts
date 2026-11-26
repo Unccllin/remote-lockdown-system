@@ -568,6 +568,55 @@ export async function rememberNonce(
 }
 
 /**
+ * Consume an enrolment token exactly once (D-229, review S8).
+ *
+ * The Worker read the token from KV and deleted it in two steps, so two claims arriving inside the KV
+ * propagation window could both pass — a "single-use" token provisioning two machines. With a
+ * relational binding the claim is an INSERT: the PRIMARY KEY refuses the second writer, and
+ * `ON CONFLICT DO NOTHING` turns that refusal into "0 rows changed" rather than an error.
+ *
+ * Returns true when this caller won the claim. Falls back to the KV read-then-delete when no binding
+ * exists, with the same honest window the nonce path documents.
+ */
+export async function claimEnrollmentToken(
+  env: Env,
+  token: string,
+  expiresAtSeconds: number,
+): Promise<boolean> {
+  if (env.DB) {
+    const expiresAt = new Date(expiresAtSeconds * 1000).toISOString();
+    const result = await env.DB
+      .prepare(
+        'INSERT INTO enrollment_claims (token, claimed_at, expires_at) VALUES (?, ?, ?) '
+          + 'ON CONFLICT (token) DO NOTHING',
+      )
+      .bind(token, new Date().toISOString(), expiresAt)
+      .run();
+    return Number(result?.meta?.changes ?? 0) > 0;
+  }
+
+  const key = `enroll_token:${token}`;
+  if ((await env.LOCKDOWN_KV.get(key)) === null) return false;
+  await env.LOCKDOWN_KV.delete(key);
+  return true;
+}
+
+/**
+ * Delete enrolment claims past their expiry. No-op without a relational binding.
+ *
+ * A claim row outlives the 15-minute token it records, so the cron clears them; without this the table
+ * would grow by one row per enrolment for ever.
+ */
+export async function purgeExpiredEnrollmentClaims(env: Env, now: number = Date.now()): Promise<number> {
+  if (!env.DB) return 0;
+  const result = await env.DB
+    .prepare('DELETE FROM enrollment_claims WHERE expires_at < ?')
+    .bind(new Date(now).toISOString())
+    .run();
+  return Number(result?.meta?.changes ?? 0);
+}
+
+/**
  * Delete nonces past their expiry. No-op without a relational binding.
  *
  * Called from the cron tick rather than on the write path: a delete per request would double the

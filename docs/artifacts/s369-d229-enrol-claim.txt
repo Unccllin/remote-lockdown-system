@@ -1,0 +1,58 @@
+# S369 — D-229: enrolment-token claims are atomic
+
+Review finding S8 · ledger entry D-229 · Worker-only (see "parity" below)
+
+## The defect
+
+`POST /api/enroll/claim` read the token from KV, validated it, and then deleted it — two steps across an
+eventually consistent store. Two claims arriving inside the propagation window could both pass the read
+before either delete landed, so a "single-use" token could provision two machines.
+
+## What changed
+
+- **`d1/schema.sql`**: `enrollment_claims(token TEXT PRIMARY KEY, claimed_at, device_id, expires_at)` plus
+  an expiry index. Applied to the live database (`wrangler d1 execute lockdown --file=d1/schema.sql
+  --remote`) and verified by querying `sqlite_master`.
+- **`kv-store.ts`**: `claimEnrollmentToken(env, token, expiresAtSeconds)` — with a binding the claim is
+  `INSERT … ON CONFLICT (token) DO NOTHING` and the answer is `meta.changes > 0`, the same shape as
+  `rememberNonce`; without one it falls back to the KV read-then-delete, with the window documented. Plus
+  `purgeExpiredEnrollmentClaims`, because a claim row outlives the 15-minute token it records.
+- **`worker.ts`**: the delete block is replaced by the claim — the loser gets
+  401 "Enrollment token already used"; the cron tick purges expired claims and audits the count
+  (`enrollment_claim_purge`), reported the same way as `nonce_purge`.
+
+## Parity: the opposite result from D-226 and D-227
+
+Express **already had this right** — `UPDATE enrollment_tokens SET used_at = $1 WHERE id = $2 AND
+used_at IS NULL` with a `rowCount !== 1` check (`server/src/routes/enroll.js:229`). The conditional update
+is the lock. So this item is Worker-only, and the check that produced that answer is the one added after
+D-226 stayed open a session for being assumed.
+
+## Tests and teeth
+
+3 cases: exactly one of two concurrent claims wins with a binding (a fake D1 that enforces the primary
+key and yields mid-write so the two interleave); both win without a binding — which is asserted **to make
+the difference between the two paths visible**, not to bless it; and the route lets exactly one of two
+concurrent claims through (one 2xx, one 401).
+
+Teeth: forcing the KV fallback (`if (false && env.DB)`) fails **2 of the 3** — the atomicity case and the
+route case. The third still passes because it asserts the fallback's window.
+
+## Gates
+
+```
+cd serverless && npx tsc --noEmit -p .   exit 0
+cd serverless && npx vitest run          8 files, 582 passed (was 579; +3)
+```
+
+Server-side suite not re-run: nothing under `server/` changed, and Express was already correct.
+
+## Residuals
+
+- **Without a D1 binding the window remains**, now stated in the code and pinned by a test rather than
+  discovered later. The binding is live (S362), so the deployed Worker takes the atomic path.
+- **The token is stored in clear text** in `enrollment_claims`. It is already in the KV key it replaces
+  and the row is short-lived; hashing it would leave the cron unable to tell an expired claim from a live
+  one without keeping the plaintext anyway.
+- **The enrolment token is still a bearer credential** (unchanged, and D-227's residual): this makes it
+  single-use, not attributable.

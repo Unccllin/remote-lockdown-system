@@ -122,3 +122,24 @@ CREATE TABLE IF NOT EXISTS nonces (
 );
 
 CREATE INDEX IF NOT EXISTS nonces_expires ON nonces (expires_at);
+
+-- ---------------------------------------------------------------------------
+-- D-229: enrolment-token claims, made atomic by the primary key.
+--
+-- An enrolment token is single-use, but the Worker read it from KV and deleted it in two steps, so
+-- two claims arriving inside the KV propagation window could both pass. Inserting the token here is
+-- the claim: the PRIMARY KEY refuses the second writer, and `ON CONFLICT DO NOTHING` turns that into
+-- "0 rows changed" rather than an error. `expires_at` exists so the cron can purge, since a claim row
+-- outlives the 15-minute token.
+--
+-- The token is stored in clear text deliberately: it is already in the KV key it replaces, the row is
+-- short-lived, and hashing it would prevent the cron from telling an expired claim from a live one
+-- without keeping the plaintext anyway.
+CREATE TABLE IF NOT EXISTS enrollment_claims (
+  token       TEXT PRIMARY KEY,
+  claimed_at  TEXT NOT NULL,
+  device_id   TEXT,
+  expires_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS enrollment_claims_expires ON enrollment_claims (expires_at);

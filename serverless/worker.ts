@@ -687,18 +687,12 @@ async function handleEnrollClaim(request: Request, env: Env): Promise<Response> 
     return errorResponse('Enrollment token has expired', 401);
   }
 
-  // Delete the token (single-use) — use KV.delete if available, otherwise
-  // overwrite with empty. The real Cloudflare KV supports delete(); the
-  // MockKV in tests does not, so we guard with a typeof check.
-  // SAFETY: KV.delete is optional at runtime — real Cloudflare KV has it, the test
-  // double does not — so the cast describes a shape that the typeof probe below
-  // establishes before the call. Nothing here assumes it exists.
-  const kv = env.LOCKDOWN_KV as unknown as { delete?: (k: string) => Promise<void> };
-  // SAFETY: narrowed by the typeof probe on this line.
-  if (typeof kv.delete === 'function') {
-    await kv.delete(tokenKey);
-  } else {
-    await env.LOCKDOWN_KV.put(tokenKey, '');
+  // D-229: consume it atomically instead of reading then deleting. A relational binding makes the
+  // claim an INSERT whose PRIMARY KEY refuses the second writer; without one this falls back to the
+  // KV read-then-delete that had the window. Either way the token is spent exactly once.
+  const claimed = await claimEnrollmentToken(env, payload.token, tokenData.expires_at);
+  if (!claimed) {
+    return errorResponse('Enrollment token already used — generate a new one', 401);
   }
 
   // Create the device (same logic as handleEnroll)
@@ -2070,8 +2064,12 @@ export default {
       }
       // Expired nonces: no-op without a relational binding, and a range delete with one.
       const nonces = await purgeExpiredNonces(env);
+      const claims = await purgeExpiredEnrollmentClaims(env);
       if (nonces > 0) {
         await addAuditEntry(env, 'system', 'nonce_purge', `removed ${nonces} expired nonce(s)`);
+      }
+      if (claims > 0) {
+        await addAuditEntry(env, 'system', 'enrollment_claim_purge', `removed ${claims} expired claim(s)`);
       }
     } catch (error) {
       await recordScheduledFailure(env, 'location retention', error);
@@ -3272,7 +3270,8 @@ import {
 // Re-exported for the test harness, which resets the cache between cases.
 export { resetKeyCache } from './pbl/keys';
 import {
-  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredLocations, purgeExpiredNonces, saveCheckinMetadata, saveHwArtifacts,
+  AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredEnrollmentClaims, purgeExpiredLocations, purgeExpiredNonces,
+  claimEnrollmentToken, saveCheckinMetadata, saveHwArtifacts,
   saveKeysForDevice, updateCommand, kvInFlight, kvStalls,
   REARM_APPROVAL_TTL_SECONDS, deleteRearmRequest, getDeviceByHardwareUuid, getRearmRequest,
   listRearmRequests, saveRearmRequest,
