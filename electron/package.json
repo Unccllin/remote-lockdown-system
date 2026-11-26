@@ -191,7 +191,8 @@
     "publish": {
       "provider": "github",
       "owner": "unccllin",
-      "repo": "remote-lockdown-system"
+      "repo": "remote-lockdown-system",
+      "releaseType": "release"
     },
     "generateUpdatesFilesForAllChannels": true,
     "artifactName": "${name}-${version}.${ext}"
