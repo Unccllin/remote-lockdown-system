@@ -2540,6 +2540,31 @@ number is derived from the other; each is counted where it lives.
   replayed proof and a re-arm while the device is offline; (e) evidence that a stolen-status device
   cannot be re-keyed by someone with only the UUID.
 - **Estimated effort**: 3–5 days, because the proof touches firmware.
+- **Progress (S365, 2026-11-26) — the Worker half is done; the item stays OPEN for Express parity.**
+  ADR-011 (`docs/adr/ADR-011-rearm-requires-approval.md`) chose **administrator approval** over a
+  TPM-sealed secret, because the TPM path is entangled with open D-134 (NV indices under the platform
+  hierarchy, owner-hierarchy `OWNERREAD`, and whether Windows sets a non-empty `ownerAuth` — all
+  unverified on hardware) and a recovery path that fails on real firmware is worse than one that needs
+  a human. On the Worker: `POST /api/rearm` no longer issues a key; it rate-limits per source IP,
+  looks the device up through a new `hwid:<uuid>` pointer (one read instead of the fleet plus one
+  metadata key per device, with a bounded scan only for records written before the pointer), records
+  `rearm_request:<device_id>`, audits `rearm_requested`, and answers **409**. A super-admin decides via
+  `GET /api/admin/rearm-requests` and `POST …/:deviceId/(approve|deny)` — both audited — and an
+  approval is single-use and expires after 15 minutes, so it cannot be banked or raced. 9 tests,
+  **6 of which fail against the pre-fix code** (the pre-fix behaviour was reinstated to prove it).
+  Deployed as Worker version `408f2cdf`; live: unknown and active UUIDs both answer an identical 404
+  (unprobeable), the queue answers 401 without auth, a missing UUID answers 400.
+  **What remains: `server/src/routes/rearm.js` has the identical hole** — unauthenticated, flagged-device
+  only, issues a new key to anyone with the UUID, behind a rate limit — and its own docstring defends
+  that as "the Computrace model: the platform is owned, the identifier is stable". That rationale is
+  exactly the one the review disputes, so the two backends now disagree and the Express route must
+  adopt ADR-011 before this can close. A dashboard approval panel is the second follow-up (the
+  endpoints exist and are tested; approving by `curl` is workable for a recovery tool, not for a
+  client's IT staff).
+- **Note on complexity**: `handleRearm` now sits at cyclomatic complexity 17 (threshold 15). An
+  extraction of the issue-script branch was attempted and reverted — it broke the file's syntax and
+  every branch is already pinned by a test, so the honest move was to stop rather than churn a
+  security-critical handler for a style metric.
 
 ### D-227 — Re-enrolment silently clears a device's `stolen` status with no audit record
 - **Status**: OPEN (found 2026-11-26, S363; review finding S3)

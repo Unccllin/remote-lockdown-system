@@ -1,6 +1,6 @@
 # BELIEFS.md — Generated View (do not edit; regenerate via `brain.py gen-view`)
 
-Generated: 2026-11-26 14:27:43 — 203 beliefs
+Generated: 2026-11-26 14:41:28 — 204 beliefs
 
 Evidence ladder: assumed < code-read < spec-checked < emulated < real-media < hardware
 
@@ -479,6 +479,7 @@ mkfs.fat 4.2 (2021-01-31)
 | ID | Status | Evidence | Statement |
 |---|--------|----------|-----------|
 | B-203 | confirmed | real-media | The external review's S1, S4, S6 and S7 are fixed, tested with teeth (7 of 8 new tests fail against the pre-fix code) and deployed as Worker version f242942e: create-first-admin requires the deployment ADMIN_TOKEN (401 without it, 503 when none is configured), the 'dev-secret' token-signing fallback is gone (missing secret throws, login answers 503, verification fails closed), a deleted or demoted admin loses access on the next request because the role comes from the stored record, and shared-token comparisons use timingSafeEqualStr. The break-glass identity (id 'admin-token') is exempt from the revocation check by a single BREAK_GLASS_ADMIN_ID constant. The remaining review findings S2/S3/S5/S8/S9 are filed as debt D-226..D-230. |
+| B-204 | confirmed | real-media | ADR-011 replaced the Worker's UUID-only re-arm with administrator approval: POST /api/rearm no longer issues a key (it rate-limits, looks the device up through a hwid:<uuid> pointer, records rearm_request:<device_id>, audits rearm_requested and answers 409), a super-admin approves or denies via /api/admin/rearm-requests (both audited), and an approval is single-use, expires in 15 minutes and is consumed before the key is issued. Deployed as Worker 408f2cdf; 9 tests, 6 of which fail against the pre-fix behaviour. D-226 stays OPEN because server/src/routes/rearm.js still has the identical unauthenticated hole and documents the opposite trust model. |
 
 ## serverless
 

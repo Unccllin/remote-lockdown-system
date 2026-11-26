@@ -357,6 +357,17 @@ export async function putDevice(env: Env, device: Device): Promise<void> {
   if (staleHash && staleHash !== device.api_key_hash) {
     await env.LOCKDOWN_KV.delete(agentKeyKey(staleHash));
   }
+
+  // Same pattern for the hardware UUID (ADR-011): `POST /api/rearm` is anonymous, so it must not
+  // find its device by reading the whole fleet. The stale pointer is removed when the UUID changes,
+  // or a replaced motherboard would leave the old id pointing at a device it no longer describes.
+  if (device.hardware_uuid) {
+    await env.LOCKDOWN_KV.put(hwidKey(device.hardware_uuid), device.id);
+  }
+  const staleUuid = previous?.hardware_uuid;
+  if (staleUuid && staleUuid !== device.hardware_uuid) {
+    await env.LOCKDOWN_KV.delete(hwidKey(staleUuid));
+  }
 }
 
 /** Remove one device and everything derived from it. */
@@ -1492,4 +1503,112 @@ export function kvStalls(): Record<string, KvStall> {
   const history: Record<string, KvStall> = {};
   for (const [label, stall] of kvStallHistory) history[label] = { ...stall };
   return history;
+}
+
+// ---------------------------------------------------------------------------
+// Hardware-UUID pointer and re-arm requests (ADR-011, D-226)
+// ---------------------------------------------------------------------------
+//
+// `POST /api/rearm` used to find its device by reading every device plus one metadata key
+// per device, on an unauthenticated route — a free way to bill the client. The pointer below
+// makes that a single read, and is maintained exactly like `agent_key:` (write on putDevice,
+// delete the stale one when the UUID changes).
+//
+// The request record is what replaced "issue a key to whoever asks": a re-arm is now a pending
+// request that an administrator approves, single-use and time-limited.
+
+export const HWID_KEY_PREFIX = 'hwid:';
+export const REARM_REQUEST_KEY_PREFIX = 'rearm_request:';
+export const REARM_INDEX_KEY = 'rearm_index';
+
+/** How long an approval stays usable. Long enough for a technician to retry, short enough not to bank. */
+export const REARM_APPROVAL_TTL_SECONDS = 15 * 60;
+
+export type RearmStatus = 'pending' | 'approved' | 'denied';
+
+export interface RearmRequest {
+  device_id: string;
+  hardware_uuid: string;
+  hostname: string | null;
+  requested_at: string;
+  source_ip: string | null;
+  status: RearmStatus;
+  decided_at?: string | null;
+  decided_by?: string | null;
+}
+
+export function hwidKey(hardwareUuid: string): string {
+  return `${HWID_KEY_PREFIX}${hardwareUuid.trim().toLowerCase()}`;
+}
+
+export function rearmRequestKey(deviceId: string): string {
+  return `${REARM_REQUEST_KEY_PREFIX}${deviceId}`;
+}
+
+/**
+ * The device with this hardware UUID, via the pointer (one read).
+ *
+ * Falls back to the old whole-fleet scan only when the pointer is missing, which covers records
+ * written before the pointer existed. The fallback is bounded by the fleet size and is why the
+ * pointer is written on every `putDevice`.
+ */
+export async function getDeviceByHardwareUuid(env: Env, hardwareUuid: string): Promise<Device | null> {
+  const pointer = await env.LOCKDOWN_KV.get(hwidKey(hardwareUuid));
+  if (pointer) {
+    const record = await getDeviceRecord(env, pointer);
+    if (record) return record;
+  }
+
+  // Legacy fallback: no pointer, or it outlived its device.
+  const devices = await listDevices(env);
+  for (const candidate of devices) {
+    const meta = await getCheckinMetadata(env, candidate.id);
+    const merged = mergeCheckinMetadata(candidate, meta);
+    if (merged.hardware_uuid === hardwareUuid) return candidate;
+  }
+  return null;
+}
+
+export async function getRearmRequest(env: Env, deviceId: string): Promise<RearmRequest | null> {
+  const key = rearmRequestKey(deviceId);
+  const raw = await env.LOCKDOWN_KV.get(key);
+  return raw ? parseKvJson<RearmRequest>(raw, key) : null;
+}
+
+export async function saveRearmRequest(env: Env, request: RearmRequest): Promise<void> {
+  await env.LOCKDOWN_KV.put(rearmRequestKey(request.device_id), JSON.stringify(request), {
+    expirationTtl: REARM_APPROVAL_TTL_SECONDS,
+  });
+  const index = await listRearmIndex(env);
+  if (!index.includes(request.device_id)) {
+    await env.LOCKDOWN_KV.put(REARM_INDEX_KEY, JSON.stringify([...index, request.device_id]));
+  }
+}
+
+export async function deleteRearmRequest(env: Env, deviceId: string): Promise<void> {
+  await env.LOCKDOWN_KV.delete(rearmRequestKey(deviceId));
+  const index = await listRearmIndex(env);
+  if (index.includes(deviceId)) {
+    await env.LOCKDOWN_KV.put(REARM_INDEX_KEY, JSON.stringify(index.filter((id) => id !== deviceId)));
+  }
+}
+
+async function listRearmIndex(env: Env): Promise<string[]> {
+  const raw = await env.LOCKDOWN_KV.get(REARM_INDEX_KEY);
+  return raw ? parseKvJson<string[]>(raw, REARM_INDEX_KEY) : [];
+}
+
+/**
+ * Every re-arm request that still exists, newest first.
+ *
+ * Reads the small index rather than the fleet: the expensive mistake this file keeps fixing is
+ * "list everything to find one thing", and an operator looking at a recovery queue needs the
+ * queue, not the fleet.
+ */
+export async function listRearmRequests(env: Env): Promise<RearmRequest[]> {
+  const ids = await listRearmIndex(env);
+  const requests = await Promise.all(ids.map((id) => getRearmRequest(env, id)));
+  return requests
+    .filter((r): r is RearmRequest => r !== null)
+    .sort((a, b) => b.requested_at.localeCompare(a.requested_at));
 }

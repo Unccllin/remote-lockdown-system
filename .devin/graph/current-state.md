@@ -53,37 +53,29 @@
 | E-AUTO-UPDATE | agent-auto-update | agent/hw_test_artifact_frankenstein_win.json#E-AUTO-UPDATE-01 |
 
 ---
-## Latest session: 364 — 2026-11-26
+## Latest session: 365 — 2026-11-26
 
 ### Fog cleared
-- **The two "one missed setup step" holes are closed and live.** `POST /api/setup/create-admin`
-  without the deployment token answers **401** on the deployed Worker (it answered 200 before), and
-  a deployment with no `ADMIN_TOKEN` refuses setup with 503 rather than falling open.
-- **A token can no longer be forged from a published constant.** The `dev-secret` fallback is gone;
-  a token signed with it is rejected (test), and login returns 503 naming the missing secret.
-- **A dismissed admin loses access on the next request**, not at the 8 h token expiry — and a
-  demotion takes effect immediately, because the role is read from the record.
-- **All seven of the review's behavioural findings have teeth-checked tests**: 7 of 8 new tests fail
-  against the pre-fix code; the eighth pins a helper whose timing property is not observable here,
-  which is stated rather than claimed.
-- **The remaining five findings are tracked** as D-226…D-230 instead of living in a Downloads folder.
+- **A stolen laptop can no longer re-key itself on the Worker.** Presenting the UUID produces a pending
+  request an administrator can see and deny; the route answers 409 and issues nothing (verified live).
+- **The anonymous route can no longer be used to bill the client for reads**: one indexed lookup
+  replaces the fleet scan plus one metadata key per device, and the route is rate limited.
+- **The decision is on the record** in ADR-011, including why the TPM-sealed alternative is deferred
+  behind D-134 rather than dismissed.
 
 ### Fog remaining
-- **D-226 (review S2) is still the worst open hole**: unauthenticated `/api/rearm` re-keys a device
-  from a UUID printed in firmware setup. It needs the firmware-side proof (3–5 days) and is the one
-  item that should gate a client deployment.
-- **D-227 (S3), D-228 (S5), D-229 (S8), D-230 (S9)** are open with close criteria; D-228 and D-229 are
-  roughly a day each, and D-229 can use the D1 binding that is already live.
-- **The review's product/commercial gaps are untouched**: single-tenant deployment, no licence control,
-  no SSO/MFA/audit export, and the employee-notice/ODPC paperwork.
-- **Two review claims remain false in its own text** (it says this machine cannot run the suites, and
-  that 1.0.4 is unbuilt / MOLE is the only Windows builder). Correcting the review is the author's
-  job; `docs/artifacts/s363-review-verification.txt` records the corrections.
-- Unchanged: D-120/D-129/D-130/D-134 need hardware or owner key material; D-225's trigger is still
-  unmeasured; `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
+- **`server/src/routes/rearm.js` still has the identical hole**, and its docstring defends the trust
+  model the review disputes. This is why D-226 stays OPEN; the two backends now disagree.
+- **No dashboard panel for approvals.** The endpoints are tested; `curl` is not a client IT workflow.
+- **`handleRearm` is at cyclomatic complexity 17** (threshold 15). The extraction was attempted and
+  reverted after breaking the file; every branch is pinned by a test, so the style metric lost to
+  correctness on purpose.
+- Unchanged: D-227 (stolen-status reset), D-228 (login limiting), D-229 (enrol-token race), D-230
+  (Google key exposure); D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured;
+  `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
 
 ### Debt items closed
-- None this session.
+- None this session. D-226 is materially advanced but not closed — the Express route keeps it open.
 
 ### Debt items still open
 - D-120
@@ -98,42 +90,41 @@
 - D-230
 
 ### Blockers
-- None for the work done. D-226 needs firmware work and a hardware window; the rest need only time.
+- None for the Worker work. D-226's remainder is ordinary engineering (Express parity + a dashboard
+  panel), not hardware.
 
 ### Session artifacts
-- docs/artifacts/s364-review-fixes-s1-s4-s6-s7.txt
-- docs/artifacts/s363-review-verification.txt (the claim-by-claim verification)
+- docs/artifacts/s365-d226-rearm-approval.txt
+- docs/adr/ADR-011-rearm-requires-approval.md
 
 ### Failure attribution
-- **Layer 4 (verification feedback), a bug of mine caught by a pre-existing test**: S6's existence
-  check 401'd the break-glass identity, because the login route issues it as a *signed* token with no
-  admin record. `POST /api/auth/login validates admin token` caught it immediately. **Harness change**:
-  none needed — this is the suite doing its job; recorded because the fix's own comment now names the
-  exemption so it cannot be "tidied away" later.
-- **Layer 4 again, two weak tests of my own**: the `dev-secret` forgery test passed while the fallback
-  was still present (its env set `JWT_SECRET`, so it never exercised the fallback), and two S6 tests
-  assumed a `{admin: {id}}` response that is actually flat. **Harness change**: a regression test must
-  be run against the pre-fix code before it is trusted — the teeth step caught both, and neither would
-  have been visible in a green suite.
-- **Layer 1 (task specification)**: the review gives effort estimates but not acceptance criteria; the
-  close criteria in D-226…D-230 are therefore my inferences from its prose, and a reader should treat
-  them as proposed rather than agreed.
+- **Layer 4 (verification feedback), twice, both mine**: (a) reusing a single `Request` object for the
+  "retry after approval" attempt sent an empty body, because a body can only be read once — the test
+  reported 400 and I briefly suspected the handler; (b) asserting the literal `api_key` inside the
+  generated install script, when the config is base64-encoded, could never pass. **Harness change**: a
+  test that exercises a *retry* must build a fresh request per attempt, and an assertion about
+  generated output should target something that is actually plaintext in it (or, better, the state
+  change the output implies — the stored hash).
+- **Layer 4 again, and the sharpest lesson of the session**: my extraction of the issue-script branch
+  broke `worker.ts`'s syntax because I sliced between two anchors that did not bracket the block. `tsc`
+  caught it in the same turn. **Harness change**: when replacing a block by offset, read the exact
+  first and last lines *after* locating them, not just the anchor strings — and keep a copy before the
+  edit, which is what made the restore instant here.
 
 ### VERIFY
 - `cd serverless && npx tsc --noEmit -p .` -> exit 0
-- `cd serverless && npx vitest run` -> 8 files, 559 passed (was 551; +8 for S1/S4/S6/S7)
-- teeth: all four behaviours reverted -> 7 of 8 new tests fail; restored -> 8 pass
-- `cd dashboard && npx vitest run` -> 31 files, 274 passed (was 272; +2 for the setup token)
-- `cd dashboard && npx eslint … --max-warnings=0` -> exit 0
-- `npx wrangler deploy` -> version `f242942e-c386-4a7d-86b7-3510c1cfa4b1`
-- `POST /api/setup/create-admin` (no token) -> **401** with the new message; `GET /api/devices` (no token) -> 401
-- `GET /api/health` -> `{"status":"ok","mutation_queue":{"stalls":0,"wait_ms":5000}}`
-- `make graph-check` -> all invariants pass (70 debt items, 10 OPEN); `check_debt_ledger.py` -> 0 mismatches
+- `cd serverless && npx vitest run` -> 8 files, 567 passed (was 559; +8 re-arm tests)
+- teeth: pre-fix behaviour reinstated -> 6 of 9 re-arm tests failed; restored -> 9 passed
+- `python3 scripts/test_cross_surface_contract.py` -> 25 passed
+- `make graph-check` -> all invariants pass; `check_debt_ledger.py` -> 0 mismatches
+- `npx wrangler deploy` -> version `408f2cdf-c622-491f-85e5-e9f129d94c32`
+- live: `POST /api/rearm` with MOLE's real (active) UUID -> 404; `{}` -> 400;
+  `GET /api/admin/rearm-requests` unauthenticated -> 401
 
 ### Next session opening
-- Take **D-226** (review S2): the unauthenticated `/api/rearm` re-key is the remaining Critical and the
-  one thing that should gate a client deployment — decide the proof mechanism (TPM-sealed device
-  secret vs administrator approval) and write it down as an ADR before touching the route.
+- Bring `server/src/routes/rearm.js` onto ADR-011 (same approval flow, Express side, with the table and
+  admin routes it needs) so the two backends stop disagreeing about whether a hardware UUID is a
+  credential — that is the only thing keeping D-226 open.
 
 ---
 

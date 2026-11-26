@@ -4430,3 +4430,24 @@ beliefs:
   superseded_by: null
   dependents: []
   notes: ''
+- id: B-204
+  statement: 'ADR-011 replaced the Worker''s UUID-only re-arm with administrator approval: POST /api/rearm
+    no longer issues a key (it rate-limits, looks the device up through a hwid:<uuid> pointer, records
+    rearm_request:<device_id>, audits rearm_requested and answers 409), a super-admin approves or denies
+    via /api/admin/rearm-requests (both audited), and an approval is single-use, expires in 15 minutes
+    and is consumed before the key is issued. Deployed as Worker 408f2cdf; 9 tests, 6 of which fail against
+    the pre-fix behaviour. D-226 stays OPEN because server/src/routes/rearm.js still has the identical
+    unauthenticated hole and documents the opposite trust model.'
+  domain: security
+  status: confirmed
+  evidence_level: real-media
+  provenance: deployed Worker 408f2cdf with live 404/400/401 checks; 567 serverless tests; teeth run 6/9
+    fail pre-fix
+  source: S365
+  asserted: '2026-11-26'
+  last_verified: '2026-11-26'
+  commit_ref: null
+  supersedes: null
+  superseded_by: null
+  dependents: []
+  notes: ''

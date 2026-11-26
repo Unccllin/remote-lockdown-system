@@ -798,7 +798,39 @@ async function handleGetDevice(
  * random device cannot re-arm another unit unless it already has the right
  * hardware UUID AND the target is flagged — exactly the Computrace model.
  */
+// Re-arm rate limit (ADR-011). Anonymous route, so a caller must not be able to use it to bill the
+// client for reads — nor to grind UUIDs looking for a flagged device.
+const REARM_RATE_LIMIT = 10;
+const REARM_RATE_WINDOW_SECONDS = 600;
+
+async function rearmRateLimited(env: Env, ip: string | null): Promise<boolean> {
+  const bucket = Math.floor(Date.now() / (REARM_RATE_WINDOW_SECONDS * 1000));
+  const key = `rearm_rl:${ip || 'unknown'}:${bucket}`;
+  const raw = await env.LOCKDOWN_KV.get(key);
+  const seen = Number.parseInt(raw || '0', 10) || 0;
+  if (seen >= REARM_RATE_LIMIT) return true;
+  await env.LOCKDOWN_KV.put(key, String(seen + 1), { expirationTtl: REARM_RATE_WINDOW_SECONDS });
+  return false;
+}
+
+/**
+ * POST /api/rearm — a device whose agent was wiped asks to be re-armed.
+ *
+ * ADR-011 (D-226, review S2): this used to issue a fresh API key to anyone who supplied the
+ * hardware UUID. The UUID is printed in firmware setup and the ESP payload carries no secret, so a
+ * thief holding a stolen laptop could re-key the very device the product was locking — ACK lock
+ * commands without locking, report false locations, and cut off the real agent.
+ *
+ * Now the request is *recorded*, and a super-admin approves it. An approval is single-use and
+ * time-limited, so it cannot be banked. The technician's retry is what makes it workable in the
+ * field: the payload only writes its success marker after the install script runs.
+ */
 async function handleRearm(request: Request, env: Env): Promise<Response> {
+  const sourceIp = request.headers.get('CF-Connecting-IP');
+  if (await rearmRateLimited(env, sourceIp)) {
+    return errorResponse('Too many re-arm attempts. Try again later.', 429);
+  }
+
   let payload: { hardware_uuid?: string; hostname?: string };
   try {
     payload = await request.json() as { hardware_uuid?: string; hostname?: string };
@@ -809,62 +841,122 @@ async function handleRearm(request: Request, env: Env): Promise<Response> {
     return errorResponse('hardware_uuid required', 400);
   }
 
-  const devices = await listDevices(env);
-  // hardware_uuid may live on the device record or merged checkin metadata.
-  let device: Device | undefined;
-  for (const d of devices) {
-    const meta = await getCheckinMetadata(env, d.id);
-    const merged = mergeCheckinMetadata(d, meta);
-    if (merged.hardware_uuid === payload.hardware_uuid) {
-      device = d;
-      break;
-    }
-  }
+  // One indexed read instead of the whole fleet plus one metadata key per device.
+  const device = await getDeviceByHardwareUuid(env, payload.hardware_uuid);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
 
-  // Only re-arm a device that was flagged — an active device re-arming is
-  // a no-op (and would let anyone who learns a hardware_uuid re-key it).
-  if (device.status === 'active') {
+  const merged = mergeCheckinMetadata(device, await getCheckinMetadata(env, device.id));
+  // Only a flagged device is eligible: an active device re-arming is a no-op, and without this
+  // rule anyone who learns a UUID could rotate a healthy device's credentials.
+  if (merged.status === 'active') {
     return errorResponse('Device not found', 404);
   }
 
-  // Re-issue a fresh api_key and return the self-contained installer so the
-  // dropped bootstrap can install the real agent on first Windows boot.
-  const apiKey = generateApiKey();
-  device.api_key_hash = await sha256(apiKey);
-  await putDevice(env, device);
-  await addAuditEntry(env, device.id, 'rearm',
-    `hardware_uuid=${payload.hardware_uuid} status=${device.status}`);
+  const existing = await getRearmRequest(env, device.id);
 
-  const serverUrl = requestUrl(request).origin;
-  const config = {
-    server_url: serverUrl,
-    device_hostname: device.hostname,
-    api_key: apiKey,
-    poll_interval: 30,
-    sign_requests: true,
-    server_supports_ack_dedup: true,
-    boot_lock_enabled: true,
-    enrolled_at: new Date().toISOString(),
-    rearmed: true,
+  if (existing?.status === 'denied') {
+    return errorResponse('Re-arm was denied by an administrator.', 403);
+  }
+
+  if (existing?.status === 'approved') {
+    const decidedAt = Date.parse(existing.decided_at || existing.requested_at);
+    const ageSeconds = (Date.now() - decidedAt) / 1000;
+    if (Number.isFinite(ageSeconds) && ageSeconds <= REARM_APPROVAL_TTL_SECONDS) {
+      // Consume it before issuing, so two racing callers cannot both get a key.
+      await deleteRearmRequest(env, device.id);
+
+      const apiKey = generateApiKey();
+      device.api_key_hash = await sha256(apiKey);
+      await putDevice(env, device);
+      await addAuditEntry(env, device.id, 'rearm_approval_used',
+        `hardware_uuid=${payload.hardware_uuid} status=${merged.status} approved_by=${existing.decided_by || 'unknown'}`);
+
+      const serverUrl = requestUrl(request).origin;
+      const config = {
+        server_url: serverUrl,
+        device_hostname: device.hostname,
+        api_key: apiKey,
+        poll_interval: 30,
+        sign_requests: true,
+        server_supports_ack_dedup: true,
+        boot_lock_enabled: true,
+        enrolled_at: new Date().toISOString(),
+        rearmed: true,
+      };
+      const script = generateServerlessInstallScript({
+        device,
+        config,
+        serverUrl,
+        rearmed: true,
+      });
+      return new Response(script, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+    // Stale approval: drop it and record a fresh request rather than honouring an old decision.
+    await deleteRearmRequest(env, device.id);
+  }
+
+  if (!existing || existing.status !== 'pending') {
+    await saveRearmRequest(env, {
+      device_id: device.id,
+      hardware_uuid: payload.hardware_uuid,
+      hostname: payload.hostname || device.hostname || null,
+      requested_at: new Date().toISOString(),
+      source_ip: sourceIp,
+      status: 'pending',
+    });
+    await addAuditEntry(env, device.id, 'rearm_requested',
+      `hardware_uuid=${payload.hardware_uuid} status=${merged.status} ip=${sourceIp || 'unknown'}`);
+  }
+
+  return errorResponse(
+    'Re-arm requires administrator approval. An administrator has been notified; ' +
+      're-run this recovery after it is approved.',
+    409,
+  );
+}
+
+/** GET /api/admin/rearm-requests — the approval queue (super-admin). */
+async function handleListRearmRequests(request: Request, env: Env): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+  return jsonResponse({ requests: await listRearmRequests(env) });
+}
+
+/** POST /api/admin/rearm-requests/:deviceId/(approve|deny) — decide one request (super-admin). */
+async function handleDecideRearm(
+  request: Request,
+  env: Env,
+  deviceId: string,
+  decision: 'approved' | 'denied',
+): Promise<Response> {
+  const auth = await requireRole(request, env, 'super-admin');
+  if (auth instanceof Response) return auth;
+
+  const existing = await getRearmRequest(env, deviceId);
+  if (!existing) {
+    return errorResponse('No re-arm request for that device.', 404);
+  }
+  if (existing.status !== 'pending') {
+    return errorResponse(`Re-arm request is already ${existing.status}.`, 409);
+  }
+
+  const decided = {
+    ...existing,
+    status: decision,
+    decided_at: new Date().toISOString(),
+    decided_by: auth.username,
   };
-
-  // Same generator as GET /api/installer/:id — see generateServerlessInstallScript.
-  const script = generateServerlessInstallScript({
-    device,
-    config,
-    serverUrl,
-    rearmed: true,
-  });
-
-  return new Response(script, {
-    headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'no-cache',
-    },
-  });
+  await saveRearmRequest(env, decided);
+  await addAuditEntry(env, deviceId, decision === 'approved' ? 'rearm_approved' : 'rearm_denied',
+    `by ${auth.username} hardware_uuid=${existing.hardware_uuid}`);
+  return jsonResponse({ request: decided });
 }
 
 /**
@@ -1992,6 +2084,20 @@ export default {
     }
 
     // Multi-admin management (S4-serverless RBAC on KV)
+    // Re-arm approval queue (ADR-011) — super-admin, audited on both decisions.
+    if (path === '/api/admin/rearm-requests' && method === 'GET') {
+      return handleListRearmRequests(request, env);
+    }
+    const rearmDecision = path.match(/^\/api\/admin\/rearm-requests\/([^/]+)\/(approve|deny)$/);
+    if (rearmDecision && method === 'POST') {
+      return handleDecideRearm(
+        request,
+        env,
+        decodeURIComponent(rearmDecision[1]),
+        rearmDecision[2] === 'approve' ? 'approved' : 'denied',
+      );
+    }
+
     if (path === '/api/admins' && method === 'GET') {
       return handleListAdmins(request, env);
     }
@@ -3065,4 +3171,6 @@ export { resetKeyCache } from './pbl/keys';
 import {
   AGENT_RELEASE_KEY, AuditEntry, CHECKIN_KEY_PREFIX, Command, Device, HW_ARTIFACTS_KEY, HwTestArtifact, HwTestArtifactUpload, activePollSeconds, addAuditEntry, auditKey, createCommand, deleteBiosPasswordsForDevice, deleteCommandsForDevice, deleteDevice, deleteKeysForDevice, deleteLocationsForDevice, getAuditEntry, getCheckinMetadata, getDeviceByApiKeyHash, getDeviceRecord, groupPbaCredentials, listAuditIndex, listBiosPasswordsForDevice, listCommands, listCommandsForDevice, listDevices, listKeysForDevice, listLocationsForDevice, lockStateFor, mergeCheckinMetadata, normalizeUpdateVerification, putDevice, purgeExpiredLocations, purgeExpiredNonces, saveCheckinMetadata, saveHwArtifacts,
   saveKeysForDevice, updateCommand, kvInFlight, kvStalls,
+  REARM_APPROVAL_TTL_SECONDS, deleteRearmRequest, getDeviceByHardwareUuid, getRearmRequest,
+  listRearmRequests, saveRearmRequest,
 } from './kv-store';

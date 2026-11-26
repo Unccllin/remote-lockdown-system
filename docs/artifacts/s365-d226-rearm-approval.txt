@@ -1,0 +1,96 @@
+# S365 — D-226: re-arm now needs an administrator, not a hardware UUID
+
+Decision record: `docs/adr/ADR-011-rearm-requires-approval.md` · deployed as Worker
+`408f2cdf-c622-491f-85e5-e9f129d94c32` · review finding S2
+
+## The decision, and why not the TPM
+
+Three options were on the table; the record and the reasoning are in the ADR. The short version:
+
+**Chosen — administrator approval.** `POST /api/rearm` records a request; a super-admin approves it;
+the technician retries and collects the key once. No firmware change, no new secret to provision.
+
+**Rejected for now — a TPM-sealed device secret.** Strongest and fully automatic, but it is entangled
+with open **D-134**: PBL's NV indices live under the platform hierarchy, the owner-hierarchy fallback
+needs `OWNERREAD` added, and whether Windows sets a non-empty `ownerAuth` is **unverified on
+hardware**. A recovery path that fails on a client's real firmware is worse than one that needs a
+human awake. The request/approval records are the same shape an automatic proof would write, so this
+defers the mechanism, not the design.
+
+**Rejected — disabling the route.** Zero exposure, but it removes the documented disk-replacement
+recovery path with no replacement.
+
+## What changed on the Worker
+
+- **No key on demand.** The route answers 409 with an instruction a technician can act on, and writes
+  `rearm_request:<device_id>` plus an audit entry `rearm_requested`.
+- **Rate limited** per source IP (10 per 10-minute bucket), so an anonymous caller cannot use it to
+  bill the client for reads or to grind UUIDs.
+- **Direct lookup.** A new `hwid:<uuid>` pointer, maintained by `putDevice` exactly like the
+  `agent_key:` pointer (including removing the stale one when a UUID changes), replaces
+  `listDevices()` + one `getCheckinMetadata` per device. The bounded scan survives only as a fallback
+  for records written before the pointer existed.
+- **Approval is single-use and expires** (15 minutes), consumed *before* the key is issued so two
+  racing callers cannot both get one, and audited as `rearm_approval_used`.
+- **Decisions are audited** (`rearm_approved` / `rearm_denied`) and restricted to `super-admin`.
+- **Unknown and active UUIDs answer the same 404**, as the Express route already did, so the endpoint
+  cannot be probed for which UUIDs exist.
+
+## Teeth: 6 of the 9 re-arm tests fail against the pre-fix behaviour
+
+Reinstating "issue a key on demand" (one line: the approval branch made unconditional) and running the
+suite:
+
+```
+× re-arms an enrolled+stolen device only after administrator approval, and returns the same installer
+× issues no key and records a pending request instead
+× a second request before approval is still 409 — nothing is banked
+× after approval the next call issues a key exactly once
+× a denied request is refused with 403, not re-opened
+× only a super-admin may decide
+  Tests  6 failed | 9 passed
+```
+
+The three that still pass pin behaviour that did not change (404 for active/unknown, auth on the queue,
+and the rate limiter).
+
+Two of my own test bugs were found by running them, and both are the same class as earlier sessions:
+a **`Request` body can only be read once**, so the "retry after approval" test was posting an empty
+body (400), and the issued key is **base64-encoded** inside the generated config, so asserting the
+literal `api_key` in the script could never pass — the test now asserts the stored hash changed.
+
+## Live verification
+
+```
+POST /api/rearm  {hardware_uuid: MOLE's real UUID}  -> 404  {"error":"Device not found"}
+POST /api/rearm  {}                                 -> 400
+GET  /api/admin/rearm-requests (no auth)            -> 401
+```
+
+MOLE is `active`, so 404 is the correct answer — and it is deliberately indistinguishable from an
+unknown UUID.
+
+## D-226 stays OPEN, and here is why
+
+**`server/src/routes/rearm.js` has the identical hole.** It is unauthenticated, accepts a flagged
+device's UUID and issues a fresh API key, behind a rate limiter — and its own docstring defends that
+as "the Computrace model: the platform is owned, the identifier is stable". That is precisely the
+rationale the review disputes. The two backends now disagree, and the Express route must adopt
+ADR-011 before the item can close. The progress is recorded in the ledger; the item is not closed.
+
+Also deferred, deliberately: a **dashboard approval panel**. The endpoints exist and are tested;
+approving with `curl` is acceptable for a recovery tool but not for a client's IT staff.
+
+And `handleRearm` now sits at cyclomatic complexity 17 (threshold 15). I attempted the extraction of
+its issue-script branch and **reverted it** after it broke the file's syntax: every branch is pinned by
+a test, and the honest move was to stop churning a security-critical handler for a style metric.
+
+## Gates
+
+```
+npx tsc --noEmit -p .                                  exit 0
+cd serverless && npx vitest run                        8 files, 567 passed (was 559: +8)
+python3 scripts/test_cross_surface_contract.py         25 passed (the new queue is a documented gap)
+make graph-check                                       all invariants pass (70 items, 10 OPEN)
+python3 scripts/check_debt_ledger.py                   0 mismatches
+```

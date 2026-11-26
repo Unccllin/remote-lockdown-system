@@ -9448,3 +9448,121 @@ attempt while `consolidate` holds the lock.
 - Take **D-226** (review S2): the unauthenticated `/api/rearm` re-key is the remaining Critical and the
   one thing that should gate a client deployment — decide the proof mechanism (TPM-sealed device
   secret vs administrator approval) and write it down as an ADR before touching the route.
+
+---
+
+## Session 365 — 2026-11-26
+
+### RULE-ZERO
+- **Read**: `serverless/worker.ts` `handleRearm` (the whole handler: anonymous body parse,
+  `listDevices()` plus `getCheckinMetadata` per device, the `active` guard, the key re-issue) and its
+  dispatch at `:2186`; `firmware/PblPkg/PblPersistDxe/PblPersistDxe.c:30-90` (the embedded payload —
+  the comment stating it "carries no device secret; hardware_uuid is the identifier", the
+  `Win32_ComputerSystemProduct.UUID` read, and the success marker written only after the install
+  runs).
+- **Read**: `server/src/routes/rearm.js` in full (the Express implementation: unauthenticated,
+  `REARMABLE_STATUSES`, a fresh API key, and a docstring defending "the Computrace model"),
+  `server/src/index.js:126` (the `rearmLimiter`), `serverless/kv-store.ts` `putDevice` (the derived-key
+  pattern to copy for a hardware-UUID pointer) and `parseKvJson`'s deliberate throw-on-corrupt
+  contract, plus `docs/adr/ADR-003` and `ADR-006` for the per-entity conventions.
+- **Finding**: the review's S2 is real and its own fix has two-thirds of the work hidden behind a
+  hardware question. The TPM-sealed secret it recommends as an alternative is exactly what open D-134
+  makes unverifiable — platform-hierarchy NV indices, a missing `OWNERREAD`, and an open question about
+  Windows' `ownerAuth` — so choosing it would ship a recovery path that may fail on a client's machine,
+  which is worse than one that needs an administrator awake. Approval it is, recorded in ADR-011.
+- **Finding, and the reason this item does not close**: the same hole exists in the Express backend,
+  whose docstring argues the opposite trust model in good faith. Fixing only the Worker would leave the
+  two backends disagreeing about whether a hardware UUID is a credential — the exact class of drift the
+  cross-surface contract test exists to catch, and it caught the new approval route as an unclassified
+  gap within minutes.
+
+### IMPLEMENT
+- `docs/adr/ADR-011-rearm-requires-approval.md` (new): the decision, the three options, why the TPM
+  path is deferred rather than rejected, the flow, the consequences and the tests that hold it.
+- `serverless/kv-store.ts`: `hwid:<uuid>` pointer maintained by `putDevice` (with stale-pointer cleanup,
+  mirroring `agent_key:`); `getDeviceByHardwareUuid()` (pointer first, bounded legacy scan second);
+  `rearm_request:<device_id>` records with a `rearm_index` (so the queue is read from an index, not the
+  fleet), `REARM_APPROVAL_TTL_SECONDS = 15 min`, and `listRearmRequests()` newest-first.
+- `serverless/worker.ts`: `handleRearm` now rate-limits per source IP, looks the device up through the
+  pointer, keeps the `active ⇒ 404` guard, records a pending request and answers **409**; an approved,
+  unexpired request is consumed before the key is issued and audited as `rearm_approval_used`;
+  `GET /api/admin/rearm-requests` and `POST /api/admin/rearm-requests/:deviceId/(approve|deny)` are
+  super-admin only and audit both decisions.
+- `serverless/worker.test.ts`: 8 new tests plus the pre-existing re-arm test rewritten to the approval
+  flow (its installer assertions kept).
+- `scripts/test_cross_surface_contract.py`: the approval queue classified in `KNOWN_GAPS` with the
+  Express gap named, because it is a real tracked gap and not a serverless-only design choice.
+- `docs/adr/PBL-DEBT-LEDGER.md`: D-226 progress recorded — Worker half done, Express parity and the
+  dashboard panel outstanding, status deliberately left OPEN.
+- `docs/artifacts/s365-d226-rearm-approval.txt`: the decision, the teeth measurement, the live checks.
+
+### Fog cleared
+- **A stolen laptop can no longer re-key itself on the Worker.** Presenting the UUID produces a pending
+  request an administrator can see and deny; the route answers 409 and issues nothing (verified live).
+- **The anonymous route can no longer be used to bill the client for reads**: one indexed lookup
+  replaces the fleet scan plus one metadata key per device, and the route is rate limited.
+- **The decision is on the record** in ADR-011, including why the TPM-sealed alternative is deferred
+  behind D-134 rather than dismissed.
+
+### Fog remaining
+- **`server/src/routes/rearm.js` still has the identical hole**, and its docstring defends the trust
+  model the review disputes. This is why D-226 stays OPEN; the two backends now disagree.
+- **No dashboard panel for approvals.** The endpoints are tested; `curl` is not a client IT workflow.
+- **`handleRearm` is at cyclomatic complexity 17** (threshold 15). The extraction was attempted and
+  reverted after breaking the file; every branch is pinned by a test, so the style metric lost to
+  correctness on purpose.
+- Unchanged: D-227 (stolen-status reset), D-228 (login limiting), D-229 (enrol-token race), D-230
+  (Google key exposure); D-120/D-129/D-130/D-134 need hardware; D-225's trigger is unmeasured;
+  `GOOGLE_API_KEY` placeholder; FRANKENSTEIN still 1.0.0.
+
+### Debt items closed
+- None this session. D-226 is materially advanced but not closed — the Express route keeps it open.
+
+### Debt items still open
+- D-120
+- D-129
+- D-130
+- D-134
+- D-225
+- D-226
+- D-227
+- D-228
+- D-229
+- D-230
+
+### Blockers
+- None for the Worker work. D-226's remainder is ordinary engineering (Express parity + a dashboard
+  panel), not hardware.
+
+### Session artifacts
+- docs/artifacts/s365-d226-rearm-approval.txt
+- docs/adr/ADR-011-rearm-requires-approval.md
+
+### Failure attribution
+- **Layer 4 (verification feedback), twice, both mine**: (a) reusing a single `Request` object for the
+  "retry after approval" attempt sent an empty body, because a body can only be read once — the test
+  reported 400 and I briefly suspected the handler; (b) asserting the literal `api_key` inside the
+  generated install script, when the config is base64-encoded, could never pass. **Harness change**: a
+  test that exercises a *retry* must build a fresh request per attempt, and an assertion about
+  generated output should target something that is actually plaintext in it (or, better, the state
+  change the output implies — the stored hash).
+- **Layer 4 again, and the sharpest lesson of the session**: my extraction of the issue-script branch
+  broke `worker.ts`'s syntax because I sliced between two anchors that did not bracket the block. `tsc`
+  caught it in the same turn. **Harness change**: when replacing a block by offset, read the exact
+  first and last lines *after* locating them, not just the anchor strings — and keep a copy before the
+  edit, which is what made the restore instant here.
+
+### VERIFY
+- `cd serverless && npx tsc --noEmit -p .` -> exit 0
+- `cd serverless && npx vitest run` -> 8 files, 567 passed (was 559; +8 re-arm tests)
+- teeth: pre-fix behaviour reinstated -> 6 of 9 re-arm tests failed; restored -> 9 passed
+- `python3 scripts/test_cross_surface_contract.py` -> 25 passed
+- `make graph-check` -> all invariants pass; `check_debt_ledger.py` -> 0 mismatches
+- `npx wrangler deploy` -> version `408f2cdf-c622-491f-85e5-e9f129d94c32`
+- live: `POST /api/rearm` with MOLE's real (active) UUID -> 404; `{}` -> 400;
+  `GET /api/admin/rearm-requests` unauthenticated -> 401
+
+### Next session opening
+- Bring `server/src/routes/rearm.js` onto ADR-011 (same approval flow, Express side, with the table and
+  admin routes it needs) so the two backends stop disagreeing about whether a hardware UUID is a
+  credential — that is the only thing keeping D-226 open.

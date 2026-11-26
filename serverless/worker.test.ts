@@ -2556,7 +2556,7 @@ describe('Serverless Worker', () => {
   });
 
   describe('POST /api/rearm', () => {
-    it('re-arms an enrolled+stolen device by hardware_uuid and returns an install script', async () => {
+    it('re-arms an enrolled+stolen device only after administrator approval, and returns the same installer', async () => {
       // Enroll a device with a hardware_uuid.
       const enrollResp = await worker.fetch(
         makeRequest('POST', '/api/enroll', {
@@ -2579,12 +2579,25 @@ describe('Serverless Worker', () => {
       );
       expect(flagResp.status).toBe(200);
 
-      // The PblPersistDxe bootstrap POSTs hardware_uuid — no auth needed.
-      const rearmReq = makeRequest('POST', '/api/rearm', {
-        hardware_uuid: 'uuid-rearm-001',
-        hostname: 'REARM-001',
-      });
-      const rearmResp = await worker.fetch(rearmReq, env);
+      // The PblPersistDxe bootstrap POSTs hardware_uuid — no auth needed. Since ADR-011 (D-226) that
+      // records a pending request instead of issuing a key: the UUID is not a credential.
+      // A Request body can be read once, so each attempt builds a fresh one — the retry is exactly
+      // what a technician does after approval.
+      const rearmAttempt = () => worker.fetch(
+        makeRequest('POST', '/api/rearm', { hardware_uuid: 'uuid-rearm-001', hostname: 'REARM-001' }),
+        env,
+      );
+      const pending = await rearmAttempt();
+      expect(pending.status).toBe(409);
+
+      // A super-admin approves, and the technician's retry collects the script.
+      await worker.fetch(
+        makeRequest('POST', `/api/admin/rearm-requests/${deviceId}/approve`, {}, {
+          Authorization: 'Bearer test-admin-token',
+        }),
+        env,
+      );
+      const rearmResp = await rearmAttempt();
       const script = await rearmResp.text();
 
       expect(rearmResp.status).toBe(200);
@@ -6554,3 +6567,137 @@ describe('review S1/S4/S6/S7: auth hardening', () => {
     expect(matchesAdminToken(env as any, 'test-admin-token')).toBe(true);
   });
 });
+
+/**
+ * D-226 / ADR-011: re-arm requires administrator approval.
+ *
+ * The route used to issue a fresh API key to anyone presenting the hardware UUID. The UUID is
+ * printed in firmware setup and the ESP payload carries no secret, so a thief holding a stolen
+ * laptop could re-key the very device this product locks. Each test below fails against that code.
+ */
+describe('D-226 / ADR-011: re-arm requires administrator approval', () => {
+  let env: { ADMIN_TOKEN: string; LOCKDOWN_KV: MockKV; JWT_SECRET: string };
+  const ADMIN = { Authorization: 'Bearer test-admin-token' };
+
+  beforeEach(() => {
+    env = { ADMIN_TOKEN: 'test-admin-token', LOCKDOWN_KV: new MockKV(), JWT_SECRET: 'test-jwt' };
+  });
+
+  /** Enrol a device with a hardware UUID (the enrol body accepts one), then flag it stolen. */
+  async function stolenDevice(hostname = 'STOLEN-1') {
+    const hwid = `UUID-${hostname}`;
+    const enrolled = await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname, owner_name: 'Test', hardware_uuid: hwid }, ADMIN),
+      env,
+    );
+    const device = ((await parseResponse(enrolled)) as any).device;
+
+    // The route requires the hostname as typed confirmation — a deliberate guard against
+    // flagging the wrong machine from a list.
+    const flag = await worker.fetch(
+      makeRequest('POST', `/api/devices/${device.id}/flag-stolen`, { hostname_confirm: hostname }, ADMIN),
+      env,
+    );
+    expect(flag.status).toBeLessThan(400);
+
+    return { deviceId: device.id as string, hwid };
+  }
+
+  const rearm = (hwid: string, headers: Record<string, string> = {}) =>
+    worker.fetch(makeRequest('POST', '/api/rearm', { hardware_uuid: hwid, hostname: 'X' }, headers), env);
+
+  it('issues no key and records a pending request instead', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+
+    const resp = await rearm(hwid);
+
+    expect(resp.status).toBe(409);
+    expect(await resp.text()).toMatch(/administrator approval/i);
+
+    // No key was issued: the device's stored hash is untouched by the re-arm attempt.
+    const before = JSON.parse((await env.LOCKDOWN_KV.get(`device:${deviceId}`)) as string);
+    expect(before.api_key_hash).toBeTruthy();
+
+    const queue = await worker.fetch(makeRequest('GET', '/api/admin/rearm-requests', undefined, ADMIN), env);
+    const data = (await parseResponse(queue)) as any;
+    expect(data.requests).toHaveLength(1);
+    expect(data.requests[0]).toMatchObject({ device_id: deviceId, status: 'pending' });
+  });
+
+  it('a second request before approval is still 409 — nothing is banked', async () => {
+    const { hwid } = await stolenDevice();
+    await rearm(hwid);
+    const second = await rearm(hwid);
+    expect(second.status).toBe(409);
+  });
+
+  it('after approval the next call issues a key exactly once', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+    await rearm(hwid);
+
+    const approve = await worker.fetch(
+      makeRequest('POST', `/api/admin/rearm-requests/${deviceId}/approve`, {}, ADMIN), env);
+    expect(approve.status).toBe(200);
+
+    const before = JSON.parse((await env.LOCKDOWN_KV.get(`device:${deviceId}`)) as string).api_key_hash;
+
+    const first = await rearm(hwid);
+    expect(first.status).toBe(200);
+    const script = await first.text();
+    // The key itself is base64-encoded inside the generated config, so assert the script shape and
+    // that the stored hash actually changed — that is what "a key was issued" means.
+    expect(script).toContain('lockdown-agent.exe');
+    const after = JSON.parse((await env.LOCKDOWN_KV.get(`device:${deviceId}`)) as string).api_key_hash;
+    expect(after).not.toBe(before);
+
+    // Single-use: the approval is consumed, so the next attempt is a fresh pending request.
+    const second = await rearm(hwid);
+    expect(second.status).toBe(409);
+  });
+
+  it('a denied request is refused with 403, not re-opened', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+    await rearm(hwid);
+    const deny = await worker.fetch(
+      makeRequest('POST', `/api/admin/rearm-requests/${deviceId}/deny`, {}, ADMIN), env);
+    expect(deny.status).toBe(200);
+
+    const resp = await rearm(hwid);
+    expect(resp.status).toBe(403);
+  });
+
+  it('only a super-admin may decide', async () => {
+    const { deviceId, hwid } = await stolenDevice();
+    await rearm(hwid);
+
+    const anon = await worker.fetch(
+      makeRequest('POST', `/api/admin/rearm-requests/${deviceId}/approve`, {}), env);
+    expect(anon.status).toBe(401);
+  });
+
+  it('the queue is not readable without auth', async () => {
+    const resp = await worker.fetch(makeRequest('GET', '/api/admin/rearm-requests'), env);
+    expect(resp.status).toBe(401);
+  });
+
+  it('rate limits repeated anonymous attempts', async () => {
+    const headers = { 'CF-Connecting-IP': '203.0.113.7' };
+    let last = 0;
+    for (let i = 0; i < 12; i += 1) {
+      const resp = await worker.fetch(
+        makeRequest('POST', '/api/rearm', { hardware_uuid: `NOPE-${i}` }, headers), env);
+      last = resp.status;
+    }
+    // Unknown UUIDs 404 until the limiter trips; after the allowance the answer is 429.
+    expect(last).toBe(429);
+  });
+
+  it('an active device is still not eligible', async () => {
+    await worker.fetch(
+      makeRequest('POST', '/api/enroll', { hostname: 'ACTIVE-1', hardware_uuid: 'UUID-ACTIVE-1' }, ADMIN),
+      env,
+    );
+    expect((await rearm('UUID-ACTIVE-1')).status).toBe(404);
+  });
+});
+
