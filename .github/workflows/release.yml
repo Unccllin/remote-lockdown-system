@@ -40,6 +40,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The gate below parses GRAPH-SPEC.yaml, so it needs the same dependency ci.yml installs.
+      # Without it the first job of the release fails in 5 seconds on ModuleNotFoundError, which
+      # is how the first v1.0.5 run ended (S361).
+      - name: Install PyYAML (graph spec parser)
+        run: pip install pyyaml
+
       - name: Graph invariant check
         run: python3 .devin/graph/graph_assert.py
 

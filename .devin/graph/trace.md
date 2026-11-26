@@ -9053,7 +9053,30 @@ attempt while `consolidate` holds the lock.
 ## Session 361 — 2026-11-26
 
 ### RULE-ZERO
-**Written at session close; the reads below happened before the first edit, but the block was not
-logged first, which is out of order for I5 and is recorded as such rather than back-dated.**
-**Read**: `.github/workflows/release.yml` (689 lines: the `v*` trigger, the `test` gate, `publish-agent-binaries` on four runners, `publish-checksums`, `publish-agent-release-metadata`, `release-windows`, `build-macos`/`publish-macos`, `release-linux`); `electron/package.json` (`build` field: publish provider github, artifactName absent, linux AppImage x64, win nsis+msi, mac dmg ×2 with `notarize: true`); `electron/jest.config.js` (electron stubbed by `tests/electron-stub.js`); `electron/tests/electron-stub.js` (no `contextBridge`, and its docstring says additions belong there deliberately); `electron/preload.js` and `main.js` (the `ELECTRON_API_BASE_URL` env channel); `agent/build.sh`; `agent/_buildinfo.py`; `agent/tests/test_version_identity.py`; `git tag -l` and `gh release list` (both empty).
-**Finding**: the GitHub release had never been cut, and two of its inputs were still anonymous. `agent/build.sh` — which builds the Linux and macOS agent binaries bundled into the Electron release — did not stamp `_buildinfo.py` (S359 fixed only the Windows paths), and `preload.js` reported `npm_package_version || '1.0.0'`, which in a packaged app means the UI says 1.0.0 whatever was built. Both are the S286 shape at a new layer, and both would have shipped in the first release. The stamping therefore moves to one Python implementation with three callers, and the version comes from `app.getVersion()` over the env channel `main.js` already uses for the API base URL. Deliberately not fixed: unsigned binaries and `notarize: true` with no Apple credentials — those are policy/credential decisions, and the honest move is to record the risk rather than silently claim signing.
+- **Read**: `.github/workflows/release.yml` (689 lines: the `v*` trigger, the `test` gate,
+  `publish-agent-binaries` on four runners, `publish-checksums`,
+  `publish-agent-release-metadata`, `release-windows`, `build-macos`/`publish-macos`,
+  `release-linux`); `.github/workflows/ci.yml` (how the graph gate installs PyYAML -- it does,
+  which is why only the release job failed on it).
+- **Read**: `electron/package.json` (`build` field: publish provider github, `artifactName`
+  absent, linux AppImage x64, win nsis+msi, mac dmg x2 with `notarize: true`);
+  `electron/jest.config.js` and `electron/tests/electron-stub.js` (the electron stub, and its
+  docstring saying additions belong there deliberately); `electron/preload.js` and
+  `electron/main.js` (the `ELECTRON_API_BASE_URL` env channel the version now rides).
+- **Read**: `agent/build.sh` (no stamping, hardcoded `python3`), `agent/_buildinfo.py`,
+  `agent/tests/test_version_identity.py` (pins the committed placeholder), `agent/build.ps1` and
+  `scripts/build-windows-artifacts.ps1` (the two paths S359 wired).
+- **Finding**: the GitHub release had never been cut (`git tag -l` and `gh release list` both
+  empty), and two of its inputs were still anonymous. `agent/build.sh` -- which builds the Linux
+  and macOS agent binaries bundled into the Electron release -- did not stamp `_buildinfo.py`
+  (S359 fixed only the Windows paths), and `preload.js` reported
+  `npm_package_version || '1.0.0'`, which in a packaged app means the UI says 1.0.0 whatever was
+  built. Both are the S286 shape at a new layer and both would have shipped in the first release.
+  Hence one Python implementation with three callers, and the version taken from `app.getVersion()`
+  over the env channel `main.js` already uses for the API base URL. Deliberately not fixed:
+  unsigned binaries and `notarize: true` with no Apple credentials -- policy/credential decisions,
+  recorded as risk rather than silently claimed as signing.
+- **Note on ordering**: this block was written at session close. The reads above preceded the
+  first edit, but I5 wants the entry logged before the code, and it was not -- recorded rather
+  than back-dated, and the first release run then failed on this same invariant because the entry
+  was one paragraph instead of path-carrying bullets.
