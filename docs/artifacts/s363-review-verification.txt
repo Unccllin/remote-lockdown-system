@@ -1,0 +1,95 @@
+# S363 — verifying `Remote-Lockdown-Codebase-Review.docx` against the codebase
+
+Source: `~/Downloads/Remote-Lockdown-Codebase-Review.docx` (dated 26 November 2026, "focus:
+readiness to deploy for client companies on Cloudflare"). Checked on the same day, against the tree
+at commit `54c4aeb`.
+
+**Result: 27 of 29 checkable claims are true.** The nine security findings are all real, at the
+severity claimed. Two claims are false, both about this machine and the release state, and both
+understate what the project currently has. The remaining claims are true but carry stale numbers.
+
+---
+
+## 1. Method claims
+
+| claim | verdict | evidence |
+|---|---|---|
+| Ran the project's own checks; all that could run passed | **TRUE** | re-ran them: `make graph-check` all invariants pass; `check_debt_ledger.py` 0 mismatches; `make check-firmware-todos` OK; `bash -n scripts/*.sh` clean; `brain.py check` 202 beliefs integrity clean; `make test-scripts` exit 0 |
+| "This machine's Linux environment has no Node.js, no make and no Python test environment" | **FALSE** | `make` is `/usr/bin/make`; Node is v26.13.1 at `~/.local/node/bin` (documented in `AGENTS.md`); `agent/.venv/bin/python` exists |
+| The main suites, lint and build were not run | **FALSE as a limitation, and their state is better than assumed** | all five suites were run here in ~3 minutes: **server 896 (55 suites), serverless 551 (8 files), dashboard 272 (30 files), agent 1005, electron 35 = 2,759 tests, 0 failures**; eslint server/dashboard exit 0; `lint-agent.sh` ruff clean |
+| Focused review, not a penetration test | TRUE | consistent with the depth; the security sections were read in code, not exploited |
+
+The practical consequence: the review's hedge — "the project's own records say these suites passed
+on 25 November, but that was not re-confirmed here" — was unnecessary. They pass today.
+
+---
+
+## 2. Security findings — all nine are real
+
+Line numbers below are **corrected**: every one in the document is shifted by a few dozen to a few
+hundred lines because `worker.ts` grew after it was written (2,959 → 3,038 lines this session). A
+fixer following the document's line numbers lands in the wrong function.
+
+| # | severity claimed | verdict | corrected anchor | what the code actually does |
+|---|---|---|---|---|
+| S1 | Critical | **TRUE** | `worker.ts:1638 handleCreateFirstAdmin` | no token, no password beyond the new account's own; `409` only once an admin exists. Confirmed live: `POST /api/setup/create-admin` on the deployed Worker answers 409, so the open window is exactly "until setup completes" |
+| S2 | Critical | **TRUE, and marginally worse** | `worker.ts:801 handleRearm` (dispatch `:2186`) | unauthenticated; `listDevices()` **plus** `getCheckinMetadata()` per device = N+1 reads per anonymous request; only acts on `status !== 'active'`; replaces `api_key_hash` with a fresh key; writes a `rearm` audit entry |
+| S3 | High | **TRUE** | `worker.ts:488` and `:672` | both enrolment paths assign `existing.status = 'active'` on a `hardware_uuid` match, then `putDevice`; no `addAuditEntry` in either block |
+| S4 | High | **TRUE** | `admin-auth.ts:177`, `:198` | `env.JWT_SECRET \|\| env.ADMIN_TOKEN \|\| 'dev-secret'`; nothing refuses to start; no test mentions `dev-secret` |
+| S5 | High | **TRUE** | `worker.ts:1557 handleAuthLogin` | `listAdmins` → PBKDF2 verify; no attempt counter, no lockout, no rate limit, no MFA anywhere in the tree |
+| S6 | Medium | **TRUE** | `admin-auth.ts:192 resolveAdminAuth` | claims come from the token alone (no admin-list read); `TOKEN_TTL_SECONDS = 8 * 3600` |
+| S7 | Medium | **TRUE** | `admin-auth.ts:28`, `worker.ts:219`, `agent-routes.ts:67` | plain `===` / `!==` in all three. Note the admin *token* verifier already compares in constant time — so the fix is to use the existing helper, exactly as the document says |
+| S8 | Medium | **TRUE** | `worker.ts:618` (get) → `:647` (delete) | read-then-delete across an eventually consistent KV: two racers can both pass the read |
+| S9 | Medium | **TRUE, and wider** | `worker.ts:503, 538, 687, 722` | `google_api_key` is returned in **four** enrolment/registry responses, not two |
+
+The two Critical findings are correctly rated. S2 in particular defeats the product's purpose: the
+hardware UUID is printed in firmware setup, and the route both re-keys the device and lets an
+anonymous caller burn N+1 KV reads per request.
+
+---
+
+## 3. Product and operational gaps
+
+| # | claim | verdict | evidence |
+|---|---|---|---|
+| P1 | Single-tenant only | **TRUE** | no tenant/account concept anywhere in `serverless/*.ts`; isolation is per-deployment |
+| P2 | No licence or entitlement control | **TRUE** | no licence/entitlement/seat/expiry logic; the only "LICENSE" hits are EULA text in the installer |
+| P3 | "Release 1.0.4 is not built", "the only Windows build machine is MOLE, currently unreachable" | **FALSE now, on all three counts** | v1.0.5 is published and Latest (`v1.0.5`, 26 assets); MOLE answers ping and built 1.0.5; and Windows is also built by GitHub Actions (`windows-artifacts.yml`, green run `45802773450`) — MOLE is not the only builder, and was not one before this session either |
+| P4 | `GOOGLE_API_KEY` is still the test value | **consistent with the record, not directly verifiable** | the secret's value is write-only in Cloudflare; the last recorded state is the `ROT-TEST` placeholder, and S9 proves the code would hand it to devices |
+| P5 | Four open debt items; E-BCD and E-HP-UEFI not hardware-verified | **TRUE** | graph spec: five open now (D-120, D-129, D-130, D-134, **D-225** added this session), and exactly those two of 13 enforcement paths lack hardware verification |
+| P6 | No SSO, MFA or audit export | **TRUE** | no SAML/OIDC/TOTP/MFA/audit-export code; the one TOTP mention is a seeding comment unrelated to login |
+| P7 | Covert tracking needs an employee notice and lawful basis (Kenya DPA) | **not checkable in code**; valid advice | — |
+
+---
+
+## 4. Code health
+
+| # | claim | verdict | evidence |
+|---|---|---|---|
+| C1 | AGENTS.md says 37 open debt items; points at another user's home; test counts disagree | **TRUE, all three** | `AGENTS.md:37` says "PBL debt items (D-100..D-211, 37 OPEN)" against a live 5; `AGENTS.md:325` says `/home/cllin/.local/node/bin` (this host is `unccllin`); counts of 843, 882 and 885 appear, and the measured server total is **896** |
+| C2 | A new engineer cannot run the tests here | **FALSE** | `make`, Node 26 and the agent venv are all present; the whole suite takes ~3 minutes |
+| C3 | Very large files: `worker.ts` 2,959 and `agent.py` 4,820 lines | **TRUE in substance, numbers slightly stale** | now 3,038 and 4,826 (worker.ts grew this session) |
+| C4 | `POST /api/enroll` does not guard malformed JSON | **TRUE** | `worker.ts:454 handleEnroll` calls `await request.json()` with no `try/catch`, so bad input throws instead of 400 — while `handleRearm` and `handleCreateFirstAdmin` both do guard |
+
+**The "working well" list also checks out**: no TODO/FIXME in production code (0 hits), no tracked
+secrets or `.env` files (only `.env.example` templates and tooling), lockfiles present for every
+component, PBKDF2 password hashing, `verify_tls` defaulting to true with `http://` only under an
+explicit override, signature-verified agent updates, encrypted backups and alerting (proven by
+`backup_written` audit entries on 25 and 26 November).
+
+---
+
+## 5. What the document gets wrong, and why it matters
+
+1. **It under-sells the project's current buildability (C2, P3).** A reader would conclude the
+   project cannot be verified or shipped from this machine and depends on one lab laptop. In fact
+   every suite runs here and Windows builds in CI. The advice is still worth taking — the *document*
+   `AGENTS.md` is stale (C1) and CI-based Windows builds were only proven this session — but the
+   facts as stated are wrong.
+2. **Its line numbers are stale.** S1 cites `worker.ts:1559`; the handler starts at 1638. S2 cites
+   `:722`; the handler starts at 801. Somebody fixing from the document will edit the wrong place.
+3. **S9 understates its own finding** (two response sites cited, four exist), and **S2 understates
+   its cost** (it is N+1 reads per anonymous request, not one scan).
+
+None of this weakens the security analysis, which is accurate and materially useful: S1 and S2 are
+real, critical, and worth fixing before any client deployment.
