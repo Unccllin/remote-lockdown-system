@@ -416,6 +416,13 @@ all of them Windows-only APIs analysed on a Linux host (`ctypes.windll`, `winreg
 `subprocess.CREATE_NO_WINDOW`, `signal.SIGBREAK`) and firmware scripts whose
 dependencies live outside the checker's interpreter.
 
+Measured 2026-11-26 (S373): after clearing the fixable ones, what remains is concentrated in
+`agent/lock_screen.py` (46 `ctypes`/`winreg` sites, left as documented baseline — see
+`docs/artifacts/s373-scan-sweep.txt`) and three firmware operator scripts whose unguarded calls are
+deliberate. Verify per file with `lens_diagnostics source=lsp`; a whole-workspace total is not a regression
+measure, because the scan stops at a 300 s budget and covers a different subset each run (55 findings over
+191 files one run, 94 over 245 the next).
+
 Rules that keep this from costing a session (learned in S194–S196):
 
 1. **Fix only what you touch.** A finding in a file you did not change is baseline;

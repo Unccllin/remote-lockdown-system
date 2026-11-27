@@ -19,6 +19,7 @@ import platform
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 def run_cmd(cmd: list[str], timeout: int = 10) -> dict:
@@ -66,8 +67,11 @@ def check_admin() -> bool:
     """Check if running as admin."""
     if platform.system() != "Windows":
         return False
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:  # not present on non-Windows hosts
+        return False
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        return windll.shell32.IsUserAnAdmin() != 0
     except (OSError, AttributeError):
         return False
 
@@ -289,7 +293,7 @@ def main():
     print("=" * 70)
     print()
 
-    report = {
+    report: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "platform": platform.system(),
         "platform_release": platform.release(),

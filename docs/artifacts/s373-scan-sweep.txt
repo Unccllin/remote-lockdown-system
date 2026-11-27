@@ -1,0 +1,45 @@
+# S373 — code-scanning sweep: what was fixed, what is deliberately baseline
+
+Two sweeps (Sisyphus role-loop, oracle-approved after two fix rounds each), every gate re-measured by the
+parent rather than taken from the reports.
+
+## Fixed — with evidence
+
+| Class | Count | Evidence |
+|---|---|---|
+| **Genuine crash** | 1 | `firmware/PblPkg/d131-wire-capture.py` raised `UnboundLocalError` on its DEFAULT path: `verdict_chain` was assigned only in the external-signer branch. Now `[leaf, root]` per the file's own comment and `CborDecode.c`; the oracle proved it at runtime (COSE key 77 carries a 2-element chain, leaf 403 B + root 396 B) |
+| **Real failure-mode bug** | 1 | `agent/offline_recovery.py` called `.decrypt(OAEP)` on the union returned by `load_pem_private_key()`, so an EC/DSA key raised `AttributeError` at the decrypt site. `isinstance(RSAPrivateKey)` now names the problem; the recovery CLI's key/recovery-file reads are guarded and exit 2 with the failing path instead of a traceback |
+| **Windows API noise** | 12 + 14 | `ctypes.windll` / `winreg` / `signal.SIGBREAK` via `getattr`+`importlib` in `agent_diagnostic.py`, `state_crypto.py`, `tpm_clock.py`, `watchdog.py`, `diagnose_boot_lockdown.py`. Behaviour preserved: those attributes raised `AttributeError`/`ImportError` before and still do |
+| **Type errors** | 13 | `diagnose_boot_lockdown.py`'s `report` was inferred `dict[str, str]` from its literal and then held bools and dicts; annotated `dict[str, Any]` — one annotation cleared all 13 |
+| **Test typing** | 13 | Annotations narrowed; `test_graph_assertions` loads `graph_assert.py` by path like its sibling harnesses |
+| **Supply chain** | 5 | `release.yml`: zizmor's message names `package-manager-cache`, not `cache` — the first attempt used the wrong knob and changed nothing. All five `setup-node` steps now set `package-manager-cache: false`; **zizmor 1.33.1 reports 0 errors across all 7 workflows** |
+| **Docs/config** | 2 | `openapi.yaml` duplicate description key merged; `GRAPH-SPEC` over-long D-120 line folded (value byte-identical) |
+| **Documented refutations** | 6 | dashboard `client.js` redirect (constant `/login`); `devices.js` + `jobs/*.js` parameterised SQL; `enroll.js:369` (caller validates, a test pins the 500); `dependabot.yml` (values are `version-update:semver-*` ignore rules); Grafana datasource YAML (checked against Prometheus's schema); knip's "express unlisted" (`express` is a declared dependency, `^4.19.2`) |
+
+## Deliberately NOT fixed, with the reason
+
+**46 `ctypes`/`winreg` findings in `agent/lock_screen.py`.** Left as baseline on purpose:
+- This is the class `AGENTS.md` already documents as noise from analysing Windows-only APIs on Linux.
+- The file was not otherwise touched; rule 1 says a finding in a file you did not change is baseline.
+- Three bulk-edit attempts during this session each introduced a defect a gate caught (a regex import
+  insertion produced `FileText,, KeyRound`; an offset replacement broke `worker.ts`'s syntax; a shim name
+  in `lock_screen.py` did not match its 39 replacements and produced 44 ruff errors). All three were caught
+  by `vite build` / `tsc` / ruff within seconds, and all three were reverted.
+- There is no runtime benefit: the paths are gated by `_is_windows()` and cannot execute here.
+
+**17 `unchecked-throwing-call-python` in three firmware operator scripts** (`prepare-live-test.py`,
+`gen-policy-rot.py`, `gen-bcd-hive.py`): they are one-shot operator tools that *should* abort on a missing
+input — `AGENTS.md` rule 4 protects exactly this behaviour.
+
+## Why the headline count is not a regression measure
+
+A workspace scan is a 300-second budget that stops early and covers a different subset each run: one sweep
+reported 55 findings over 191 files, the next 94 over 245 files, having reached `lock_screen.py` for the
+first time. Findings were therefore verified file by file (`lens_diagnostics source=lsp` on each touched
+file, all now 0) rather than by comparing two totals.
+
+## Gates
+
+server 918 (57 suites) · serverless 585 · agent 1005 · dashboard 280 (32 files) · ruff clean ·
+eslint clean (server + dashboard) · `lint-workflows` exit 0 · zizmor 0 errors · graph-check pass ·
+test-scripts 0 · firmware-TODOs OK.
