@@ -43,22 +43,60 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
 def decrypt_with_recovery_file(
     recovery_key_path: str, recovery_file_path: str, folder: Path
 ) -> str | None:
     """Decrypt folder using RSA-wrapped recovery key file."""
-    # Load IT's private key
-    private_key = serialization.load_pem_private_key(
-        Path(recovery_key_path).read_bytes(),
-        password=None,  # Assumes key is unencrypted; for encrypted keys, prompt for passphrase
-    )
+    # Load IT's private key. Guarded: this tool runs during an incident, so a missing or unreadable
+    # file has to say which one and why rather than raise a traceback at the operator.
+    try:
+        key_bytes = Path(recovery_key_path).read_bytes()
+    except OSError as exc:
+        print(
+            f"[ERROR] Cannot read the recovery key at {recovery_key_path}: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    try:
+        private_key = serialization.load_pem_private_key(
+            key_bytes,
+            password=None,  # Assumes key is unencrypted; for encrypted keys, prompt for passphrase
+        )
+    except (ValueError, TypeError) as exc:
+        print(
+            f"[ERROR] {recovery_key_path} is not a readable PEM private key: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    # The wrapped key is RSA-OAEP, so a non-RSA recovery key cannot decrypt it. Saying so here
+    # turns a confusing `AttributeError: decrypt` on an EC/DSA key into an explicit failure, and
+    # it is also what lets a type checker see that `.decrypt()` exists on the object.
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise ValueError(
+            f"Recovery key {recovery_key_path} is not an RSA key — "
+            "the wrapped key is RSA-OAEP encrypted."
+        )
 
-    # Load recovery file
-    state = json.loads(Path(recovery_file_path).read_text())
-    wrapped_key = base64.b64decode(state["wrapped_key"])
+    # Load recovery file — same reasoning as the key above.
+    try:
+        state = json.loads(Path(recovery_file_path).read_text())
+        wrapped_key = base64.b64decode(state["wrapped_key"])
+    except OSError as exc:
+        print(
+            f"[ERROR] Cannot read the recovery file at {recovery_file_path}: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    except (ValueError, KeyError) as exc:
+        print(
+            f"[ERROR] {recovery_file_path} is not a valid recovery file "
+            f"(expected JSON with a wrapped_key): {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
 
     # RSA-OAEP-decrypt to get the Fernet data key
     fernet_key = private_key.decrypt(
